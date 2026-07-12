@@ -12,3 +12,6 @@ export const HIDE_CHARTDB_CLOUD: boolean =
 export const DISABLE_ANALYTICS: boolean =
     (window?.env?.DISABLE_ANALYTICS ??
         import.meta.env.VITE_DISABLE_ANALYTICS) === 'true';
+export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
+export const STORAGE_PROVIDER: 'dexie' | 'api' =
+    import.meta.env.VITE_STORAGE_PROVIDER === 'api' ? 'api' : 'dexie';

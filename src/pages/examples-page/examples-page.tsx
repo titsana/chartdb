@@ -6,7 +6,7 @@ import { examples } from './examples-data/examples-data';
 import { ExampleCard } from './example-card';
 import { useTheme } from '@/hooks/use-theme';
 import { LocalConfigProvider } from '@/context/local-config-context/local-config-provider';
-import { StorageProvider } from '@/context/storage-context/storage-provider';
+import { StorageProvider } from '@/context/storage-context/storage-provider-switch';
 import { ThemeProvider } from '@/context/theme-context/theme-provider';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';

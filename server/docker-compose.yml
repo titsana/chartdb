@@ -1,0 +1,14 @@
+services:
+    postgres:
+        image: postgres:16-alpine
+        environment:
+            POSTGRES_USER: chartdb
+            POSTGRES_PASSWORD: chartdb
+            POSTGRES_DB: chartdb
+        ports:
+            - '5432:5432'
+        volumes:
+            - chartdb_postgres_data:/var/lib/postgresql/data
+
+volumes:
+    chartdb_postgres_data:

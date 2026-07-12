@@ -3,6 +3,9 @@ node_modules
 dist
 build
 
+# Separate backend project, not part of the frontend image
+server
+
 # Ignore logs
 npm-debug.log*
 yarn-debug.log*
