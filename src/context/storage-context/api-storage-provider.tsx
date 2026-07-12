@@ -13,6 +13,18 @@ import type { Note } from '@/lib/domain/note';
 import { API_BASE_URL } from '@/lib/env';
 
 // ponytail: no auth header wired yet (backend auth mechanism TBD), add when NestJS auth lands
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+// JSON.parse doesn't revive dates: Diagram.createdAt/updatedAt are Date
+// objects domain-wide (e.g. sorted with .getTime() in open-diagram-dialog),
+// but the wire format is an ISO string — revive it back or callers throw.
+function reviveDates(_key: string, value: unknown) {
+    if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
+        return new Date(value);
+    }
+    return value;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${API_BASE_URL}${path}`, {
         credentials: 'include',
@@ -31,7 +43,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
     // 204 or a 200 with an empty body (e.g. "not found" returning undefined)
     const text = await res.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    return (text ? JSON.parse(text, reviveDates) : undefined) as T;
 }
 
 function toQuery(options?: Record<string, boolean | undefined>): string {
