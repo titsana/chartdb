@@ -15,3 +15,11 @@ export const DISABLE_ANALYTICS: boolean =
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
 export const STORAGE_PROVIDER: 'dexie' | 'api' =
     import.meta.env.VITE_STORAGE_PROVIDER === 'api' ? 'api' : 'dexie';
+export const AZURE_AD_CLIENT_ID: string = import.meta.env
+    .VITE_AZURE_AD_CLIENT_ID;
+export const AZURE_AD_TENANT_ID: string = import.meta.env
+    .VITE_AZURE_AD_TENANT_ID;
+// ponytail: Azure AD is opt-in — unset either var and the app runs with no auth, as before.
+export const AZURE_AD_ENABLED: boolean = Boolean(
+    AZURE_AD_CLIENT_ID && AZURE_AD_TENANT_ID
+);
