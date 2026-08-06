@@ -19,4 +19,7 @@ export class DiagramEntity {
 
     @Column('timestamptz')
     updatedAt: Date;
+
+    @Column('timestamptz', { nullable: true })
+    deletedAt?: Date | null;
 }

@@ -60,4 +60,7 @@ export class TableEntity {
 
     @Column('varchar', { nullable: true })
     parentAreaId?: string | null;
+
+    @Column('timestamptz', { nullable: true })
+    deletedAt?: Date | null;
 }

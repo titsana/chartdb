@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import type { Repository } from 'typeorm';
+import { IsNull, type Repository } from 'typeorm';
 import { DiagramEntity } from '../entities/diagram.entity';
 import { TableEntity } from '../entities/table.entity';
 import { RelationshipEntity } from '../entities/relationship.entity';
@@ -95,7 +95,13 @@ export class StorageService implements OnModuleInit {
     }
 
     async getTable(diagramId: string, id: string) {
-        return (await this.tables.findOneBy({ id, diagramId })) ?? undefined;
+        return (
+            (await this.tables.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
+        );
     }
 
     async updateTable(id: string, attributes: Partial<TableEntity>) {
@@ -107,15 +113,15 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteTable(diagramId: string, id: string) {
-        await this.tables.delete({ id, diagramId });
+        await this.tables.update({ id, diagramId }, { deletedAt: new Date() });
     }
 
     async listTables(diagramId: string) {
-        return await this.tables.findBy({ diagramId });
+        return await this.tables.findBy({ diagramId, deletedAt: IsNull() });
     }
 
     async deleteDiagramTables(diagramId: string) {
-        await this.tables.delete({ diagramId });
+        await this.tables.update({ diagramId }, { deletedAt: new Date() });
     }
 
     // Relationships
@@ -131,7 +137,11 @@ export class StorageService implements OnModuleInit {
 
     async getRelationship(diagramId: string, id: string) {
         return (
-            (await this.relationships.findOneBy({ id, diagramId })) ?? undefined
+            (await this.relationships.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
         );
     }
 
@@ -143,18 +153,24 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteRelationship(diagramId: string, id: string) {
-        await this.relationships.delete({ id, diagramId });
+        await this.relationships.update(
+            { id, diagramId },
+            { deletedAt: new Date() }
+        );
     }
 
     async listRelationships(diagramId: string) {
         return await this.relationships.find({
-            where: { diagramId },
+            where: { diagramId, deletedAt: IsNull() },
             order: { name: 'ASC' },
         });
     }
 
     async deleteDiagramRelationships(diagramId: string) {
-        await this.relationships.delete({ diagramId });
+        await this.relationships.update(
+            { diagramId },
+            { deletedAt: new Date() }
+        );
     }
 
     // Dependencies
@@ -170,7 +186,11 @@ export class StorageService implements OnModuleInit {
 
     async getDependency(diagramId: string, id: string) {
         return (
-            (await this.dependencies.findOneBy({ id, diagramId })) ?? undefined
+            (await this.dependencies.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
         );
     }
 
@@ -179,15 +199,24 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteDependency(diagramId: string, id: string) {
-        await this.dependencies.delete({ id, diagramId });
+        await this.dependencies.update(
+            { id, diagramId },
+            { deletedAt: new Date() }
+        );
     }
 
     async listDependencies(diagramId: string) {
-        return await this.dependencies.findBy({ diagramId });
+        return await this.dependencies.findBy({
+            diagramId,
+            deletedAt: IsNull(),
+        });
     }
 
     async deleteDiagramDependencies(diagramId: string) {
-        await this.dependencies.delete({ diagramId });
+        await this.dependencies.update(
+            { diagramId },
+            { deletedAt: new Date() }
+        );
     }
 
     // Areas
@@ -196,7 +225,13 @@ export class StorageService implements OnModuleInit {
     }
 
     async getArea(diagramId: string, id: string) {
-        return (await this.areas.findOneBy({ id, diagramId })) ?? undefined;
+        return (
+            (await this.areas.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
+        );
     }
 
     async updateArea(id: string, attributes: Partial<AreaEntity>) {
@@ -204,15 +239,15 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteArea(diagramId: string, id: string) {
-        await this.areas.delete({ id, diagramId });
+        await this.areas.update({ id, diagramId }, { deletedAt: new Date() });
     }
 
     async listAreas(diagramId: string) {
-        return await this.areas.findBy({ diagramId });
+        return await this.areas.findBy({ diagramId, deletedAt: IsNull() });
     }
 
     async deleteDiagramAreas(diagramId: string) {
-        await this.areas.delete({ diagramId });
+        await this.areas.update({ diagramId }, { deletedAt: new Date() });
     }
 
     // Custom types
@@ -228,7 +263,11 @@ export class StorageService implements OnModuleInit {
 
     async getCustomType(diagramId: string, id: string) {
         return (
-            (await this.customTypes.findOneBy({ id, diagramId })) ?? undefined
+            (await this.customTypes.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
         );
     }
 
@@ -237,18 +276,21 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteCustomType(diagramId: string, id: string) {
-        await this.customTypes.delete({ id, diagramId });
+        await this.customTypes.update(
+            { id, diagramId },
+            { deletedAt: new Date() }
+        );
     }
 
     async listCustomTypes(diagramId: string) {
         return await this.customTypes.find({
-            where: { diagramId },
+            where: { diagramId, deletedAt: IsNull() },
             order: { name: 'ASC' },
         });
     }
 
     async deleteDiagramCustomTypes(diagramId: string) {
-        await this.customTypes.delete({ diagramId });
+        await this.customTypes.update({ diagramId }, { deletedAt: new Date() });
     }
 
     // Notes
@@ -257,7 +299,13 @@ export class StorageService implements OnModuleInit {
     }
 
     async getNote(diagramId: string, id: string) {
-        return (await this.notes.findOneBy({ id, diagramId })) ?? undefined;
+        return (
+            (await this.notes.findOneBy({
+                id,
+                diagramId,
+                deletedAt: IsNull(),
+            })) ?? undefined
+        );
     }
 
     async updateNote(id: string, attributes: Partial<NoteEntity>) {
@@ -265,15 +313,15 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteNote(diagramId: string, id: string) {
-        await this.notes.delete({ id, diagramId });
+        await this.notes.update({ id, diagramId }, { deletedAt: new Date() });
     }
 
     async listNotes(diagramId: string) {
-        return await this.notes.findBy({ diagramId });
+        return await this.notes.findBy({ diagramId, deletedAt: IsNull() });
     }
 
     async deleteDiagramNotes(diagramId: string) {
-        await this.notes.delete({ diagramId });
+        await this.notes.update({ diagramId }, { deletedAt: new Date() });
     }
 
     // Diagrams
@@ -331,14 +379,17 @@ export class StorageService implements OnModuleInit {
     }
 
     async listDiagrams(options?: DiagramIncludeOptions) {
-        const diagrams = await this.diagrams.find();
+        const diagrams = await this.diagrams.findBy({ deletedAt: IsNull() });
         return await Promise.all(
             diagrams.map((diagram) => this.hydrate(diagram, options))
         );
     }
 
     async getDiagram(id: string, options?: DiagramIncludeOptions) {
-        const diagram = await this.diagrams.findOneBy({ id });
+        const diagram = await this.diagrams.findOneBy({
+            id,
+            deletedAt: IsNull(),
+        });
         if (!diagram) return undefined;
         return await this.hydrate(diagram, options);
     }
@@ -377,14 +428,15 @@ export class StorageService implements OnModuleInit {
     }
 
     async deleteDiagram(id: string) {
+        const deletedAt = new Date();
         await Promise.all([
-            this.diagrams.delete(id),
-            this.tables.delete({ diagramId: id }),
-            this.relationships.delete({ diagramId: id }),
-            this.dependencies.delete({ diagramId: id }),
-            this.areas.delete({ diagramId: id }),
-            this.customTypes.delete({ diagramId: id }),
-            this.notes.delete({ diagramId: id }),
+            this.diagrams.update(id, { deletedAt }),
+            this.tables.update({ diagramId: id }, { deletedAt }),
+            this.relationships.update({ diagramId: id }, { deletedAt }),
+            this.dependencies.update({ diagramId: id }, { deletedAt }),
+            this.areas.update({ diagramId: id }, { deletedAt }),
+            this.customTypes.update({ diagramId: id }, { deletedAt }),
+            this.notes.update({ diagramId: id }, { deletedAt }),
         ]);
     }
 }

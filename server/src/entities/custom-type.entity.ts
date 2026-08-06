@@ -27,4 +27,7 @@ export class CustomTypeEntity {
 
     @Column('int', { nullable: true })
     order?: number | null;
+
+    @Column('timestamptz', { nullable: true })
+    deletedAt?: Date | null;
 }

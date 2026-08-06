@@ -29,4 +29,7 @@ export class NoteEntity {
 
     @Column('int', { nullable: true })
     order?: number;
+
+    @Column('timestamptz', { nullable: true })
+    deletedAt?: Date | null;
 }
