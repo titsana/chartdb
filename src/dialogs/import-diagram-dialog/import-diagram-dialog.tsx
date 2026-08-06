@@ -16,67 +16,106 @@ import { useTranslation } from 'react-i18next';
 import { FileUploader } from '@/components/file-uploader/file-uploader';
 import { useStorage } from '@/hooks/use-storage';
 import { useNavigate } from 'react-router-dom';
-import { diagramFromJSONInput } from '@/lib/export-import-utils';
+import { mergeDiagrams, parseDiagramJSON } from '@/lib/export-import-utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/alert/alert';
 import { AlertCircle } from 'lucide-react';
+import { ZodError } from 'zod';
 
 export interface ImportDiagramDialogProps extends BaseDialogProps {}
+
+const readFileAsText = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const result = e.target?.result;
+            if (typeof result === 'string') {
+                resolve(result);
+            } else {
+                reject(new Error('Could not read file'));
+            }
+        };
+        reader.onerror = () =>
+            reject(reader.error ?? new Error('Could not read file'));
+        reader.readAsText(file);
+    });
 
 export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
     dialog,
 }) => {
     const { t } = useTranslation();
-    const [file, setFile] = useState<File | null>(null);
+    const [files, setFiles] = useState<File[]>([]);
     const { addDiagram } = useStorage();
     const navigate = useNavigate();
-    const [error, setError] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const onFileChange = useCallback((files: File[]) => {
-        if (files.length === 0) {
-            setFile(null);
-            return;
-        }
-
-        setFile(files[0]);
+        setFiles(files);
     }, []);
 
     useEffect(() => {
         if (!dialog.open) return;
-        setError(false);
-        setFile(null);
+        setError(null);
+        setFiles([]);
     }, [dialog.open]);
     const { closeImportDiagramDialog, closeCreateDiagramDialog } = useDialog();
 
-    const handleImport = useCallback(() => {
-        if (!file) return;
+    const handleImport = useCallback(async () => {
+        if (files.length === 0) return;
 
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            const json = e.target?.result;
-            if (typeof json !== 'string') return;
+        setError(null);
 
+        // Read and validate each file individually, fail-fast, so a parse
+        // error can be reported against the specific file that caused it.
+        const parsedDiagrams = [];
+        for (const file of files) {
             try {
-                const diagram = diagramFromJSONInput(json);
-
-                await addDiagram({ diagram });
-
-                closeImportDiagramDialog();
-                closeCreateDiagramDialog();
-
-                navigate(`/diagrams/${diagram.id}`);
+                const json = await readFileAsText(file);
+                parsedDiagrams.push(parseDiagramJSON(json));
             } catch (e) {
-                setError(true);
+                const message =
+                    e instanceof ZodError
+                        ? e.issues
+                              .map((issue) =>
+                                  issue.path.length
+                                      ? `${issue.path.join('.')}: ${issue.message}`
+                                      : issue.message
+                              )
+                              .join(', ')
+                        : e instanceof Error
+                          ? e.message
+                          : String(e);
 
-                throw e;
+                setError(
+                    t('import_diagram_dialog.error.file_description', {
+                        fileName: file.name,
+                        message,
+                    })
+                );
+                return;
             }
-        };
-        reader.readAsText(file);
+        }
+
+        let diagram;
+        try {
+            diagram = mergeDiagrams(parsedDiagrams);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            return;
+        }
+
+        await addDiagram({ diagram });
+
+        closeImportDiagramDialog();
+        closeCreateDiagramDialog();
+
+        navigate(`/diagrams/${diagram.id}`);
     }, [
-        file,
+        files,
         addDiagram,
         navigate,
         closeImportDiagramDialog,
         closeCreateDiagramDialog,
+        t,
     ]);
 
     return (
@@ -102,6 +141,7 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
                         <FileUploader
                             supportedExtensions={['.json']}
                             onFilesChange={onFileChange}
+                            multiple
                         />
                         {error ? (
                             <Alert variant="destructive" className="mt-2">
@@ -109,11 +149,7 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
                                 <AlertTitle>
                                     {t('import_diagram_dialog.error.title')}
                                 </AlertTitle>
-                                <AlertDescription>
-                                    {t(
-                                        'import_diagram_dialog.error.description'
-                                    )}
-                                </AlertDescription>
+                                <AlertDescription>{error}</AlertDescription>
                             </Alert>
                         ) : null}
                     </div>
@@ -124,7 +160,10 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
                             {t('import_diagram_dialog.cancel')}
                         </Button>
                     </DialogClose>
-                    <Button onClick={handleImport} disabled={file === null}>
+                    <Button
+                        onClick={handleImport}
+                        disabled={files.length === 0}
+                    >
                         {t('import_diagram_dialog.import')}
                     </Button>
                 </DialogFooter>

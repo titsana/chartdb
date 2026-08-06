@@ -477,13 +477,14 @@ export const en = {
 
         import_diagram_dialog: {
             title: 'Import Diagram',
-            description: 'Import a diagram from a JSON file.',
+            description: 'Import one or more diagrams from JSON files.',
             cancel: 'Cancel',
             import: 'Import',
             error: {
                 title: 'Error importing diagram',
                 description:
                     'The diagram JSON is invalid. Please check the JSON and try again. Need help? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
 
