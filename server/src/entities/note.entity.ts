@@ -1,6 +1,7 @@
 import { Entity, PrimaryColumn, Column, Index } from 'typeorm';
 
 @Entity('notes')
+@Index(['diagramId', 'parentAreaId'])
 export class NoteEntity {
     @PrimaryColumn('varchar')
     id: string;

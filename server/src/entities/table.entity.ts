@@ -2,6 +2,7 @@ import { Entity, PrimaryColumn, Column, Index } from 'typeorm';
 import { numericTransformer } from './transformers';
 
 @Entity('tables')
+@Index(['diagramId', 'parentAreaId'])
 export class TableEntity {
     @PrimaryColumn('varchar')
     id: string;
