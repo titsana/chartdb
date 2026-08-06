@@ -18,9 +18,17 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 // JSON.parse doesn't revive dates: Diagram.createdAt/updatedAt are Date
 // objects domain-wide (e.g. sorted with .getTime() in open-diagram-dialog),
 // but the wire format is an ISO string — revive it back or callers throw.
+//
+// Also drop `null`: Postgres returns NULL for unset optional columns (e.g.
+// Area.order, Diagram.databaseEdition), but those domain fields are typed
+// as `T | undefined`, not `T | null` — callers that only check `!== undefined`
+// (or destructure without a null-aware default) would otherwise misbehave.
 function reviveDates(_key: string, value: unknown) {
     if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
         return new Date(value);
+    }
+    if (value === null) {
+        return undefined;
     }
     return value;
 }

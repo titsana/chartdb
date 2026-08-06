@@ -27,8 +27,16 @@ export const diagramToJSONOutput = (diagram: Diagram): string => {
     return JSON.stringify(clonedDiagram, null, 2);
 };
 
+// Backups exported from the API storage provider carry Postgres NULLs for
+// unset optional fields (e.g. Area.order, Diagram.databaseEdition), but the
+// domain schemas only accept `undefined` there — drop nulls so those files
+// still import.
+function dropNulls(_key: string, value: unknown) {
+    return value === null ? undefined : value;
+}
+
 export const diagramFromJSONInput = (json: string): Diagram => {
-    const loadedDiagram = JSON.parse(json);
+    const loadedDiagram = JSON.parse(json, dropNulls);
 
     const diagram = diagramSchema.parse({
         ...loadedDiagram,
