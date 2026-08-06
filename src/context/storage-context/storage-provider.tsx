@@ -12,6 +12,7 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
+import type { Group } from '@/lib/domain/group';
 
 export const StorageProvider: React.FC<React.PropsWithChildren> = ({
     children,
@@ -53,6 +54,10 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
             diagram_filters: EntityTable<
                 DiagramFilter & { diagramId: string },
                 'diagramId' // primary key "id" (for the typings only)
+            >;
+            groups: EntityTable<
+                Group,
+                'id' // primary key "id" (for the typings only)
             >;
         };
 
@@ -236,6 +241,24 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
             config: '++id, defaultDiagramId',
             diagram_filters: 'diagramId, tableIds, schemasIds',
             notes: '++id, diagramId, content, x, y, width, height, color',
+        });
+
+        dexieDB.version(14).stores({
+            diagrams:
+                '++id, name, databaseType, databaseEdition, groupId, createdAt, updatedAt',
+            db_tables:
+                '++id, diagramId, name, schema, x, y, fields, indexes, color, createdAt, width, comment, isView, isMaterializedView, order',
+            db_relationships:
+                '++id, diagramId, name, sourceSchema, sourceTableId, targetSchema, targetTableId, sourceFieldId, targetFieldId, type, createdAt',
+            db_dependencies:
+                '++id, diagramId, schema, tableId, dependentSchema, dependentTableId, createdAt',
+            areas: '++id, diagramId, name, x, y, width, height, color',
+            db_custom_types:
+                '++id, diagramId, schema, type, kind, values, fields',
+            config: '++id, defaultDiagramId',
+            diagram_filters: 'diagramId, tableIds, schemasIds',
+            notes: '++id, diagramId, content, x, y, width, height, color',
+            groups: '++id, name, createdAt, updatedAt',
         });
 
         dexieDB.on('ready', async () => {
@@ -622,6 +645,58 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
             [db]
         );
 
+    const addGroup: StorageContext['addGroup'] = useCallback(
+        async ({ group }) => {
+            const existing = await db.groups.toArray();
+            if (
+                existing.some(
+                    (g) => g.name.toLowerCase() === group.name.toLowerCase()
+                )
+            ) {
+                throw new Error(`Group "${group.name}" already exists`);
+            }
+            await db.groups.add(group);
+        },
+        [db]
+    );
+
+    const listGroups: StorageContext['listGroups'] = useCallback(async () => {
+        return await db.groups.toArray();
+    }, [db]);
+
+    const updateGroup: StorageContext['updateGroup'] = useCallback(
+        async ({ id, attributes }) => {
+            if (attributes.name) {
+                const existing = await db.groups.toArray();
+                if (
+                    existing.some(
+                        (g) =>
+                            g.id !== id &&
+                            g.name.toLowerCase() ===
+                                attributes.name!.toLowerCase()
+                    )
+                ) {
+                    throw new Error(
+                        `Group "${attributes.name}" already exists`
+                    );
+                }
+            }
+            await db.groups.update(id, attributes);
+        },
+        [db]
+    );
+
+    const deleteGroup: StorageContext['deleteGroup'] = useCallback(
+        async (id) => {
+            await db.groups.delete(id);
+            await db.diagrams
+                .where('groupId')
+                .equals(id)
+                .modify({ groupId: undefined });
+        },
+        [db]
+    );
+
     const addDiagram: StorageContext['addDiagram'] = useCallback(
         async ({ diagram }) => {
             const promises = [];
@@ -631,6 +706,7 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
                     name: diagram.name,
                     databaseType: diagram.databaseType,
                     databaseEdition: diagram.databaseEdition,
+                    groupId: diagram.groupId,
                     createdAt: diagram.createdAt,
                     updatedAt: diagram.updatedAt,
                 })
@@ -885,6 +961,10 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
                 getDiagram,
                 updateDiagram,
                 deleteDiagram,
+                addGroup,
+                listGroups,
+                updateGroup,
+                deleteGroup,
                 addTable,
                 getTable,
                 updateTable,

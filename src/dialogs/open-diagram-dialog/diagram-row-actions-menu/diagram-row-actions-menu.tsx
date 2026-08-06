@@ -4,12 +4,23 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/dropdown-menu/dropdown-menu';
 import { Button } from '@/components/button/button';
-import { Ellipsis, Layers2, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import {
+    Ellipsis,
+    FolderPlus,
+    Layers2,
+    Plus,
+    SquareArrowOutUpRight,
+    Trash2,
+} from 'lucide-react';
 import { useChartDB } from '@/hooks/use-chartdb';
 import type { Diagram } from '@/lib/domain';
+import type { Group } from '@/lib/domain/group';
 import { useStorage } from '@/hooks/use-storage';
 import { cloneDiagram } from '@/lib/clone';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +30,9 @@ interface DiagramRowActionsMenuProps {
     onOpen: () => void;
     refetch: () => void;
     numberOfDiagrams: number;
+    groups: Group[];
+    onAssignToGroup: (groupId?: string) => void;
+    onCreateGroupForDiagram: () => void;
 }
 
 export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
@@ -26,6 +40,9 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
     onOpen,
     refetch,
     numberOfDiagrams,
+    groups,
+    onAssignToGroup,
+    onCreateGroupForDiagram,
 }) => {
     const { diagramId } = useChartDB();
     const { deleteDiagram, addDiagram } = useStorage();
@@ -83,6 +100,31 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
                     {t('open_diagram_dialog.diagram_actions.duplicate')}
                     <Layers2 className="size-3.5" />
                 </DropdownMenuItem>
+
+                <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="flex justify-between gap-4">
+                        {t('open_diagram_dialog.diagram_actions.add_to_group')}
+                        <FolderPlus className="size-3.5" />
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                        {groups.map((group) => (
+                            <DropdownMenuItem
+                                key={group.id}
+                                onClick={() => onAssignToGroup(group.id)}
+                            >
+                                {group.name}
+                            </DropdownMenuItem>
+                        ))}
+                        {groups.length > 0 ? <DropdownMenuSeparator /> : null}
+                        <DropdownMenuItem
+                            onClick={onCreateGroupForDiagram}
+                            className="flex justify-between gap-4"
+                        >
+                            {t('open_diagram_dialog.diagram_actions.new_group')}
+                            <Plus className="size-3.5" />
+                        </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                </DropdownMenuSub>
 
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

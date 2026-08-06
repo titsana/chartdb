@@ -1,21 +1,12 @@
 import { Entity, PrimaryColumn, Column } from 'typeorm';
 
-@Entity('diagrams')
-export class DiagramEntity {
+@Entity('groups')
+export class GroupEntity {
     @PrimaryColumn('varchar')
     id: string;
 
     @Column('varchar')
     name: string;
-
-    @Column('varchar')
-    databaseType: string;
-
-    @Column('varchar', { nullable: true })
-    databaseEdition?: string | null;
-
-    @Column('varchar', { nullable: true })
-    groupId?: string | null;
 
     @Column('timestamptz')
     createdAt: Date;

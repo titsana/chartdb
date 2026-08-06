@@ -94,6 +94,31 @@ export class StorageController {
         return this.storage.deleteDiagram(id);
     }
 
+    // Groups
+    @Post('groups')
+    addGroup(@Body() body: Record<string, unknown>) {
+        return this.storage.addGroup(body as never);
+    }
+
+    @Get('groups')
+    listGroups() {
+        return this.storage.listGroups();
+    }
+
+    @Patch('groups/:id')
+    updateGroup(
+        @Param('id') id: string,
+        @Body() body: Record<string, unknown>
+    ) {
+        return this.storage.updateGroup(id, body);
+    }
+
+    @Delete('groups/:id')
+    @HttpCode(204)
+    deleteGroup(@Param('id') id: string) {
+        return this.storage.deleteGroup(id);
+    }
+
     // Tables
     @Post('diagrams/:diagramId/tables')
     addTable(

@@ -1,7 +1,8 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, type Repository } from 'typeorm';
+import { ILike, IsNull, Not, type Repository } from 'typeorm';
 import { DiagramEntity } from '../entities/diagram.entity';
+import { GroupEntity } from '../entities/group.entity';
 import { TableEntity } from '../entities/table.entity';
 import { RelationshipEntity } from '../entities/relationship.entity';
 import { DependencyEntity } from '../entities/dependency.entity';
@@ -25,6 +26,7 @@ const DIAGRAM_COLUMNS = [
     'name',
     'databaseType',
     'databaseEdition',
+    'groupId',
     'createdAt',
     'updatedAt',
 ] as const;
@@ -49,7 +51,9 @@ export class StorageService implements OnModuleInit {
         @InjectRepository(ConfigEntity)
         private readonly config: Repository<ConfigEntity>,
         @InjectRepository(DiagramFilterEntity)
-        private readonly diagramFilters: Repository<DiagramFilterEntity>
+        private readonly diagramFilters: Repository<DiagramFilterEntity>,
+        @InjectRepository(GroupEntity)
+        private readonly groups: Repository<GroupEntity>
     ) {}
 
     // ponytail: mirrors the Dexie client's dexieDB.on('ready') seed — the
@@ -438,5 +442,38 @@ export class StorageService implements OnModuleInit {
             this.customTypes.update({ diagramId: id }, { deletedAt }),
             this.notes.update({ diagramId: id }, { deletedAt }),
         ]);
+    }
+
+    // Groups
+    private async assertNameAvailable(name: string, excludeId?: string) {
+        const existing = await this.groups.findOneBy({
+            name: ILike(name),
+            deletedAt: IsNull(),
+            ...(excludeId ? { id: Not(excludeId) } : {}),
+        });
+        if (existing) {
+            throw new ConflictException(`Group "${name}" already exists`);
+        }
+    }
+
+    async addGroup(group: Partial<GroupEntity>) {
+        await this.assertNameAvailable(group.name!);
+        await this.groups.insert(group as GroupEntity);
+    }
+
+    async listGroups() {
+        return await this.groups.findBy({ deletedAt: IsNull() });
+    }
+
+    async updateGroup(id: string, attributes: Partial<GroupEntity>) {
+        if (attributes.name) {
+            await this.assertNameAvailable(attributes.name, id);
+        }
+        await this.groups.update(id, attributes);
+    }
+
+    async deleteGroup(id: string) {
+        await this.groups.update(id, { deletedAt: new Date() });
+        await this.diagrams.update({ groupId: id }, { groupId: null });
     }
 }

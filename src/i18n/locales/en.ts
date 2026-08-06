@@ -357,11 +357,29 @@ export const en = {
             cancel: 'Cancel',
             open: 'Open',
             new_database: 'New Database',
+            new_group: 'New Group',
+            search_placeholder: 'Search diagrams...',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'Open',
                 duplicate: 'Duplicate',
                 delete: 'Delete',
+                add_to_group: 'Add to Group',
+                new_group: 'New Group...',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete',
+            },
+
+            group_name_dialog: {
+                create_title: 'New Group',
+                rename_title: 'Rename Group',
+                placeholder: 'Group name',
+                cancel: 'Cancel',
+                save: 'Save',
             },
         },
 

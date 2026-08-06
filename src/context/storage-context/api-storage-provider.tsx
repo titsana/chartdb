@@ -10,6 +10,7 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
+import type { Group } from '@/lib/domain/group';
 import { API_BASE_URL, AZURE_AD_ENABLED } from '@/lib/env';
 import { msalInstance, loginRequest } from '@/lib/msal-config';
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
@@ -78,8 +79,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     }
 
     if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        const message = (() => {
+            try {
+                return JSON.parse(body)?.message;
+            } catch {
+                return undefined;
+            }
+        })();
         throw new Error(
-            `API ${init?.method ?? 'GET'} ${path} failed: ${res.status}`
+            message ??
+                `API ${init?.method ?? 'GET'} ${path} failed: ${res.status}`
         );
     }
 
@@ -178,6 +188,37 @@ export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
     const deleteDiagram: StorageContext['deleteDiagram'] = useCallback(
         async (id) => {
             await apiFetch(`/diagrams/${id}`, { method: 'DELETE' });
+        },
+        []
+    );
+
+    const addGroup: StorageContext['addGroup'] = useCallback(
+        async ({ group }) => {
+            await apiFetch('/groups', {
+                method: 'POST',
+                body: JSON.stringify(group),
+            });
+        },
+        []
+    );
+
+    const listGroups: StorageContext['listGroups'] = useCallback(async () => {
+        return await apiFetch<Group[]>('/groups');
+    }, []);
+
+    const updateGroup: StorageContext['updateGroup'] = useCallback(
+        async ({ id, attributes }) => {
+            await apiFetch(`/groups/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(attributes),
+            });
+        },
+        []
+    );
+
+    const deleteGroup: StorageContext['deleteGroup'] = useCallback(
+        async (id) => {
+            await apiFetch(`/groups/${id}`, { method: 'DELETE' });
         },
         []
     );
@@ -518,6 +559,10 @@ export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
             getDiagram,
             updateDiagram,
             deleteDiagram,
+            addGroup,
+            listGroups,
+            updateGroup,
+            deleteGroup,
             addTable,
             getTable,
             updateTable,
@@ -567,6 +612,10 @@ export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
             getDiagram,
             updateDiagram,
             deleteDiagram,
+            addGroup,
+            listGroups,
+            updateGroup,
+            deleteGroup,
             addTable,
             getTable,
             updateTable,

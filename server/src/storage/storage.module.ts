@@ -9,6 +9,7 @@ import { CustomTypeEntity } from '../entities/custom-type.entity';
 import { NoteEntity } from '../entities/note.entity';
 import { ConfigEntity } from '../entities/config.entity';
 import { DiagramFilterEntity } from '../entities/diagram-filter.entity';
+import { GroupEntity } from '../entities/group.entity';
 import { StorageController } from './storage.controller';
 import { StorageService } from './storage.service';
 
@@ -24,6 +25,7 @@ import { StorageService } from './storage.service';
             NoteEntity,
             ConfigEntity,
             DiagramFilterEntity,
+            GroupEntity,
         ]),
     ],
     controllers: [StorageController],

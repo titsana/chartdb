@@ -24,6 +24,7 @@ export interface Diagram {
     areas?: Area[];
     customTypes?: DBCustomType[];
     notes?: Note[];
+    groupId?: string;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -39,6 +40,7 @@ export const diagramSchema: z.ZodType<Diagram> = z.object({
     areas: z.array(areaSchema).optional(),
     customTypes: z.array(dbCustomTypeSchema).optional(),
     notes: z.array(noteSchema).optional(),
+    groupId: z.string().optional(),
     createdAt: z.date(),
     updatedAt: z.date(),
 });

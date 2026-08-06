@@ -9,6 +9,7 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
+import type { Group } from '@/lib/domain/group';
 
 export interface StorageContext {
     // Config operations
@@ -49,6 +50,15 @@ export interface StorageContext {
         attributes: Partial<Diagram>;
     }) => Promise<void>;
     deleteDiagram: (id: string) => Promise<void>;
+
+    // Group operations
+    addGroup: (params: { group: Group }) => Promise<void>;
+    listGroups: () => Promise<Group[]>;
+    updateGroup: (params: {
+        id: string;
+        attributes: Partial<Group>;
+    }) => Promise<void>;
+    deleteGroup: (id: string) => Promise<void>;
 
     // Table operations
     addTable: (params: { diagramId: string; table: DBTable }) => Promise<void>;
@@ -167,6 +177,11 @@ export const storageInitialValue: StorageContext = {
     getDiagram: emptyFn,
     updateDiagram: emptyFn,
     deleteDiagram: emptyFn,
+
+    addGroup: emptyFn,
+    listGroups: emptyFn,
+    updateGroup: emptyFn,
+    deleteGroup: emptyFn,
 
     addTable: emptyFn,
     getTable: emptyFn,
