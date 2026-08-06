@@ -30,6 +30,9 @@ export class NoteEntity {
     @Column('int', { nullable: true })
     order?: number;
 
+    @Column('varchar', { nullable: true })
+    parentAreaId?: string | null;
+
     @Column('timestamptz', { nullable: true })
     deletedAt?: Date | null;
 }

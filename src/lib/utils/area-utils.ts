@@ -1,12 +1,44 @@
 import type { DBTable } from '@/lib/domain/db-table';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
 import type { Area } from '@/lib/domain/area';
+import type { Note } from '@/lib/domain/note';
 import {
     adjustTablePositionsWithoutAreas,
     calcTableHeight,
     getTableDimensions,
     MIN_TABLE_SIZE,
 } from '@/lib/domain/db-table';
+
+/**
+ * Check if a rectangle is completely inside an area
+ */
+const isRectInsideArea = (
+    rect: { x: number; y: number; width: number; height: number },
+    area: Area
+): boolean => {
+    const rectLeft = rect.x;
+    const rectRight = rect.x + rect.width;
+    const rectTop = rect.y;
+    const rectBottom = rect.y + rect.height;
+
+    const areaLeft = area.x;
+    const areaRight = area.x + area.width;
+    const areaTop = area.y;
+    const areaBottom = area.y + area.height;
+
+    return (
+        rectLeft >= areaLeft &&
+        rectRight <= areaRight &&
+        rectTop >= areaTop &&
+        rectBottom <= areaBottom
+    );
+};
+
+/**
+ * Sort areas by order (if available) to prioritize top-most areas
+ */
+const sortAreasByOrder = (areas: Area[]): Area[] =>
+    [...areas].sort((a, b) => (b.order ?? 0) - (a.order ?? 0));
 
 /**
  * Check if a table is inside an area based on their positions and dimensions
@@ -16,23 +48,9 @@ export const isTableInsideArea = (table: DBTable, area: Area): boolean => {
     const tableWidth = table.width ?? MIN_TABLE_SIZE;
     const tableHeight = calcTableHeight(table);
 
-    // Check if table's top-left corner is inside the area
-    const tableLeft = table.x;
-    const tableRight = table.x + tableWidth;
-    const tableTop = table.y;
-    const tableBottom = table.y + tableHeight;
-
-    const areaLeft = area.x;
-    const areaRight = area.x + area.width;
-    const areaTop = area.y;
-    const areaBottom = area.y + area.height;
-
-    // Check if table is completely inside the area
-    return (
-        tableLeft >= areaLeft &&
-        tableRight <= areaRight &&
-        tableTop >= areaTop &&
-        tableBottom <= areaBottom
+    return isRectInsideArea(
+        { x: table.x, y: table.y, width: tableWidth, height: tableHeight },
+        area
     );
 };
 
@@ -43,12 +61,7 @@ export const findContainingArea = (
     table: DBTable,
     areas: Area[]
 ): Area | null => {
-    // Sort areas by order (if available) to prioritize top-most areas
-    const sortedAreas = [...areas].sort(
-        (a, b) => (b.order ?? 0) - (a.order ?? 0)
-    );
-
-    for (const area of sortedAreas) {
+    for (const area of sortAreasByOrder(areas)) {
         if (isTableInsideArea(table, area)) {
             return area;
         }
@@ -88,6 +101,58 @@ export const getTablesInArea = (
     tables: DBTable[]
 ): DBTable[] => {
     return tables.filter((table) => table.parentAreaId === areaId);
+};
+
+/**
+ * Check if a note is inside an area based on their positions and dimensions
+ */
+export const isNoteInsideArea = (note: Note, area: Area): boolean =>
+    isRectInsideArea(note, area);
+
+/**
+ * Find which area contains a note
+ */
+export const findContainingAreaForNote = (
+    note: Note,
+    areas: Area[]
+): Area | null => {
+    for (const area of sortAreasByOrder(areas)) {
+        if (isNoteInsideArea(note, area)) {
+            return area;
+        }
+    }
+
+    return null;
+};
+
+/**
+ * Update notes with their parent area IDs based on containment
+ */
+export const updateNotesParentAreas = (
+    notes: Note[],
+    areas: Area[]
+): Note[] => {
+    return notes.map((note) => {
+        const containingArea = findContainingAreaForNote(note, areas);
+        const newParentAreaId = containingArea?.id || null;
+
+        // Only update if parentAreaId has changed
+        if (note.parentAreaId !== newParentAreaId) {
+            return {
+                ...note,
+                parentAreaId: newParentAreaId,
+            };
+        }
+
+        return note;
+    });
+};
+
+/**
+ * Get all notes that are inside a specific area
+ */
+export const getNotesInArea = (areaId: string, notes: Note[]): Note[] => {
+    return notes.filter((note) => note.parentAreaId === areaId);
 };
 
 const AREA_PADDING = 30;

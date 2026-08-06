@@ -111,6 +111,8 @@ import { ConnectionLine } from './connection-line/connection-line';
 import {
     updateTablesParentAreas,
     getTablesInArea,
+    updateNotesParentAreas,
+    getNotesInArea,
 } from '@/lib/utils/area-utils';
 import { CanvasFilter } from './canvas-filter/canvas-filter';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -748,6 +750,9 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             const visibleTables = nodes
                 .filter((node) => node.type === 'table' && !node.hidden)
                 .map((node) => (node as TableNodeType).data.table);
+            const visibleNotes = nodes
+                .filter((node) => node.type === 'note' && !node.hidden)
+                .map((node) => (node as NoteNodeType).data.note);
             const visibleAreas = nodes
                 .filter((node) => node.type === 'area' && !node.hidden)
                 .map((node) => (node as AreaNodeType).data.area);
@@ -793,10 +798,30 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     { updateHistory: false }
                 );
             }
+
+            const updatedNotes = updateNotesParentAreas(
+                visibleNotes,
+                visibleAreas
+            );
+
+            updatedNotes.forEach((newNote, index) => {
+                const oldNote = visibleNotes[index];
+                if (
+                    oldNote &&
+                    (!!newNote.parentAreaId || !!oldNote.parentAreaId) &&
+                    newNote.parentAreaId !== oldNote.parentAreaId
+                ) {
+                    updateNote(
+                        newNote.id,
+                        { parentAreaId: newNote.parentAreaId || null },
+                        { updateHistory: false }
+                    );
+                }
+            });
         }, 300);
 
         checkParentAreas();
-    }, [nodes, updateTablesState]);
+    }, [nodes, updateTablesState, updateNote]);
 
     const onConnectHandler = useCallback(
         async (params: AddEdgeParams) => {
@@ -1072,6 +1097,23 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                                 dragging: true,
                             });
                         });
+
+                        // Find child notes and create visual position changes
+                        const childNotes = notes.filter(
+                            (note) => note.parentAreaId === areaChange.id
+                        );
+
+                        childNotes.forEach((note) => {
+                            additionalChanges.push({
+                                id: note.id,
+                                type: 'position',
+                                position: {
+                                    x: note.x + deltaX,
+                                    y: note.y + deltaY,
+                                },
+                                dragging: true,
+                            });
+                        });
                     }
                 });
 
@@ -1097,8 +1139,12 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             const { positionChanges, removeChanges, sizeChanges } =
                 findRelevantNodesChanges(changesToApply, 'table');
 
-            // Calculate child table movements from area position changes
+            // Calculate child table/note movements from area position changes
             const childTableMovements: Map<
+                string,
+                { deltaX: number; deltaY: number }
+            > = new Map();
+            const childNoteMovements: Map<
                 string,
                 { deltaX: number; deltaY: number }
             > = new Map();
@@ -1121,6 +1167,14 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                             );
                             childTables.forEach((table) => {
                                 childTableMovements.set(table.id, {
+                                    deltaX,
+                                    deltaY,
+                                });
+                            });
+
+                            const childNotes = getNotesInArea(change.id, notes);
+                            childNotes.forEach((note) => {
+                                childNoteMovements.set(note.id, {
                                     deltaX,
                                     deltaY,
                                 });
@@ -1278,9 +1332,34 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             if (
                 notePositionChanges.length > 0 ||
                 noteRemoveChanges.length > 0 ||
-                noteSizeChanges.length > 0
+                noteSizeChanges.length > 0 ||
+                childNoteMovements.size > 0 ||
+                areaRemoveChanges.length > 0
             ) {
                 const notesUpdates: Record<string, Partial<Note>> = {};
+
+                // Handle area removal - clear parentAreaId on child notes
+                areaRemoveChanges.forEach((change) => {
+                    getNotesInArea(change.id, notes).forEach((note) => {
+                        notesUpdates[note.id] = {
+                            ...notesUpdates[note.id],
+                            parentAreaId: null,
+                        };
+                    });
+                });
+
+                // Handle child note movement from area drag
+                childNoteMovements.forEach((movement, noteId) => {
+                    const note = notes.find((n) => n.id === noteId);
+                    if (note) {
+                        notesUpdates[noteId] = {
+                            ...notesUpdates[noteId],
+                            x: note.x + movement.deltaX,
+                            y: note.y + movement.deltaY,
+                        };
+                    }
+                });
+
                 // Handle note position changes
                 notePositionChanges.forEach((change) => {
                     if (change.type === 'position' && change.position) {
@@ -1330,6 +1409,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             removeNote,
             readonly,
             tables,
+            notes,
             areas,
             getNode,
         ]

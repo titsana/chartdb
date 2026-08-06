@@ -9,6 +9,7 @@ export interface Note {
     height: number;
     color: string;
     order?: number;
+    parentAreaId?: string | null;
 }
 
 export const noteSchema: z.ZodType<Note> = z.object({
@@ -20,4 +21,5 @@ export const noteSchema: z.ZodType<Note> = z.object({
     height: z.number(),
     color: z.string(),
     order: z.number().optional(),
+    parentAreaId: z.string().or(z.null()).optional(),
 });
