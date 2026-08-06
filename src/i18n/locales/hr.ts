@@ -361,11 +361,29 @@ export const hr: LanguageTranslation = {
             cancel: 'Odustani',
             open: 'Otvori',
             new_database: 'Nova baza podataka',
+            new_group: 'Nova Grupa',
+            search_placeholder: 'Pretraži dijagrame...',
+            ungrouped: 'Nesvrstano',
 
             diagram_actions: {
                 open: 'Otvori',
                 duplicate: 'Dupliciraj',
                 delete: 'Obriši',
+                add_to_group: 'Dodaj u grupu',
+                new_group: 'Nova grupa...',
+            },
+
+            group_actions: {
+                rename: 'Preimenuj',
+                delete: 'Obriši',
+            },
+
+            group_name_dialog: {
+                create_title: 'Nova grupa',
+                rename_title: 'Preimenuj grupu',
+                placeholder: 'Naziv grupe',
+                cancel: 'Odustani',
+                save: 'Spremi',
             },
         },
 
@@ -488,6 +506,7 @@ export const hr: LanguageTranslation = {
                 title: 'Greška pri uvozu dijagrama',
                 description:
                     'JSON dijagrama je nevažeći. Molimo provjerite JSON i pokušajte ponovno. Trebate pomoć? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
 

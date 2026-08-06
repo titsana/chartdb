@@ -364,11 +364,29 @@ export const fr: LanguageTranslation = {
             cancel: 'Annuler',
             open: 'Ouvrir',
             new_database: 'Nouvelle Base de Données',
+            new_group: 'Nouveau Groupe',
+            search_placeholder: 'Rechercher des diagrammes...',
+            ungrouped: 'Non groupé',
 
             diagram_actions: {
                 open: 'Ouvrir',
                 duplicate: 'Dupliquer',
                 delete: 'Supprimer',
+                add_to_group: 'Ajouter au Groupe',
+                new_group: 'Nouveau Groupe...',
+            },
+
+            group_actions: {
+                rename: 'Renommer',
+                delete: 'Supprimer',
+            },
+
+            group_name_dialog: {
+                create_title: 'Nouveau Groupe',
+                rename_title: 'Renommer le Groupe',
+                placeholder: 'Nom du groupe',
+                cancel: 'Annuler',
+                save: 'Enregistrer',
             },
         },
 
@@ -491,6 +509,7 @@ export const fr: LanguageTranslation = {
                 title: "Erreur lors de l'exportation du diagramme",
                 description:
                     "Le diagramme JSON n'est pas valide. Veuillez vérifier le JSON et réessayer. Besoin d'aide ? support@chartdb.io",
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         import_dbml_dialog: {

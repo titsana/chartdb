@@ -369,11 +369,29 @@ export const ja: LanguageTranslation = {
             cancel: 'キャンセル',
             open: '開く',
             new_database: '新しいデータベース',
+            new_group: '新しいグループ',
+            search_placeholder: '図を検索...',
+            ungrouped: '未グループ化',
 
             diagram_actions: {
                 open: '開く',
                 duplicate: '複製',
                 delete: '削除',
+                add_to_group: 'グループに追加',
+                new_group: '新しいグループ...',
+            },
+
+            group_actions: {
+                rename: '名前を変更',
+                delete: '削除',
+            },
+
+            group_name_dialog: {
+                create_title: '新しいグループ',
+                rename_title: 'グループ名を変更',
+                placeholder: 'グループ名',
+                cancel: 'キャンセル',
+                save: '保存',
             },
         },
 
@@ -498,6 +516,7 @@ export const ja: LanguageTranslation = {
                 title: 'Error importing diagram',
                 description:
                     'The diagram JSON is invalid. Please check the JSON and try again. Need help? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

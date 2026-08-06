@@ -365,11 +365,29 @@ export const id_ID: LanguageTranslation = {
             cancel: 'Batal',
             open: 'Buka',
             new_database: 'Database Baru',
+            new_group: 'Grup Baru',
+            search_placeholder: 'Cari diagram...',
+            ungrouped: 'Tidak Dikelompokkan',
 
             diagram_actions: {
                 open: 'Buka',
                 duplicate: 'Duplikat',
                 delete: 'Hapus',
+                add_to_group: 'Tambahkan ke Grup',
+                new_group: 'Grup Baru...',
+            },
+
+            group_actions: {
+                rename: 'Ganti Nama',
+                delete: 'Hapus',
+            },
+
+            group_name_dialog: {
+                create_title: 'Grup Baru',
+                rename_title: 'Ganti Nama Grup',
+                placeholder: 'Nama grup',
+                cancel: 'Batal',
+                save: 'Simpan',
             },
         },
 
@@ -493,6 +511,7 @@ export const id_ID: LanguageTranslation = {
                 title: 'Error impor diagram',
                 description:
                     'Diagram JSON tidak valid. Silakan cek JSON dan coba lagi. Butuh bantuan? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

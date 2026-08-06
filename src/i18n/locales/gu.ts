@@ -365,11 +365,29 @@ export const gu: LanguageTranslation = {
             cancel: 'રદ કરો',
             open: 'ખોલો',
             new_database: 'નવું ડેટાબેસ',
+            new_group: 'નવું જૂથ',
+            search_placeholder: 'ડાયાગ્રામ શોધો...',
+            ungrouped: 'અસમૂહિત',
 
             diagram_actions: {
                 open: 'ખોલો',
                 duplicate: 'ડુપ્લિકેટ',
                 delete: 'કાઢી નાખો',
+                add_to_group: 'જૂથમાં ઉમેરો',
+                new_group: 'નવું જૂથ...',
+            },
+
+            group_actions: {
+                rename: 'નામ બદલો',
+                delete: 'કાઢી નાખો',
+            },
+
+            group_name_dialog: {
+                create_title: 'નવું જૂથ',
+                rename_title: 'જૂથનું નામ બદલો',
+                placeholder: 'જૂથનું નામ',
+                cancel: 'રદ કરો',
+                save: 'સાચવો',
             },
         },
 
@@ -494,6 +512,7 @@ export const gu: LanguageTranslation = {
                 title: 'ડાયાગ્રામ આયાતમાં ભૂલ',
                 description:
                     'ડાયાગ્રામ JSON અમાન્ય છે. કૃપા કરીને JSON તપાસો અને ફરી પ્રયાસ કરો. મદદ જોઈએ? support@chartdb.io પર સંપર્ક કરો.',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

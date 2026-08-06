@@ -358,11 +358,29 @@ export const zh_TW: LanguageTranslation = {
             cancel: '取消',
             open: '開啟',
             new_database: '新建資料庫',
+            new_group: '新增群組',
+            search_placeholder: '搜尋圖表...',
+            ungrouped: '未分組',
 
             diagram_actions: {
                 open: '開啟',
                 duplicate: '複製',
                 delete: '刪除',
+                add_to_group: '新增至群組',
+                new_group: '新增群組...',
+            },
+
+            group_actions: {
+                rename: '重新命名',
+                delete: '刪除',
+            },
+
+            group_name_dialog: {
+                create_title: '新增群組',
+                rename_title: '重新命名群組',
+                placeholder: '群組名稱',
+                cancel: '取消',
+                save: '儲存',
             },
         },
 
@@ -484,6 +502,7 @@ export const zh_TW: LanguageTranslation = {
                 title: '匯入圖表時發生錯誤',
                 description:
                     '圖表的 JSON 無效。請檢查 JSON 並再試一次。如需幫助，請聯繫 support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

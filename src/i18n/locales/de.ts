@@ -369,11 +369,29 @@ export const de: LanguageTranslation = {
             cancel: 'Abbrechen',
             open: 'Öffnen',
             new_database: 'Neue Datenbank',
+            new_group: 'Neue Gruppe',
+            search_placeholder: 'Diagramme suchen...',
+            ungrouped: 'Nicht gruppiert',
 
             diagram_actions: {
                 open: 'Öffnen',
                 duplicate: 'Duplizieren',
                 delete: 'Löschen',
+                add_to_group: 'Zu Gruppe hinzufügen',
+                new_group: 'Neue Gruppe...',
+            },
+
+            group_actions: {
+                rename: 'Umbenennen',
+                delete: 'Löschen',
+            },
+
+            group_name_dialog: {
+                create_title: 'Neue Gruppe',
+                rename_title: 'Gruppe umbenennen',
+                placeholder: 'Gruppenname',
+                cancel: 'Abbrechen',
+                save: 'Speichern',
             },
         },
 
@@ -497,6 +515,7 @@ export const de: LanguageTranslation = {
                 title: 'Error importing diagram',
                 description:
                     'The diagram JSON is invalid. Please check the JSON and try again. Need help? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

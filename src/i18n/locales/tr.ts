@@ -361,11 +361,29 @@ export const tr: LanguageTranslation = {
             cancel: 'İptal',
             open: 'Aç',
             new_database: 'Yeni Veritabanı',
+            new_group: 'Yeni Grup',
+            search_placeholder: 'Diyagram ara...',
+            ungrouped: 'Gruplandırılmamış',
 
             diagram_actions: {
                 open: 'Aç',
                 duplicate: 'Kopyala',
                 delete: 'Sil',
+                add_to_group: 'Gruba Ekle',
+                new_group: 'Yeni Grup...',
+            },
+
+            group_actions: {
+                rename: 'Yeniden Adlandır',
+                delete: 'Sil',
+            },
+
+            group_name_dialog: {
+                create_title: 'Yeni Grup',
+                rename_title: 'Grubu Yeniden Adlandır',
+                placeholder: 'Grup adı',
+                cancel: 'İptal',
+                save: 'Kaydet',
             },
         },
 
@@ -484,6 +502,7 @@ export const tr: LanguageTranslation = {
                 title: 'Error importing diagram',
                 description:
                     'The diagram JSON is invalid. Please check the JSON and try again. Need help? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

@@ -368,11 +368,29 @@ export const ne: LanguageTranslation = {
             cancel: 'रद्द गर्नुहोस्',
             open: 'खोल्नुहोस्',
             new_database: 'नयाँ डाटाबेस',
+            new_group: 'नयाँ समूह',
+            search_placeholder: 'डायग्राम खोज्नुहोस्...',
+            ungrouped: 'असमूहीकृत',
 
             diagram_actions: {
                 open: 'खोल्नुहोस्',
                 duplicate: 'डुप्लिकेट',
                 delete: 'मेटाउनुहोस्',
+                add_to_group: 'समूहमा थप्नुहोस्',
+                new_group: 'नयाँ समूह...',
+            },
+
+            group_actions: {
+                rename: 'नाम बदल्नुहोस्',
+                delete: 'मेटाउनुहोस्',
+            },
+
+            group_name_dialog: {
+                create_title: 'नयाँ समूह',
+                rename_title: 'समूहको नाम बदल्नुहोस्',
+                placeholder: 'समूहको नाम',
+                cancel: 'रद्द गर्नुहोस्',
+                save: 'सुरक्षित गर्नुहोस्',
             },
         },
 
@@ -496,6 +514,7 @@ export const ne: LanguageTranslation = {
                 title: 'डायाग्राम आयात गर्दा समस्या आयो',
                 description:
                     'डायाग्राम JSON अमान्य छ। कृपया JSON जाँच गर्नुहोस् र पुन: प्रयास गर्नुहोस्। मद्दत चाहिन्छ? support@chartdb.io मा सम्पर्क गर्नुहोस्',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

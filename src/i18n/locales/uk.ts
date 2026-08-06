@@ -366,11 +366,29 @@ export const uk: LanguageTranslation = {
             cancel: 'Скасувати',
             open: 'Відкрити',
             new_database: 'Нова база даних',
+            new_group: 'Нова група',
+            search_placeholder: 'Пошук діаграм...',
+            ungrouped: 'Без групи',
 
             diagram_actions: {
                 open: 'Відкрити',
                 duplicate: 'Дублювати',
                 delete: 'Видалити',
+                add_to_group: 'Додати до групи',
+                new_group: 'Нова група...',
+            },
+
+            group_actions: {
+                rename: 'Перейменувати',
+                delete: 'Видалити',
+            },
+
+            group_name_dialog: {
+                create_title: 'Нова група',
+                rename_title: 'Перейменувати групу',
+                placeholder: 'Назва групи',
+                cancel: 'Скасувати',
+                save: 'Зберегти',
             },
         },
 
@@ -492,6 +510,7 @@ export const uk: LanguageTranslation = {
                 title: 'Помилка імпорту діаграми',
                 description:
                     'JSON діаграми є неправильним. Будь ласка, перевірте JSON і спробуйте ще раз. Потрібна допомога? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

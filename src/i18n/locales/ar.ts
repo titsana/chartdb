@@ -360,11 +360,29 @@ export const ar: LanguageTranslation = {
             cancel: 'إلغاء',
             open: 'فتح',
             new_database: 'قاعدة بيانات جديدة',
+            new_group: 'مجموعة جديدة',
+            search_placeholder: 'البحث في المخططات...',
+            ungrouped: 'غير مجمّع',
 
             diagram_actions: {
                 open: 'فتح',
                 duplicate: 'تكرار',
                 delete: 'حذف',
+                add_to_group: 'إضافة إلى مجموعة',
+                new_group: 'مجموعة جديدة...',
+            },
+
+            group_actions: {
+                rename: 'إعادة تسمية',
+                delete: 'حذف',
+            },
+
+            group_name_dialog: {
+                create_title: 'مجموعة جديدة',
+                rename_title: 'إعادة تسمية المجموعة',
+                placeholder: 'اسم المجموعة',
+                cancel: 'إلغاء',
+                save: 'حفظ',
             },
         },
 
@@ -485,6 +503,7 @@ export const ar: LanguageTranslation = {
                 title: 'حدث خطأ أثناء الاستيراد',
                 description:
                     'support@chartdb.io و المحاولة مرة اخرى. هل تحتاج إلى المساعدة؟ JSON غير صالح. يرجى التحقق من JSON الرسم البياني',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         import_dbml_dialog: {

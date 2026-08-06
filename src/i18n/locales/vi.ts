@@ -365,11 +365,29 @@ export const vi: LanguageTranslation = {
             cancel: 'Hủy',
             open: 'Mở',
             new_database: 'Cơ sở dữ liệu mới',
+            new_group: 'Nhóm Mới',
+            search_placeholder: 'Tìm kiếm sơ đồ...',
+            ungrouped: 'Chưa Phân Nhóm',
 
             diagram_actions: {
                 open: 'Mở',
                 duplicate: 'Nhân bản',
                 delete: 'Xóa',
+                add_to_group: 'Thêm vào Nhóm',
+                new_group: 'Nhóm Mới...',
+            },
+
+            group_actions: {
+                rename: 'Đổi Tên',
+                delete: 'Xóa',
+            },
+
+            group_name_dialog: {
+                create_title: 'Nhóm Mới',
+                rename_title: 'Đổi Tên Nhóm',
+                placeholder: 'Tên nhóm',
+                cancel: 'Hủy',
+                save: 'Lưu',
             },
         },
 
@@ -492,6 +510,7 @@ export const vi: LanguageTranslation = {
                 title: 'Lỗi khi nhập sơ đồ',
                 description:
                     'Sơ đồ ở dạng JSON không hợp lệ. Vui lòng kiểm tra JSON và thử lại. Bạn cần trợ giúp? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

@@ -365,11 +365,29 @@ export const ru: LanguageTranslation = {
             cancel: 'Отмена',
             open: 'Открыть',
             new_database: 'Новая база данных',
+            new_group: 'Новая группа',
+            search_placeholder: 'Поиск диаграмм...',
+            ungrouped: 'Без группы',
 
             diagram_actions: {
                 open: 'Открыть',
                 duplicate: 'Дублировать',
                 delete: 'Удалить',
+                add_to_group: 'Добавить в группу',
+                new_group: 'Новая группа...',
+            },
+
+            group_actions: {
+                rename: 'Переименовать',
+                delete: 'Удалить',
+            },
+
+            group_name_dialog: {
+                create_title: 'Новая группа',
+                rename_title: 'Переименовать группу',
+                placeholder: 'Название группы',
+                cancel: 'Отмена',
+                save: 'Сохранить',
             },
         },
 
@@ -492,6 +510,7 @@ export const ru: LanguageTranslation = {
                 title: 'Ошибка при импорте диаграммы',
                 description:
                     'Код JSON диаграммы некорректен. Проверьте, пожалуйста, код и попробуйте снова. Проблема не решается? Напишите нам: support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         import_dbml_dialog: {

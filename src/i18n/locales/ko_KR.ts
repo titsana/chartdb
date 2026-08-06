@@ -365,11 +365,29 @@ export const ko_KR: LanguageTranslation = {
             cancel: '취소',
             open: '열기',
             new_database: '새 데이터베이스',
+            new_group: '새 그룹',
+            search_placeholder: '다이어그램 검색...',
+            ungrouped: '그룹 없음',
 
             diagram_actions: {
                 open: '열기',
                 duplicate: '복제',
                 delete: '삭제',
+                add_to_group: '그룹에 추가',
+                new_group: '새 그룹...',
+            },
+
+            group_actions: {
+                rename: '이름 바꾸기',
+                delete: '삭제',
+            },
+
+            group_name_dialog: {
+                create_title: '새 그룹',
+                rename_title: '그룹 이름 바꾸기',
+                placeholder: '그룹 이름',
+                cancel: '취소',
+                save: '저장',
             },
         },
 
@@ -491,6 +509,7 @@ export const ko_KR: LanguageTranslation = {
                 title: '다이어그램 가져오기 오류',
                 description:
                     '다이어그램 JSON이 유효하지 않습니다. JSON이 올바른 형식인지 확인해주세요. 도움이 필요하신 경우 support@chartdb.io으로 연락해주세요.',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

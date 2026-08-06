@@ -367,11 +367,29 @@ export const te: LanguageTranslation = {
             cancel: 'రద్దు',
             open: 'తెరవు',
             new_database: 'కొత్త డేటాబేస్',
+            new_group: 'కొత్త సమూహం',
+            search_placeholder: 'రేఖాచిత్రాలను శోధించండి...',
+            ungrouped: 'సమూహీకరించనివి',
 
             diagram_actions: {
                 open: 'తెరవు',
                 duplicate: 'నకలు',
                 delete: 'తొలగించు',
+                add_to_group: 'సమూహానికి జోడించండి',
+                new_group: 'కొత్త సమూహం...',
+            },
+
+            group_actions: {
+                rename: 'పేరు మార్చు',
+                delete: 'తొలగించు',
+            },
+
+            group_name_dialog: {
+                create_title: 'కొత్త సమూహం',
+                rename_title: 'సమూహం పేరు మార్చు',
+                placeholder: 'సమూహం పేరు',
+                cancel: 'రద్దు',
+                save: 'సేవ్ చేయి',
             },
         },
 
@@ -498,6 +516,7 @@ export const te: LanguageTranslation = {
                 title: 'Error importing diagram',
                 description:
                     'The diagram JSON is invalid. Please check the JSON and try again. Need help? support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

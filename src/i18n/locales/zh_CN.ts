@@ -359,11 +359,29 @@ export const zh_CN: LanguageTranslation = {
             cancel: '取消',
             open: '打开',
             new_database: '新建数据库',
+            new_group: '新建分组',
+            search_placeholder: '搜索图表...',
+            ungrouped: '未分组',
 
             diagram_actions: {
                 open: '打开',
                 duplicate: '复制',
                 delete: '删除',
+                add_to_group: '添加到分组',
+                new_group: '新建分组...',
+            },
+
+            group_actions: {
+                rename: '重命名',
+                delete: '删除',
+            },
+
+            group_name_dialog: {
+                create_title: '新建分组',
+                rename_title: '重命名分组',
+                placeholder: '分组名称',
+                cancel: '取消',
+                save: '保存',
             },
         },
 
@@ -484,6 +502,7 @@ export const zh_CN: LanguageTranslation = {
                 title: '导入关系图时出错',
                 description:
                     '关系图 JSON 无效，请检查 JSON 后重试。需要帮助？ 联系 support@chartdb.io',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate

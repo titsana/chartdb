@@ -368,11 +368,29 @@ export const bn: LanguageTranslation = {
             cancel: 'বাতিল করুন',
             open: 'খুলুন',
             new_database: 'নতুন ডেটাবেস',
+            new_group: 'নতুন গ্রুপ',
+            search_placeholder: 'ডায়াগ্রাম অনুসন্ধান করুন...',
+            ungrouped: 'অগ্রুপড',
 
             diagram_actions: {
                 open: 'খুলুন',
                 duplicate: 'ডুপ্লিকেট',
                 delete: 'মুছুন',
+                add_to_group: 'গ্রুপে যুক্ত করুন',
+                new_group: 'নতুন গ্রুপ...',
+            },
+
+            group_actions: {
+                rename: 'নাম পরিবর্তন',
+                delete: 'মুছুন',
+            },
+
+            group_name_dialog: {
+                create_title: 'নতুন গ্রুপ',
+                rename_title: 'গ্রুপের নাম পরিবর্তন করুন',
+                placeholder: 'গ্রুপের নাম',
+                cancel: 'বাতিল করুন',
+                save: 'সংরক্ষণ করুন',
             },
         },
 
@@ -496,6 +514,7 @@ export const bn: LanguageTranslation = {
                 title: 'চিত্র আমদানিতে ত্রুটি',
                 description:
                     'ডায়াগ্রাম JSON অবৈধ। অনুগ্রহ করে JSON পরীক্ষা করুন এবং আবার চেষ্টা করুন। সাহায্যের প্রয়োজন? support@chartdb.io-এ যোগাযোগ করুন।',
+                file_description: '{{fileName}}: {{message}}',
             },
         },
         // TODO: Translate
