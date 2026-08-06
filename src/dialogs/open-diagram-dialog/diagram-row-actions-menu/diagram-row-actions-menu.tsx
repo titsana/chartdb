@@ -32,7 +32,7 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
     const { t } = useTranslation();
 
     const onDelete = useCallback(async () => {
-        deleteDiagram(diagram.id);
+        await deleteDiagram(diagram.id);
         refetch();
 
         if (diagram.id === diagramId || numberOfDiagrams <= 1) {
@@ -51,7 +51,7 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
 
         diagramToAdd.name = `${diagram.name} (Copy)`;
 
-        addDiagram({ diagram: diagramToAdd });
+        await addDiagram({ diagram: diagramToAdd });
         refetch();
     }, [addDiagram, refetch, diagram]);
 
