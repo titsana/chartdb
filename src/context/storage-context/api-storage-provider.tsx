@@ -10,9 +10,37 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
-import { API_BASE_URL } from '@/lib/env';
+import { API_BASE_URL, AZURE_AD_ENABLED } from '@/lib/env';
+import { msalInstance, loginRequest } from '@/lib/msal-config';
+import { InteractionRequiredAuthError } from '@azure/msal-browser';
 
-// ponytail: no auth header wired yet (backend auth mechanism TBD), add when NestJS auth lands
+async function getAuthHeader(): Promise<Record<string, string>> {
+    if (!AZURE_AD_ENABLED) return {};
+
+    const account = msalInstance.getAllAccounts()[0];
+    if (!account) return {};
+
+    try {
+        const result = await msalInstance.acquireTokenSilent({
+            ...loginRequest,
+            account,
+        });
+        return { Authorization: `Bearer ${result.accessToken}` };
+    } catch (err) {
+        if (err instanceof InteractionRequiredAuthError) {
+            const result = await msalInstance.acquireTokenPopup(loginRequest);
+            return { Authorization: `Bearer ${result.accessToken}` };
+        }
+        throw err;
+    }
+}
+
+// ponytail: no per-account logout — a 401 just wipes the MSAL cache and
+// reloads to the sign-in screen, add real logout if a shared-machine need shows up
+function handleUnauthorized() {
+    sessionStorage.clear();
+    window.location.reload();
+}
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 // JSON.parse doesn't revive dates: Diagram.createdAt/updatedAt are Date
@@ -34,14 +62,20 @@ function reviveDates(_key: string, value: unknown) {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+    const authHeader = await getAuthHeader();
     const res = await fetch(`${API_BASE_URL}${path}`, {
         credentials: 'include',
         ...init,
         headers: {
             'Content-Type': 'application/json',
+            ...authHeader,
             ...init?.headers,
         },
     });
+
+    if (res.status === 401 && AZURE_AD_ENABLED) {
+        handleUnauthorized();
+    }
 
     if (!res.ok) {
         throw new Error(

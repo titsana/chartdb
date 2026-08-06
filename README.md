@@ -138,6 +138,27 @@ VITE_OPENAI_API_ENDPOINT=http://localhost:8000/v1
 VITE_LLM_MODEL_NAME=Qwen/Qwen2.5-32B-Instruct-AWQ
 ```
 
+### Azure AD authentication (optional)
+
+If you're running the `api` storage backend (`server/`, the NestJS + Postgres option) for a team/company deployment, you can require Azure AD sign-in. It's off by default and has no effect on the default `dexie` (local, no-account) mode.
+
+1. In the [Azure Portal](https://portal.azure.com), create an **App Registration** (single tenant).
+2. Under **Expose an API**, add a scope, e.g. `access_as_user`.
+3. Under **Authentication**, add a **Single-page application** platform with redirect URI set to your app's URL (e.g. `http://localhost:5173` for dev, or your deployed origin).
+4. Note the **Application (client) ID** and **Directory (tenant) ID**.
+5. Set on the server (`server/.env`):
+   ```
+   AZURE_AD_TENANT_ID=<tenant-id>
+   AZURE_AD_CLIENT_ID=<client-id>
+   ```
+6. Set on the frontend build (`.env` or `--build-arg`):
+   ```
+   VITE_AZURE_AD_TENANT_ID=<tenant-id>
+   VITE_AZURE_AD_CLIENT_ID=<client-id>
+   ```
+
+Omitting these variables leaves the app fully open, as it is today.
+
 ## Try it on our website
 
 1. Go to [ChartDB.io](https://chartdb.io?ref=github_readme_2)
