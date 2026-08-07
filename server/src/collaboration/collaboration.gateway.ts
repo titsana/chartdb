@@ -30,6 +30,32 @@ interface DragMessage {
     y: number;
 }
 
+interface CursorMessage {
+    diagramId: string;
+    x: number;
+    y: number;
+}
+
+interface SelectionMessage {
+    diagramId: string;
+    tableIds: string[];
+    relationshipIds: string[];
+    areaIds: string[];
+    noteIds: string[];
+}
+
+interface ViewportMessage {
+    diagramId: string;
+    x: number;
+    y: number;
+    zoom: number;
+}
+
+interface FollowMessage {
+    diagramId: string;
+    targetSocketId: string | null;
+}
+
 type OpHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
 // Same write surface StorageController exposes over REST, using the exact
@@ -194,5 +220,53 @@ export class CollaborationGateway
         @MessageBody() message: DragMessage
     ) {
         client.to(message.diagramId).emit('drag', message);
+    }
+
+    // Broadcast-only — live cursor position, never persisted.
+    @SubscribeMessage('cursor')
+    handleCursor(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() message: CursorMessage
+    ) {
+        client
+            .to(message.diagramId)
+            .emit('cursor', { socketId: client.id, ...message });
+    }
+
+    // Broadcast-only — live selection state, never persisted.
+    @SubscribeMessage('selection')
+    handleSelection(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() message: SelectionMessage
+    ) {
+        client
+            .to(message.diagramId)
+            .emit('selection', { socketId: client.id, ...message });
+    }
+
+    // Broadcast-only — live viewport (pan/zoom) position, used for "follow".
+    @SubscribeMessage('viewport')
+    handleViewport(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() message: ViewportMessage
+    ) {
+        client
+            .to(message.diagramId)
+            .emit('viewport', { socketId: client.id, ...message });
+    }
+
+    // Broadcast-only, not tracked in `rooms` — a client that joins mid-session
+    // won't see existing follow relationships, only ones formed afterward.
+    // Fine for a visual affordance; upgrade to room-tracked state if that gap
+    // ever matters.
+    @SubscribeMessage('follow')
+    handleFollow(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() message: FollowMessage
+    ) {
+        client.to(message.diagramId).emit('follow', {
+            socketId: client.id,
+            targetSocketId: message.targetSocketId,
+        });
     }
 }

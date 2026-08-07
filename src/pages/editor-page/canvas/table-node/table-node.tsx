@@ -67,6 +67,7 @@ export type TableNodeType = Node<
         isRelationshipCreatingTarget?: boolean;
         // Map of fieldId -> number of edges targeting that field (for handle creation)
         targetEdgeCounts?: Record<string, number>;
+        remoteSelectorColors?: string[];
     },
     'table'
 >;
@@ -84,6 +85,7 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
             highlightTable,
             isRelationshipCreatingTarget,
             targetEdgeCounts,
+            remoteSelectorColors = [],
         },
     }) => {
         const { updateTable, relationships, readonly } = useChartDB();
@@ -431,6 +433,16 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
                 ) : null}
                 <div
                     className={tableClassName}
+                    style={{
+                        borderColor: remoteSelectorColors[0],
+                        boxShadow: remoteSelectorColors
+                            .slice(1)
+                            .map(
+                                (color, index) =>
+                                    `0 0 0 ${2 + index * 3}px ${color}`
+                            )
+                            .join(', '),
+                    }}
                     onClick={(e) => {
                         if (e.detail === 2 && !readonly) {
                             e.stopPropagation();

@@ -10,10 +10,18 @@ import { useParams } from 'react-router-dom';
 import { STORAGE_PROVIDER, WS_URL } from '@/lib/env';
 import { getAccessToken } from '@/lib/auth-token';
 import { getOrCreateIdentity } from '@/lib/collab-identity';
-import type { CollabPresence } from './collaboration-context';
+import type {
+    CollabPresence,
+    RemoteCursor,
+    RemoteSelection,
+    RemoteViewport,
+} from './collaboration-context';
 import { collaborationContext } from './collaboration-context';
 
 const CLOBBER_WINDOW_MS = 5000;
+const CURSOR_EMIT_THROTTLE_MS = 50;
+const CURSOR_IDLE_MS = 5000;
+const VIEWPORT_EMIT_THROTTLE_MS = 50;
 
 // Field-level keys only (see collaboration design decision: entity-level
 // add/remove never triggers a clobber notification, only same-field updates).
@@ -35,8 +43,23 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
     const [connected, setConnected] = useState(false);
     const [reconnectCount, setReconnectCount] = useState(0);
     const [presence, setPresence] = useState<CollabPresence[]>([]);
+    const [remoteCursors, setRemoteCursors] = useState<
+        Map<string, RemoteCursor>
+    >(new Map());
+    const [remoteSelections, setRemoteSelections] = useState<
+        Map<string, RemoteSelection>
+    >(new Map());
+    const [remoteViewports, setRemoteViewports] = useState<
+        Map<string, RemoteViewport>
+    >(new Map());
+    const [followMap, setFollowMap] = useState<Map<string, string>>(new Map());
+    const [followingSocketId, setFollowingSocketId] = useState<string | null>(
+        null
+    );
     const socketRef = useRef<Socket | null>(null);
     const ownEditsRef = useRef<Map<string, number>>(new Map());
+    const lastCursorEmitRef = useRef(0);
+    const lastViewportEmitRef = useRef(0);
     const identity = useMemo(() => getOrCreateIdentity(), []);
 
     // ponytail: collaboration is scoped to API-storage-mode diagrams only —
@@ -80,19 +103,141 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     p,
                 ])
             );
-            socket.on('presence:leave', ({ socketId }: { socketId: string }) =>
-                setPresence((prev) =>
-                    prev.filter((x) => x.socketId !== socketId)
-                )
+            socket.on(
+                'presence:leave',
+                ({ socketId }: { socketId: string }) => {
+                    setPresence((prev) =>
+                        prev.filter((x) => x.socketId !== socketId)
+                    );
+                    setRemoteCursors((prev) => {
+                        if (!prev.has(socketId)) return prev;
+                        const next = new Map(prev);
+                        next.delete(socketId);
+                        return next;
+                    });
+                    setRemoteSelections((prev) => {
+                        if (!prev.has(socketId)) return prev;
+                        const next = new Map(prev);
+                        next.delete(socketId);
+                        return next;
+                    });
+                    setRemoteViewports((prev) => {
+                        if (!prev.has(socketId)) return prev;
+                        const next = new Map(prev);
+                        next.delete(socketId);
+                        return next;
+                    });
+                    setFollowMap((prev) => {
+                        let changed = false;
+                        const next = new Map(prev);
+                        for (const [follower, target] of prev) {
+                            if (follower === socketId || target === socketId) {
+                                next.delete(follower);
+                                changed = true;
+                            }
+                        }
+                        return changed ? next : prev;
+                    });
+                    setFollowingSocketId((prev) =>
+                        prev === socketId ? null : prev
+                    );
+                }
+            );
+            socket.on(
+                'cursor',
+                ({
+                    socketId,
+                    x,
+                    y,
+                }: {
+                    socketId: string;
+                    x: number;
+                    y: number;
+                }) =>
+                    setRemoteCursors((prev) => {
+                        const next = new Map(prev);
+                        next.set(socketId, { x, y, lastMoved: Date.now() });
+                        return next;
+                    })
+            );
+            socket.on(
+                'selection',
+                ({
+                    socketId,
+                    ...selection
+                }: { socketId: string } & RemoteSelection) =>
+                    setRemoteSelections((prev) => {
+                        const next = new Map(prev);
+                        next.set(socketId, selection);
+                        return next;
+                    })
+            );
+            socket.on(
+                'viewport',
+                ({
+                    socketId,
+                    x,
+                    y,
+                    zoom,
+                }: {
+                    socketId: string;
+                    x: number;
+                    y: number;
+                    zoom: number;
+                }) =>
+                    setRemoteViewports((prev) => {
+                        const next = new Map(prev);
+                        next.set(socketId, { x, y, zoom });
+                        return next;
+                    })
+            );
+            socket.on(
+                'follow',
+                ({
+                    socketId,
+                    targetSocketId,
+                }: {
+                    socketId: string;
+                    targetSocketId: string | null;
+                }) =>
+                    setFollowMap((prev) => {
+                        const next = new Map(prev);
+                        if (targetSocketId) next.set(socketId, targetSocketId);
+                        else next.delete(socketId);
+                        return next;
+                    })
             );
         })();
 
+        // ponytail: sweeps stale cursors on a fixed tick instead of a
+        // per-cursor timer — simplest way to satisfy "hide after ~5s idle".
+        const idleSweep = setInterval(() => {
+            setRemoteCursors((prev) => {
+                const now = Date.now();
+                let changed = false;
+                const next = new Map(prev);
+                for (const [socketId, cursor] of prev) {
+                    if (now - cursor.lastMoved > CURSOR_IDLE_MS) {
+                        next.delete(socketId);
+                        changed = true;
+                    }
+                }
+                return changed ? next : prev;
+            });
+        }, 1000);
+
         return () => {
             cancelled = true;
+            clearInterval(idleSweep);
             socket?.disconnect();
             socketRef.current = null;
             setConnected(false);
             setPresence([]);
+            setRemoteCursors(new Map());
+            setRemoteSelections(new Map());
+            setRemoteViewports(new Map());
+            setFollowMap(new Map());
+            setFollowingSocketId(null);
         };
     }, [enabled, diagramId, identity]);
 
@@ -132,6 +277,60 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
         [diagramId]
     );
 
+    const emitCursor = useCallback(
+        (x: number, y: number) => {
+            const socket = socketRef.current;
+            if (!socket || !socket.connected || !diagramId) return;
+            const now = Date.now();
+            if (now - lastCursorEmitRef.current < CURSOR_EMIT_THROTTLE_MS) {
+                return;
+            }
+            lastCursorEmitRef.current = now;
+            socket.emit('cursor', { diagramId, x, y });
+        },
+        [diagramId]
+    );
+
+    const emitSelection = useCallback(
+        (selection: RemoteSelection) => {
+            const socket = socketRef.current;
+            if (!socket || !socket.connected || !diagramId) return;
+            socket.emit('selection', { diagramId, ...selection });
+        },
+        [diagramId]
+    );
+
+    const emitViewport = useCallback(
+        (x: number, y: number, zoom: number) => {
+            const socket = socketRef.current;
+            if (!socket || !socket.connected || !diagramId) return;
+            const now = Date.now();
+            if (now - lastViewportEmitRef.current < VIEWPORT_EMIT_THROTTLE_MS) {
+                return;
+            }
+            lastViewportEmitRef.current = now;
+            socket.emit('viewport', { diagramId, x, y, zoom });
+        },
+        [diagramId]
+    );
+
+    const followUser = useCallback(
+        (socketId: string) => {
+            const socket = socketRef.current;
+            if (!socket || !socket.connected || !diagramId) return;
+            setFollowingSocketId(socketId);
+            socket.emit('follow', { diagramId, targetSocketId: socketId });
+        },
+        [diagramId]
+    );
+
+    const unfollowUser = useCallback(() => {
+        const socket = socketRef.current;
+        setFollowingSocketId(null);
+        if (!socket || !socket.connected || !diagramId) return;
+        socket.emit('follow', { diagramId, targetSocketId: null });
+    }, [diagramId]);
+
     const recordOwnEdit = useCallback(
         (op: string, args: Record<string, unknown>) => {
             const now = Date.now();
@@ -167,6 +366,16 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             socket: socketRef.current,
             emitOp,
             emitDrag,
+            emitCursor,
+            emitSelection,
+            emitViewport,
+            remoteCursors,
+            remoteSelections,
+            remoteViewports,
+            followMap,
+            followingSocketId,
+            followUser,
+            unfollowUser,
             recordOwnEdit,
             checkClobber,
         }),
@@ -177,6 +386,16 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             identity,
             emitOp,
             emitDrag,
+            emitCursor,
+            emitSelection,
+            emitViewport,
+            remoteCursors,
+            remoteSelections,
+            remoteViewports,
+            followMap,
+            followingSocketId,
+            followUser,
+            unfollowUser,
             recordOwnEdit,
             checkClobber,
         ]

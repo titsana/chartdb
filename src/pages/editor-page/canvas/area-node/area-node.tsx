@@ -35,12 +35,13 @@ import { AreaNodeStatus } from './area-node-status/area-node-status';
 export type AreaNodeType = Node<
     {
         area: Area;
+        remoteSelectorColors?: string[];
     },
     'area'
 >;
 
 export const AreaNode: React.FC<NodeProps<AreaNodeType>> = React.memo(
-    ({ selected, dragging, data: { area } }) => {
+    ({ selected, dragging, data: { area, remoteSelectorColors = [] } }) => {
         const { updateArea, readonly } = useChartDB();
         const { t } = useTranslation();
         const [editMode, setEditMode] = useState(false);
@@ -140,7 +141,16 @@ export const AreaNode: React.FC<NodeProps<AreaNodeType>> = React.memo(
                     className={containerClassName}
                     style={{
                         backgroundColor: `${area.color}15`,
-                        borderColor: selected ? undefined : area.color,
+                        borderColor:
+                            remoteSelectorColors[0] ??
+                            (selected ? undefined : area.color),
+                        boxShadow: remoteSelectorColors
+                            .slice(1)
+                            .map(
+                                (color, index) =>
+                                    `0 0 0 ${2 + index * 3}px ${color}`
+                            )
+                            .join(', '),
                     }}
                     onClick={(e) => {
                         setEditTableModeTable(null);

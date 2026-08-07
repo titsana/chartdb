@@ -17,6 +17,7 @@ export type RelationshipEdgeType = Edge<
     {
         relationship: DBRelationship;
         highlighted?: boolean;
+        remoteSelectorColors?: string[];
     },
     'relationship-edge'
 >;
@@ -48,6 +49,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             } = useCanvas();
 
             const relationship = data?.relationship;
+            const remoteSelectorColors = data?.remoteSelectorColors ?? [];
 
             const isPopoverOpen = useMemo(
                 () => editRelationshipPopover?.relationshipId === id,
@@ -374,6 +376,17 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
 
             return (
                 <>
+                    {remoteSelectorColors.map((color, index) => (
+                        <path
+                            key={`remote-selector-${color}-${index}`}
+                            d={edgePath}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={4 + index * 3}
+                            strokeOpacity={0.5}
+                            style={{ pointerEvents: 'none' }}
+                        />
+                    ))}
                     <path
                         id={id}
                         d={edgePath}

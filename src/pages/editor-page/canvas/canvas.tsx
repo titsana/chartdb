@@ -15,6 +15,7 @@ import type {
     NodeTypes,
     EdgeTypes,
     NodeChange,
+    Viewport,
 } from '@xyflow/react';
 import {
     ReactFlow,
@@ -108,6 +109,7 @@ import {
 } from './temp-floating-edge/temp-floating-edge';
 import type { CreateRelationshipNodeType } from './create-relationship-node/create-relationship-node';
 import { CreateRelationshipNode } from './create-relationship-node/create-relationship-node';
+import { RemoteCursorsOverlay } from './remote-cursor-node/remote-cursors-overlay';
 import { ConnectionLine } from './connection-line/connection-line';
 import {
     updateTablesParentAreas,
@@ -277,12 +279,14 @@ export interface CanvasProps {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
-    const { getEdge, getInternalNode, getNode } = useReactFlow();
+    const { getEdge, getInternalNode, getNode, setViewport } = useReactFlow();
     const updateNodeInternals = useUpdateNodeInternals();
     const [selectedTableIds, setSelectedTableIds] = useState<string[]>([]);
     const [selectedRelationshipIds, setSelectedRelationshipIds] = useState<
         string[]
     >([]);
+    const [selectedAreaIds, setSelectedAreaIds] = useState<string[]>([]);
+    const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
     const { toast } = useToast();
     const { t } = useTranslation();
     const { isLostInCanvas } = useIsLostInCanvas();
@@ -308,7 +312,18 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         highlightedCustomType,
         highlightCustomTypeId,
     } = useChartDB();
-    const { emitDrag, socket } = useCollaboration();
+    const {
+        emitDrag,
+        emitCursor,
+        emitSelection,
+        emitViewport,
+        remoteSelections,
+        remoteViewports,
+        followingSocketId,
+        unfollowUser,
+        presence,
+        socket,
+    } = useCollaboration();
     const { showSidePanel } = useLayout();
     const { effectiveTheme } = useTheme();
     const { scrollAction, showDBViews, showMiniMapOnCanvas } = useLocalConfig();
@@ -545,6 +560,142 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
         setSelectedRelationshipIds(selectedEdgesIds);
     }, [edges, setSelectedRelationshipIds, selectedRelationshipIds]);
+
+    useEffect(() => {
+        const selectedAreaNodeIds = nodes
+            .filter((node) => node.type === 'area' && node.selected)
+            .map((node) => node.id);
+
+        if (equal(selectedAreaNodeIds, selectedAreaIds)) {
+            return;
+        }
+
+        setSelectedAreaIds(selectedAreaNodeIds);
+    }, [nodes, setSelectedAreaIds, selectedAreaIds]);
+
+    useEffect(() => {
+        const selectedNoteNodeIds = nodes
+            .filter((node) => node.type === 'note' && node.selected)
+            .map((node) => node.id);
+
+        if (equal(selectedNoteNodeIds, selectedNoteIds)) {
+            return;
+        }
+
+        setSelectedNoteIds(selectedNoteNodeIds);
+    }, [nodes, setSelectedNoteIds, selectedNoteIds]);
+
+    useEffect(() => {
+        emitSelection({
+            tableIds: selectedTableIds,
+            relationshipIds: selectedRelationshipIds,
+            areaIds: selectedAreaIds,
+            noteIds: selectedNoteIds,
+        });
+    }, [
+        selectedTableIds,
+        selectedRelationshipIds,
+        selectedAreaIds,
+        selectedNoteIds,
+        emitSelection,
+    ]);
+
+    // Map every remotely-selected table/area/note/relationship id to the
+    // presence colors of whichever collaborators have it selected right now
+    // (multiple colors when more than one collaborator selects the same
+    // entity — stacked, not clobbered).
+    const remoteColorsByEntityId = useMemo(() => {
+        const colorsById = new Map<string, string[]>();
+        for (const [socketId, selection] of remoteSelections) {
+            const color = presence.find((p) => p.socketId === socketId)?.color;
+            if (!color) continue;
+            for (const id of [
+                ...selection.tableIds,
+                ...selection.areaIds,
+                ...selection.noteIds,
+                ...selection.relationshipIds,
+            ]) {
+                const existing = colorsById.get(id);
+                if (existing) existing.push(color);
+                else colorsById.set(id, [color]);
+            }
+        }
+        return colorsById;
+    }, [remoteSelections, presence]);
+
+    useEffect(() => {
+        setNodes((prevNodes) => {
+            let changed = false;
+            const nextNodes = prevNodes.map((node): NodeType => {
+                const colors = remoteColorsByEntityId.get(node.id) ?? [];
+
+                switch (node.type) {
+                    case 'table': {
+                        if (equal(colors, node.data.remoteSelectorColors ?? []))
+                            return node;
+                        changed = true;
+                        return {
+                            ...node,
+                            data: {
+                                ...node.data,
+                                remoteSelectorColors: colors,
+                            },
+                        };
+                    }
+                    case 'area': {
+                        if (equal(colors, node.data.remoteSelectorColors ?? []))
+                            return node;
+                        changed = true;
+                        return {
+                            ...node,
+                            data: {
+                                ...node.data,
+                                remoteSelectorColors: colors,
+                            },
+                        };
+                    }
+                    case 'note': {
+                        if (equal(colors, node.data.remoteSelectorColors ?? []))
+                            return node;
+                        changed = true;
+                        return {
+                            ...node,
+                            data: {
+                                ...node.data,
+                                remoteSelectorColors: colors,
+                            },
+                        };
+                    }
+                    default:
+                        return node;
+                }
+            });
+            return changed ? nextNodes : prevNodes;
+        });
+    }, [remoteColorsByEntityId, setNodes]);
+
+    useEffect(() => {
+        setEdges((prevEdges) => {
+            let changed = false;
+            const nextEdges = prevEdges.map((edge) => {
+                if (edge.type !== 'relationship-edge') return edge;
+                const relationshipEdge = edge as RelationshipEdgeType;
+                const colors = remoteColorsByEntityId.get(edge.id) ?? [];
+                const currentColors =
+                    relationshipEdge.data?.remoteSelectorColors ?? [];
+                if (equal(colors, currentColors)) return edge;
+                changed = true;
+                return {
+                    ...relationshipEdge,
+                    data: {
+                        ...relationshipEdge.data!,
+                        remoteSelectorColors: colors,
+                    },
+                };
+            });
+            return changed ? nextEdges : prevEdges;
+        });
+    }, [remoteColorsByEntityId, setEdges]);
 
     useEffect(() => {
         const selectedTableIdsSet = new Set(selectedTableIds);
@@ -1646,28 +1797,31 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         []
     );
 
-    // Handle mouse move to update cursor position for floating edge
+    // Handle mouse move to update cursor position for floating edge, and to
+    // broadcast this user's live cursor position to collaborators.
     const { screenToFlowPosition } = useReactFlow();
     const rafIdRef = useRef<number>();
     const handleMouseMove = useCallback(
         (event: React.MouseEvent) => {
-            if (tempFloatingEdge) {
-                // Throttle using requestAnimationFrame
-                if (rafIdRef.current) {
-                    return;
-                }
-
-                rafIdRef.current = requestAnimationFrame(() => {
-                    const position = screenToFlowPosition({
-                        x: event.clientX,
-                        y: event.clientY,
-                    });
-                    setCursorPosition(position);
-                    rafIdRef.current = undefined;
-                });
+            // Throttle using requestAnimationFrame
+            if (rafIdRef.current) {
+                return;
             }
+
+            const { clientX, clientY } = event;
+            rafIdRef.current = requestAnimationFrame(() => {
+                const position = screenToFlowPosition({
+                    x: clientX,
+                    y: clientY,
+                });
+                if (tempFloatingEdge) {
+                    setCursorPosition(position);
+                }
+                emitCursor(position.x, position.y);
+                rafIdRef.current = undefined;
+            });
         },
-        [tempFloatingEdge, screenToFlowPosition]
+        [tempFloatingEdge, screenToFlowPosition, emitCursor]
     );
 
     // Cleanup RAF on unmount
@@ -1678,6 +1832,31 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             }
         };
     }, []);
+
+    // Figma-style "follow": broadcast our own viewport on every pan/zoom, and
+    // when following someone, smoothly re-center on their broadcast viewport.
+    // `event` is null when a move is programmatic (e.g. our own setViewport
+    // call below) and non-null for real user input — that's how we detect a
+    // manual pan/zoom and break the follow.
+    const handleMoveStart = useCallback(
+        (event: MouseEvent | TouchEvent | null) => {
+            if (event && followingSocketId) unfollowUser();
+        },
+        [followingSocketId, unfollowUser]
+    );
+    const handleMove = useCallback(
+        (_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+            emitViewport(viewport.x, viewport.y, viewport.zoom);
+        },
+        [emitViewport]
+    );
+
+    useEffect(() => {
+        if (!followingSocketId) return;
+        const target = remoteViewports.get(followingSocketId);
+        if (!target) return;
+        setViewport(target, { duration: 300 });
+    }, [followingSocketId, remoteViewports, setViewport]);
 
     // Handle escape key to cancel floating edge creation, close relationship node, and close relationship popover
     useEffect(() => {
@@ -1808,6 +1987,8 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     maxZoom={5}
                     minZoom={0.1}
                     onConnect={onConnectHandler}
+                    onMoveStart={handleMoveStart}
+                    onMove={handleMove}
                     proOptions={{
                         hideAttribution: true,
                     }}
@@ -1827,6 +2008,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     deleteKeyCode={['Backspace', 'Delete']}
                     multiSelectionKeyCode={['Shift', 'Meta', 'Control']}
                 >
+                    <RemoteCursorsOverlay />
                     <Controls
                         position="top-left"
                         showZoom={false}

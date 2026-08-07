@@ -18,17 +18,21 @@ import { getIsOldSafari } from '@/safari-compat';
 export interface NoteNodeProps extends NodeProps {
     data: {
         note: Note;
+        remoteSelectorColors?: string[];
     };
 }
 
-export type NoteNodeType = Node<{ note: Note }, 'note'>;
+export type NoteNodeType = Node<
+    { note: Note; remoteSelectorColors?: string[] },
+    'note'
+>;
 
 export const NoteNode: React.FC<NoteNodeProps> = ({
     data,
     selected,
     dragging,
 }) => {
-    const { note } = data;
+    const { note, remoteSelectorColors = [] } = data;
     const { updateNote, removeNote, readonly } = useChartDB();
     const [editMode, setEditMode] = useState(false);
     const [content, setContent] = useState(note.content);
@@ -141,12 +145,18 @@ export const NoteNode: React.FC<NoteNodeProps> = ({
         <div
             className={cn(
                 'flex h-full flex-col overflow-hidden rounded-[6px] border',
-                selected
-                    ? 'border-pink-600'
-                    : 'border-slate-500 dark:border-slate-600'
+                remoteSelectorColors.length === 0 &&
+                    (selected
+                        ? 'border-pink-600'
+                        : 'border-slate-500 dark:border-slate-600')
             )}
             style={{
                 background: getBodyColor(note.color),
+                borderColor: remoteSelectorColors[0],
+                boxShadow: remoteSelectorColors
+                    .slice(1)
+                    .map((color, index) => `0 0 0 ${2 + index * 3}px ${color}`)
+                    .join(', '),
             }}
             onDoubleClick={handleDoubleClick}
         >
