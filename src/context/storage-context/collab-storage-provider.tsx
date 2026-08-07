@@ -60,7 +60,7 @@ export const CollabStorageProvider: React.FC<React.PropsWithChildren> = ({
                 op,
                 (args: Record<string, unknown>) => writeOp(op, args),
             ])
-        ) as Pick<StorageContext, (typeof COLLAB_WRITE_OPS)[number]>;
+        ) as unknown as Pick<StorageContext, (typeof COLLAB_WRITE_OPS)[number]>;
 
         return { ...api, ...overrides };
     }, [api, writeOp]);
