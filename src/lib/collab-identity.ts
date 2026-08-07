@@ -28,14 +28,22 @@ const ANIMALS = [
     'Dolphin',
 ];
 const COLORS = [
-    '#F97316',
-    '#22C55E',
-    '#3B82F6',
-    '#EC4899',
-    '#A855F7',
-    '#EAB308',
-    '#14B8A6',
-    '#EF4444',
+    '#F97316', // orange
+    '#22C55E', // green
+    '#3B82F6', // blue
+    '#EC4899', // pink
+    '#A855F7', // purple
+    '#EAB308', // yellow
+    '#14B8A6', // teal
+    '#EF4444', // red
+    '#6366F1', // indigo
+    '#84CC16', // lime
+    '#06B6D4', // cyan
+    '#F43F5E', // rose
+    '#D946EF', // fuchsia
+    '#0EA5E9', // sky
+    '#F59E0B', // amber
+    '#10B981', // emerald
 ];
 
 const STORAGE_KEY = 'chartdb-collab-identity';
