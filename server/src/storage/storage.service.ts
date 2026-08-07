@@ -86,7 +86,7 @@ export class StorageService implements OnModuleInit {
         diagramId: string,
         filter: Partial<DiagramFilterEntity>
     ) {
-        await this.diagramFilters.save({ diagramId, ...filter });
+        await this.diagramFilters.save({ diagramId, ...filter, deletedAt: null } as DiagramFilterEntity);
     }
 
     async deleteDiagramFilter(diagramId: string) {
@@ -95,7 +95,13 @@ export class StorageService implements OnModuleInit {
 
     // Tables
     async addTable(diagramId: string, table: Partial<TableEntity>) {
-        await this.tables.insert({ ...table, diagramId } as TableEntity);
+        // ponytail: save() upserts by id — insert() alone conflicts with a
+        // soft-deleted row sharing the same id (see deletedAt on this entity)
+        await this.tables.save({
+            ...table,
+            diagramId,
+            deletedAt: null,
+        } as TableEntity);
     }
 
     async getTable(diagramId: string, id: string) {
@@ -133,9 +139,10 @@ export class StorageService implements OnModuleInit {
         diagramId: string,
         relationship: Partial<RelationshipEntity>
     ) {
-        await this.relationships.insert({
+        await this.relationships.save({
             ...relationship,
             diagramId,
+            deletedAt: null,
         } as RelationshipEntity);
     }
 
@@ -182,9 +189,10 @@ export class StorageService implements OnModuleInit {
         diagramId: string,
         dependency: Partial<DependencyEntity>
     ) {
-        await this.dependencies.insert({
+        await this.dependencies.save({
             ...dependency,
             diagramId,
+            deletedAt: null,
         } as DependencyEntity);
     }
 
@@ -225,7 +233,11 @@ export class StorageService implements OnModuleInit {
 
     // Areas
     async addArea(diagramId: string, area: Partial<AreaEntity>) {
-        await this.areas.insert({ ...area, diagramId } as AreaEntity);
+        await this.areas.save({
+            ...area,
+            diagramId,
+            deletedAt: null,
+        } as AreaEntity);
     }
 
     async getArea(diagramId: string, id: string) {
@@ -259,9 +271,10 @@ export class StorageService implements OnModuleInit {
         diagramId: string,
         customType: Partial<CustomTypeEntity>
     ) {
-        await this.customTypes.insert({
+        await this.customTypes.save({
             ...customType,
             diagramId,
+            deletedAt: null,
         } as CustomTypeEntity);
     }
 
@@ -299,7 +312,11 @@ export class StorageService implements OnModuleInit {
 
     // Notes
     async addNote(diagramId: string, note: Partial<NoteEntity>) {
-        await this.notes.insert({ ...note, diagramId } as NoteEntity);
+        await this.notes.save({
+            ...note,
+            diagramId,
+            deletedAt: null,
+        } as NoteEntity);
     }
 
     async getNote(diagramId: string, id: string) {
@@ -335,7 +352,10 @@ export class StorageService implements OnModuleInit {
             if (diagram[key] !== undefined)
                 (diagramRow as Record<string, unknown>)[key] = diagram[key];
         }
-        await this.diagrams.insert(diagramRow as DiagramEntity);
+        await this.diagrams.save({
+            ...diagramRow,
+            deletedAt: null,
+        } as DiagramEntity);
 
         const id = diagram.id;
         await Promise.all([
@@ -458,7 +478,10 @@ export class StorageService implements OnModuleInit {
 
     async addGroup(group: Partial<GroupEntity>) {
         await this.assertNameAvailable(group.name!);
-        await this.groups.insert(group as GroupEntity);
+        await this.groups.save({
+            ...group,
+            deletedAt: null,
+        } as GroupEntity);
     }
 
     async listGroups() {

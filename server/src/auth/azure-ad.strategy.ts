@@ -25,8 +25,8 @@ export class AzureAdStrategy extends PassportStrategy(
                 `https://sts.windows.net/${tenantId}/`,
             ],
             validateIssuer: true,
-            loggingLevel: 'info',
-            loggingNoPII: false,
+            loggingLevel: 'warn',
+            // loggingNoPII: false,
             passReqToCallback: false,
         });
     }
