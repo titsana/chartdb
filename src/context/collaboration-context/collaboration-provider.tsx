@@ -106,7 +106,6 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     )
                 );
             }
-            console.log('emitOp', { op, args });
             return new Promise<void>((resolve, reject) => {
                 socket.emit(
                     'op',
