@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
     const app = await NestFactory.create(AppModule);
+    app.enableShutdownHooks();
     const config = app.get(ConfigService);
 
     app.use(json({ limit: '50mb' }));
