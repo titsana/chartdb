@@ -9,7 +9,8 @@ import { STORAGE_PROVIDER, AZURE_AD_ENABLED } from '@/lib/env';
 import { msalInstance } from '@/lib/msal-config';
 import { SignInPage } from '@/pages/sign-in-page/sign-in-page';
 import { StorageProvider as DexieStorageProvider } from './storage-provider';
-import { ApiStorageProvider } from './api-storage-provider';
+import { CollabStorageProvider } from './collab-storage-provider';
+import { CollaborationProvider } from '@/context/collaboration-context/collaboration-provider';
 
 const UnauthenticatedGate: React.FC = () => {
     const location = useLocation();
@@ -30,13 +31,19 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
     }
 
     if (!AZURE_AD_ENABLED) {
-        return <ApiStorageProvider>{children}</ApiStorageProvider>;
+        return (
+            <CollaborationProvider>
+                <CollabStorageProvider>{children}</CollabStorageProvider>
+            </CollaborationProvider>
+        );
     }
 
     return (
         <MsalProvider instance={msalInstance}>
             <AuthenticatedTemplate>
-                <ApiStorageProvider>{children}</ApiStorageProvider>
+                <CollaborationProvider>
+                    <CollabStorageProvider>{children}</CollabStorageProvider>
+                </CollaborationProvider>
             </AuthenticatedTemplate>
             <UnauthenticatedTemplate>
                 <UnauthenticatedGate />

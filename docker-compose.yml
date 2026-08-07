@@ -1,0 +1,23 @@
+services:
+
+    server:
+        build: ./server
+        environment:
+            PORT: 3001
+            DATABASE_URL: postgres://chartdb:chartdb@postgres:5432/chartdb
+            CORS_ORIGIN: http://localhost:5173
+        ports:
+            - '3001:3001'
+
+    client:
+        build:
+            context: .
+            args:
+                VITE_STORAGE_PROVIDER: api
+                VITE_API_BASE_URL: http://localhost:3001
+                VITE_WS_URL: http://localhost:3001
+        ports:
+            - '5173:80'
+
+volumes:
+    chartdb_postgres_data:

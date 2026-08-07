@@ -40,6 +40,7 @@ import {
 import type { RelationshipEdgeType } from './relationship-edge/relationship-edge';
 import { RelationshipEdge } from './relationship-edge/relationship-edge';
 import { useChartDB } from '@/hooks/use-chartdb';
+import { useCollaboration } from '@/hooks/use-collaboration';
 import {
     LEFT_HANDLE_ID_PREFIX,
     TARGET_ID_PREFIX,
@@ -307,6 +308,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         highlightedCustomType,
         highlightCustomTypeId,
     } = useChartDB();
+    const { emitDrag, socket } = useCollaboration();
     const { showSidePanel } = useLayout();
     const { effectiveTheme } = useTheme();
     const { scrollAction, showDBViews, showMiniMapOnCanvas } = useLocalConfig();
@@ -369,6 +371,34 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     useEffect(() => {
         setIsInitialLoadingNodes(true);
     }, [initialTables]);
+
+    // Live drag preview from other collaborators — visual only, never
+    // persisted here (the dragging client's own drag-stop already persists
+    // the real position through the normal table-update path).
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleDrag = ({
+            tableId,
+            x,
+            y,
+        }: {
+            tableId: string;
+            x: number;
+            y: number;
+        }) => {
+            setNodes((prevNodes) =>
+                prevNodes.map((node) =>
+                    node.id === tableId ? { ...node, position: { x, y } } : node
+                )
+            );
+        };
+
+        socket.on('drag', handleDrag);
+        return () => {
+            socket.off('drag', handleDrag);
+        };
+    }, [socket, setNodes]);
 
     useEffect(() => {
         const initialNodes = initialTables.map((table) =>
@@ -1054,6 +1084,20 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         (changes) => {
             let changesToApply = changes;
 
+            // Broadcast-only live preview for other collaborators — the
+            // persisted position update still happens below, once dragging
+            // stops (see findRelevantNodesChanges/updateTablesState).
+            changes.forEach((change) => {
+                if (
+                    change.type === 'position' &&
+                    change.dragging &&
+                    change.position &&
+                    getNode(change.id)?.type === 'table'
+                ) {
+                    emitDrag(change.id, change.position.x, change.position.y);
+                }
+            });
+
             if (readonly) {
                 changesToApply = changesToApply.filter(
                     (change) => change.type !== 'remove'
@@ -1412,6 +1456,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             notes,
             areas,
             getNode,
+            emitDrag,
         ]
     );
 

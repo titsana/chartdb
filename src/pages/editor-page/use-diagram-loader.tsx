@@ -4,6 +4,7 @@ import { useDialog } from '@/hooks/use-dialog';
 import { useFullScreenLoader } from '@/hooks/use-full-screen-spinner';
 import { useRedoUndoStack } from '@/hooks/use-redo-undo-stack';
 import { useStorage } from '@/hooks/use-storage';
+import { useCollaboration } from '@/hooks/use-collaboration';
 import type { Diagram } from '@/lib/domain/diagram';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -20,6 +21,16 @@ export const useDiagramLoader = () => {
     const { listDiagrams } = useStorage();
 
     const currentDiagramLoadingRef = useRef<string | undefined>(undefined);
+    const { reconnectCount } = useCollaboration();
+
+    // Reconnect after a drop: refetch the full diagram over REST instead of
+    // trying to reconcile whatever broadcasts were missed while offline.
+    useEffect(() => {
+        if (reconnectCount === 0 || !diagramId) return;
+        loadDiagram(diagramId);
+        // Only re-run when a new reconnect actually happens.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [reconnectCount]);
 
     useEffect(() => {
         if (!config) {

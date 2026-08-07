@@ -12,28 +12,11 @@ import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
 import type { Group } from '@/lib/domain/group';
 import { API_BASE_URL, AZURE_AD_ENABLED } from '@/lib/env';
-import { msalInstance, loginRequest } from '@/lib/msal-config';
-import { InteractionRequiredAuthError } from '@azure/msal-browser';
+import { getAccessToken } from '@/lib/auth-token';
 
 async function getAuthHeader(): Promise<Record<string, string>> {
-    if (!AZURE_AD_ENABLED) return {};
-
-    const account = msalInstance.getAllAccounts()[0];
-    if (!account) return {};
-
-    try {
-        const result = await msalInstance.acquireTokenSilent({
-            ...loginRequest,
-            account,
-        });
-        return { Authorization: `Bearer ${result.accessToken}` };
-    } catch (err) {
-        if (err instanceof InteractionRequiredAuthError) {
-            const result = await msalInstance.acquireTokenPopup(loginRequest);
-            return { Authorization: `Bearer ${result.accessToken}` };
-        }
-        throw err;
-    }
+    const token = await getAccessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 // ponytail: no per-account logout — a 401 just wipes the MSAL cache and
@@ -108,9 +91,11 @@ function toQuery(options?: Record<string, boolean | undefined>): string {
     return qs ? `?${qs}` : '';
 }
 
-export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
-    children,
-}) => {
+// Extracted from the provider so `collab-storage-provider.tsx` can reuse the
+// same REST implementations for reads without duplicating apiFetch/reviveDates
+// plumbing (it overrides the write methods to go over the collab socket).
+// eslint-disable-next-line react-refresh/only-export-components
+export function useApiStorage(): StorageContext {
     const getConfig: StorageContext['getConfig'] = useCallback(async () => {
         return await apiFetch<ChartDBConfig | undefined>('/config');
     }, []);
@@ -655,6 +640,14 @@ export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
             deleteDiagramNotes,
         ]
     );
+
+    return value;
+}
+
+export const ApiStorageProvider: React.FC<React.PropsWithChildren> = ({
+    children,
+}) => {
+    const value = useApiStorage();
 
     return (
         <storageContext.Provider value={value}>

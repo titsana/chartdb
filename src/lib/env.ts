@@ -13,6 +13,14 @@ export const DISABLE_ANALYTICS: boolean =
     (window?.env?.DISABLE_ANALYTICS ??
         import.meta.env.VITE_DISABLE_ANALYTICS) === 'true';
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
+// ponytail: defaults to API_BASE_URL when it's an absolute origin (the
+// common case: REST and WS are the same backend) since socket.io-client
+// takes an origin, not a path prefix — '/api' isn't a valid one, so that
+// case falls back to same-origin (behind a reverse proxy). Set VITE_WS_URL
+// explicitly if the WS server ever lives on a different origin than the API.
+export const WS_URL: string =
+    import.meta.env.VITE_WS_URL ??
+    (API_BASE_URL.startsWith('http') ? API_BASE_URL : '');
 export const STORAGE_PROVIDER: 'dexie' | 'api' =
     import.meta.env.VITE_STORAGE_PROVIDER === 'api' ? 'api' : 'dexie';
 export const AZURE_AD_CLIENT_ID: string = import.meta.env

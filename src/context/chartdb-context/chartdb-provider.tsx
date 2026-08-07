@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
 import { defaultTableColor, randomColor, viewColor } from '@/lib/colors';
@@ -34,6 +34,9 @@ import {
     type DBCustomType,
 } from '@/lib/domain/db-custom-type';
 import { getDefaultPrimaryKeyType } from '@/lib/data/data-types/data-types';
+import { useCollaboration } from '@/hooks/use-collaboration';
+import { applyRemoteOp } from './apply-remote-op';
+import { useToast } from '@/components/toast/use-toast';
 
 export interface ChartDBProviderProps {
     diagram?: Diagram;
@@ -96,6 +99,47 @@ export const ChartDBProvider: React.FC<
     }, []);
 
     diffEvents.useSubscription(diffCalculatedHandler);
+
+    const { socket, checkClobber } = useCollaboration();
+    const { toast } = useToast();
+
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleOp = ({
+            op,
+            args,
+        }: {
+            op: string;
+            args: Record<string, unknown>;
+        }) => {
+            const clobbered = checkClobber(op, args);
+            if (clobbered.length > 0) {
+                toast({
+                    title: 'Updated by another collaborator',
+                    description:
+                        'A field you just edited was changed again by someone else.',
+                });
+            }
+            applyRemoteOp(op, args, {
+                setTables,
+                setRelationships,
+                setDependencies,
+                setAreas,
+                setCustomTypes,
+                setNotes,
+                setDiagramName,
+                setDiagramUpdatedAt,
+                setDatabaseType,
+                setDatabaseEdition,
+            });
+        };
+
+        socket.on('op', handleOp);
+        return () => {
+            socket.off('op', handleOp);
+        };
+    }, [socket, checkClobber, toast]);
 
     const defaultSchemaName = useMemo(
         () => defaultSchemas[databaseType],
