@@ -16,12 +16,21 @@ import { useTranslation } from 'react-i18next';
 import { FileUploader } from '@/components/file-uploader/file-uploader';
 import { useStorage } from '@/hooks/use-storage';
 import { useNavigate } from 'react-router-dom';
-import { mergeDiagrams, parseDiagramJSON } from '@/lib/export-import-utils';
+import {
+    mergeDiagrams,
+    mergeDiagramsIntoExisting,
+    parseDiagramJSON,
+} from '@/lib/export-import-utils';
 import { Alert, AlertDescription, AlertTitle } from '@/components/alert/alert';
 import { AlertCircle } from 'lucide-react';
 import { ZodError } from 'zod';
+import { useChartDB } from '@/hooks/use-chartdb';
 
-export interface ImportDiagramDialogProps extends BaseDialogProps {}
+export interface ImportDiagramDialogProps extends BaseDialogProps {
+    // 'new' (default) creates a new diagram from the file(s), like Restore.
+    // 'current' merges the file(s) into the diagram currently open in the editor.
+    mode?: 'new' | 'current';
+}
 
 const readFileAsText = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -41,10 +50,20 @@ const readFileAsText = (file: File): Promise<string> =>
 
 export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
     dialog,
+    mode = 'new',
 }) => {
     const { t } = useTranslation();
     const [files, setFiles] = useState<File[]>([]);
     const { addDiagram } = useStorage();
+    const {
+        currentDiagram,
+        addTables,
+        addRelationships,
+        addDependencies,
+        addAreas,
+        addNotes,
+        addCustomTypes,
+    } = useChartDB();
     const navigate = useNavigate();
     const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +114,31 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
             }
         }
 
+        if (mode === 'current') {
+            let merged;
+            try {
+                merged = mergeDiagramsIntoExisting(
+                    currentDiagram,
+                    parsedDiagrams
+                );
+            } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+                return;
+            }
+
+            await Promise.all([
+                addTables(merged.tables),
+                addRelationships(merged.relationships),
+                addDependencies(merged.dependencies),
+                addAreas(merged.areas),
+                addNotes(merged.notes),
+                addCustomTypes(merged.customTypes),
+            ]);
+
+            closeImportDiagramDialog();
+            return;
+        }
+
         let diagram;
         try {
             diagram = mergeDiagrams(parsedDiagrams);
@@ -111,6 +155,14 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
         navigate(`/diagrams/${diagram.id}`);
     }, [
         files,
+        mode,
+        currentDiagram,
+        addTables,
+        addRelationships,
+        addDependencies,
+        addAreas,
+        addNotes,
+        addCustomTypes,
         addDiagram,
         navigate,
         closeImportDiagramDialog,
@@ -130,10 +182,14 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
             <DialogContent className="flex max-h-screen flex-col" showClose>
                 <DialogHeader>
                     <DialogTitle>
-                        {t('import_diagram_dialog.title')}
+                        {mode === 'current'
+                            ? t('import_diagram_dialog.title_current')
+                            : t('import_diagram_dialog.title')}
                     </DialogTitle>
                     <DialogDescription>
-                        {t('import_diagram_dialog.description')}
+                        {mode === 'current'
+                            ? t('import_diagram_dialog.description_current')
+                            : t('import_diagram_dialog.description')}
                     </DialogDescription>
                 </DialogHeader>
                 <DialogInternalContent>

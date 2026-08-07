@@ -49,6 +49,7 @@ export const vi: LanguageTranslation = {
                 backup: 'Hỗ trợ',
                 export_diagram: 'Xuất sơ đồ',
                 restore_diagram: 'Khôi phục sơ đồ',
+                add_to_current_diagram: 'Thêm vào sơ đồ hiện tại',
             },
             help: {
                 help: 'Trợ giúp',
@@ -504,6 +505,9 @@ export const vi: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Nhập sơ đồ',
             description: 'Dán sơ đồ ở dạng JSON bên dưới:',
+            title_current: 'Thêm vào sơ đồ hiện tại',
+            description_current:
+                'Thêm một hoặc nhiều sơ đồ từ tệp JSON vào sơ đồ hiện tại.',
             cancel: 'Hủy',
             import: 'Nhập',
             error: {

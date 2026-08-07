@@ -19,6 +19,7 @@ import { StarUsDialog } from '@/dialogs/star-us-dialog/star-us-dialog';
 import type { ExportImageDialogProps } from '@/dialogs/export-image-dialog/export-image-dialog';
 import { ExportImageDialog } from '@/dialogs/export-image-dialog/export-image-dialog';
 import { ExportDiagramDialog } from '@/dialogs/export-diagram-dialog/export-diagram-dialog';
+import type { ImportDiagramDialogProps } from '@/dialogs/import-diagram-dialog/import-diagram-dialog';
 import { ImportDiagramDialog } from '@/dialogs/import-diagram-dialog/import-diagram-dialog';
 
 export const DialogProvider: React.FC<React.PropsWithChildren> = ({
@@ -133,6 +134,14 @@ export const DialogProvider: React.FC<React.PropsWithChildren> = ({
     // Import diagram dialog
     const [openImportDiagramDialog, setOpenImportDiagramDialog] =
         useState(false);
+    const [importDiagramDialogParams, setImportDiagramDialogParams] = useState<
+        Omit<ImportDiagramDialogProps, 'dialog'>
+    >({});
+    const openImportDiagramDialogHandler: DialogContext['openImportDiagramDialog'] =
+        useCallback((params) => {
+            setImportDiagramDialogParams(params ?? {});
+            setOpenImportDiagramDialog(true);
+        }, []);
 
     return (
         <dialogContext.Provider
@@ -160,7 +169,7 @@ export const DialogProvider: React.FC<React.PropsWithChildren> = ({
                 openExportDiagramDialog: () => setOpenExportDiagramDialog(true),
                 closeExportDiagramDialog: () =>
                     setOpenExportDiagramDialog(false),
-                openImportDiagramDialog: () => setOpenImportDiagramDialog(true),
+                openImportDiagramDialog: openImportDiagramDialogHandler,
                 closeImportDiagramDialog: () =>
                     setOpenImportDiagramDialog(false),
             }}
@@ -196,7 +205,10 @@ export const DialogProvider: React.FC<React.PropsWithChildren> = ({
                 {...exportImageDialogParams}
             />
             <ExportDiagramDialog dialog={{ open: openExportDiagramDialog }} />
-            <ImportDiagramDialog dialog={{ open: openImportDiagramDialog }} />
+            <ImportDiagramDialog
+                dialog={{ open: openImportDiagramDialog }}
+                {...importDiagramDialogParams}
+            />
         </dialogContext.Provider>
     );
 };

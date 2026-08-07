@@ -49,6 +49,7 @@ export const ar: LanguageTranslation = {
                 backup: 'النسخ الاحتياطي',
                 export_diagram: 'تصدير المخطط',
                 restore_diagram: 'استعادة المخطط',
+                add_to_current_diagram: 'إضافة إلى المخطط الحالي',
             },
             help: {
                 help: 'مساعدة',
@@ -497,6 +498,9 @@ export const ar: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'استيراد الرسم البياني',
             description: ':للرسم البياني ادناه JSON قم بلصق',
+            title_current: 'إضافة إلى المخطط الحالي',
+            description_current:
+                'إضافة رسم بياني واحد أو أكثر من ملفات JSON إلى المخطط الحالي.',
             cancel: 'إلغاء',
             import: 'استيراد',
             error: {

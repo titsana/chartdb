@@ -59,7 +59,7 @@ export const SelectDatabase: React.FC<SelectDatabaseProps> = ({
                     <Button
                         type="button"
                         variant="ghost"
-                        onClick={openImportDiagramDialog}
+                        onClick={() => openImportDiagramDialog({})}
                     >
                         {t('new_diagram_dialog.import_from_file')}
                     </Button>

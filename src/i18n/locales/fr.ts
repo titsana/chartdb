@@ -48,6 +48,7 @@ export const fr: LanguageTranslation = {
                 backup: 'Sauvegarde',
                 export_diagram: 'Exporter le diagramme',
                 restore_diagram: 'Restaurer le diagramme',
+                add_to_current_diagram: 'Ajouter au diagramme actuel',
             },
             help: {
                 help: 'Aide',
@@ -503,6 +504,9 @@ export const fr: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Importer un diagramme',
             description: 'Coller le diagramme au format JSON ci-dessous :',
+            title_current: 'Ajouter au diagramme actuel',
+            description_current:
+                'Ajouter un ou plusieurs diagrammes à partir de fichiers JSON au diagramme actuel.',
             cancel: 'Annuler',
             import: 'Exporter',
             error: {

@@ -48,6 +48,7 @@ export const uk: LanguageTranslation = {
                 backup: 'Резервне копіювання',
                 export_diagram: 'Експорт діаграми',
                 restore_diagram: 'Відновити діаграму',
+                add_to_current_diagram: 'Додати до поточної діаграми',
             },
             help: {
                 help: 'Довідка',
@@ -504,6 +505,9 @@ export const uk: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Імпорт Діаграми',
             description: 'Вставте JSON діаграми нижче:',
+            title_current: 'Додати до поточної діаграми',
+            description_current:
+                'Додати одну або декілька діаграм з файлів JSON до поточної діаграми.',
             cancel: 'Скасувати',
             import: 'Імпортувати',
             error: {

@@ -49,6 +49,7 @@ export const id_ID: LanguageTranslation = {
                 backup: 'Cadangan',
                 export_diagram: 'Ekspor Diagram',
                 restore_diagram: 'Pulihkan Diagram',
+                add_to_current_diagram: 'Tambahkan ke Diagram Saat Ini',
             },
             help: {
                 help: 'Bantuan',
@@ -505,6 +506,9 @@ export const id_ID: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Impor Diagram',
             description: 'Tempel diagram JSON di bawah:',
+            title_current: 'Tambahkan ke Diagram Saat Ini',
+            description_current:
+                'Tambahkan satu atau beberapa diagram dari file JSON ke diagram saat ini.',
             cancel: 'Batal',
             import: 'Impor',
             error: {

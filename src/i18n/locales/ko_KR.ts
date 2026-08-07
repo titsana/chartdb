@@ -49,6 +49,7 @@ export const ko_KR: LanguageTranslation = {
                 backup: '백업',
                 export_diagram: '다이어그램 내보내기',
                 restore_diagram: '다이어그램 복구',
+                add_to_current_diagram: '현재 다이어그램에 추가',
             },
             help: {
                 help: '도움말',
@@ -503,6 +504,9 @@ export const ko_KR: LanguageTranslation = {
         import_diagram_dialog: {
             title: '다이어그램 가져오기',
             description: '아래에 다이어그램 JSON을 첨부해주세요:',
+            title_current: '현재 다이어그램에 추가',
+            description_current:
+                'JSON 파일에서 하나 이상의 다이어그램을 현재 다이어그램에 추가합니다.',
             cancel: '취소',
             import: '가져오기',
             error: {

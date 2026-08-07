@@ -49,6 +49,7 @@ export const zh_CN: LanguageTranslation = {
                 backup: '备份',
                 export_diagram: '导出关系图',
                 restore_diagram: '还原图表',
+                add_to_current_diagram: '添加到当前关系图',
             },
             help: {
                 help: '帮助',
@@ -496,6 +497,9 @@ export const zh_CN: LanguageTranslation = {
         import_diagram_dialog: {
             title: '导入关系图',
             description: '在下方粘贴关系图的 JSON：',
+            title_current: '添加到当前关系图',
+            description_current:
+                '将一个或多个 JSON 文件中的关系图添加到当前关系图。',
             cancel: '取消',
             import: '导入',
             error: {

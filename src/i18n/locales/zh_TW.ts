@@ -49,6 +49,7 @@ export const zh_TW: LanguageTranslation = {
                 backup: '備份',
                 export_diagram: '匯出圖表',
                 restore_diagram: '恢復圖表',
+                add_to_current_diagram: '新增至目前圖表',
             },
             help: {
                 help: '幫助',
@@ -496,6 +497,8 @@ export const zh_TW: LanguageTranslation = {
         import_diagram_dialog: {
             title: '匯入圖表',
             description: '請在下方貼上圖表的 JSON：',
+            title_current: '新增至目前圖表',
+            description_current: '將一或多個 JSON 檔案中的圖表新增至目前圖表。',
             cancel: '取消',
             import: '匯入',
             error: {

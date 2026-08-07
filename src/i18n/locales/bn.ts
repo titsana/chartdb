@@ -50,6 +50,7 @@ export const bn: LanguageTranslation = {
                 backup: 'ব্যাকআপ',
                 export_diagram: 'ডায়াগ্রাম রপ্তানি করুন',
                 restore_diagram: 'ডায়াগ্রাম পুনরুদ্ধার করুন',
+                add_to_current_diagram: 'বর্তমান ডায়াগ্রামে যোগ করুন',
             },
             help: {
                 help: 'সাহায্য',
@@ -508,6 +509,9 @@ export const bn: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'চিত্র আমদানি করুন',
             description: 'নীচে ডায়াগ্রাম JSON পেস্ট করুন:',
+            title_current: 'বর্তমান ডায়াগ্রামে যোগ করুন',
+            description_current:
+                'JSON ফাইল থেকে একটি বা একাধিক ডায়াগ্রাম বর্তমান ডায়াগ্রামে যোগ করুন।',
             cancel: 'বাতিল করুন',
             import: 'আমদানি করুন',
             error: {

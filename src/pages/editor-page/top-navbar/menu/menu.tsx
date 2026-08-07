@@ -181,7 +181,9 @@ export const Menu: React.FC<MenuProps> = () => {
                             {t('menu.actions.import')}
                         </MenubarSubTrigger>
                         <MenubarSubContent>
-                            <MenubarItem onClick={openImportDiagramDialog}>
+                            <MenubarItem
+                                onClick={() => openImportDiagramDialog({})}
+                            >
                                 .json
                             </MenubarItem>
                             <MenubarSeparator />
@@ -480,8 +482,15 @@ export const Menu: React.FC<MenuProps> = () => {
                     <MenubarItem onClick={openExportDiagramDialog}>
                         {t('menu.backup.export_diagram')}
                     </MenubarItem>
-                    <MenubarItem onClick={openImportDiagramDialog}>
+                    <MenubarItem onClick={() => openImportDiagramDialog({})}>
                         {t('menu.backup.restore_diagram')}
+                    </MenubarItem>
+                    <MenubarItem
+                        onClick={() =>
+                            openImportDiagramDialog({ mode: 'current' })
+                        }
+                    >
+                        {t('menu.backup.add_to_current_diagram')}
                     </MenubarItem>
                 </MenubarContent>
             </MenubarMenu>

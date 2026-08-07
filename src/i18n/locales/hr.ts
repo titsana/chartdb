@@ -48,6 +48,7 @@ export const hr: LanguageTranslation = {
                 backup: 'Sigurnosna kopija',
                 export_diagram: 'Izvezi dijagram',
                 restore_diagram: 'Vrati dijagram',
+                add_to_current_diagram: 'Dodaj u trenutni dijagram',
             },
             help: {
                 help: 'Pomoć',
@@ -500,6 +501,9 @@ export const hr: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Uvezi dijagram',
             description: 'Uvezite dijagram iz JSON datoteke.',
+            title_current: 'Dodaj u trenutni dijagram',
+            description_current:
+                'Dodajte jedan ili više dijagrama iz JSON datoteka u trenutni dijagram.',
             cancel: 'Odustani',
             import: 'Uvezi',
             error: {

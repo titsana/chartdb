@@ -50,6 +50,7 @@ export const ja: LanguageTranslation = {
                 backup: 'バックアップ',
                 export_diagram: 'ダイアグラムをエクスポート',
                 restore_diagram: 'ダイアグラムを復元',
+                add_to_current_diagram: '現在のダイアグラムに追加',
             },
             help: {
                 help: 'ヘルプ',
@@ -510,6 +511,9 @@ export const ja: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'Import Diagram',
             description: 'Paste the diagram JSON below:',
+            title_current: 'Add to Current Diagram',
+            description_current:
+                'Add one or more diagrams from JSON files to the current diagram.',
             cancel: 'Cancel',
             import: 'Import',
             error: {

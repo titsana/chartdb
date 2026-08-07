@@ -50,6 +50,7 @@ export const gu: LanguageTranslation = {
                 backup: 'બેકઅપ',
                 export_diagram: 'ડાયાગ્રામ નિકાસ કરો',
                 restore_diagram: 'ડાયાગ્રામ પુનઃસ્થાપિત કરો',
+                add_to_current_diagram: 'વર્તમાન ડાયાગ્રામમાં ઉમેરો',
             },
             help: {
                 help: 'મદદ',
@@ -506,6 +507,9 @@ export const gu: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'ડાયાગ્રામ આયાત કરો',
             description: 'નીચે ડાયાગ્રામ JSON પેસ્ટ કરો:',
+            title_current: 'વર્તમાન ડાયાગ્રામમાં ઉમેરો',
+            description_current:
+                'JSON ફાઇલોમાંથી એક અથવા વધુ ડાયાગ્રામ વર્તમાન ડાયાગ્રામમાં ઉમેરો.',
             cancel: 'રદ કરો',
             import: 'આયાત કરો',
             error: {

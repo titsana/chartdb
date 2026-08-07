@@ -53,6 +53,14 @@ export const diagramFromJSONInput = (json: string): Diagram => ({
 
 const LAYOUT_MARGIN = 100;
 
+const diagramBottomY = (diagram: Diagram): number => {
+    const bottoms = [
+        ...(diagram.tables ?? []).map((t) => t.y + calcTableHeight(t)),
+        ...(diagram.areas ?? []).map((a) => a.y + a.height),
+    ];
+    return bottoms.length > 0 ? Math.max(...bottoms) : 0;
+};
+
 // Merges one or more already-parsed diagrams into a single new diagram:
 // every table/relationship/area/note/customType from each is pooled as-is
 // (no dedup, no merging of same-named tables). Each diagram's tables,
@@ -81,12 +89,6 @@ export const mergeDiagrams = (parsedDiagrams: Diagram[]): Diagram => {
     parsedDiagrams.forEach((parsed) => {
         const { diagram: cloned } = cloneDiagram(parsed);
 
-        const bottoms = [
-            ...(cloned.tables ?? []).map((t) => t.y + calcTableHeight(t)),
-            ...(cloned.areas ?? []).map((a) => a.y + a.height),
-        ];
-        const maxBottom = bottoms.length > 0 ? Math.max(...bottoms) : 0;
-
         tables.push(
             ...(cloned.tables ?? []).map((t) => ({ ...t, y: t.y + yOffset }))
         );
@@ -100,7 +102,7 @@ export const mergeDiagrams = (parsedDiagrams: Diagram[]): Diagram => {
         dependencies.push(...(cloned.dependencies ?? []));
         customTypes.push(...(cloned.customTypes ?? []));
 
-        yOffset += maxBottom + LAYOUT_MARGIN;
+        yOffset += diagramBottomY(cloned) + LAYOUT_MARGIN;
     });
 
     const first = parsedDiagrams[0];
@@ -119,4 +121,64 @@ export const mergeDiagrams = (parsedDiagrams: Diagram[]): Diagram => {
         createdAt: new Date(),
         updatedAt: new Date(),
     };
+};
+
+// Same pooling/offset strategy as `mergeDiagrams`, but the new content is
+// offset below the existing diagram (instead of starting a fresh diagram)
+// and only the new entities are returned — the caller adds them to the
+// currently open diagram via the chartdb context's addTables/addAreas/etc.
+export const mergeDiagramsIntoExisting = (
+    existingDiagram: Diagram,
+    parsedDiagrams: Diagram[]
+): {
+    tables: DBTable[];
+    relationships: DBRelationship[];
+    dependencies: DBDependency[];
+    areas: Area[];
+    notes: Note[];
+    customTypes: DBCustomType[];
+} => {
+    if (parsedDiagrams.length === 0) {
+        throw new Error('No diagrams to import');
+    }
+
+    if (
+        parsedDiagrams.some(
+            (d) => d.databaseType !== existingDiagram.databaseType
+        )
+    ) {
+        throw new Error(
+            'All files must use the same database type as the current diagram.'
+        );
+    }
+
+    const tables: DBTable[] = [];
+    const relationships: DBRelationship[] = [];
+    const dependencies: DBDependency[] = [];
+    const areas: Area[] = [];
+    const notes: Note[] = [];
+    const customTypes: DBCustomType[] = [];
+
+    let yOffset = diagramBottomY(existingDiagram) + LAYOUT_MARGIN;
+
+    parsedDiagrams.forEach((parsed) => {
+        const { diagram: cloned } = cloneDiagram(parsed);
+
+        tables.push(
+            ...(cloned.tables ?? []).map((t) => ({ ...t, y: t.y + yOffset }))
+        );
+        areas.push(
+            ...(cloned.areas ?? []).map((a) => ({ ...a, y: a.y + yOffset }))
+        );
+        notes.push(
+            ...(cloned.notes ?? []).map((n) => ({ ...n, y: n.y + yOffset }))
+        );
+        relationships.push(...(cloned.relationships ?? []));
+        dependencies.push(...(cloned.dependencies ?? []));
+        customTypes.push(...(cloned.customTypes ?? []));
+
+        yOffset += diagramBottomY(cloned) + LAYOUT_MARGIN;
+    });
+
+    return { tables, relationships, dependencies, areas, notes, customTypes };
 };

@@ -50,6 +50,7 @@ export const ne: LanguageTranslation = {
                 backup: 'Backup',
                 export_diagram: 'Export Diagram',
                 restore_diagram: 'Restore Diagram',
+                add_to_current_diagram: 'Add to Current Diagram',
             },
             help: {
                 help: 'मद्दत',
@@ -508,6 +509,9 @@ export const ne: LanguageTranslation = {
         import_diagram_dialog: {
             title: 'डायाग्राम आयात गर्नुहोस्',
             description: 'डायाग्राम JSON डेटा पेस्ट गर्नुहोस:',
+            title_current: 'हालको डायाग्राममा थप्नुहोस्',
+            description_current:
+                'JSON फाइलहरूबाट एक वा बढी डायाग्रामहरू हालको डायाग्राममा थप्नुहोस्।',
             cancel: 'रद्द गर्नुहोस्',
             import: 'आयात गर्नुहोस्',
             error: {
