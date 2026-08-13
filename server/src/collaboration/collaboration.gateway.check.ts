@@ -90,6 +90,52 @@ async function main() {
         assert(payload.newVersion === 4, 'broadcast must carry the new version');
     }
 
+    // 3. Stale deleteTable: row still exists server-side (delete didn't
+    // apply) — correction must restore it via addTable, since a same-op
+    // {id, attributes} patch would be a no-op if the client already removed
+    // the table from its local list.
+    {
+        const storage = {
+            deleteTable: async () => {
+                throw new ConflictException({
+                    message: 'version-mismatch',
+                    current: {
+                        id: 't1',
+                        version: 5,
+                        name: 'still-here',
+                        deletedAt: null,
+                    },
+                });
+            },
+        } as unknown as StorageService;
+        const gateway = new CollaborationGateway(storage, {
+            get: () => undefined,
+        } as never);
+        const { socket, emitted, broadcast } = fakeSocket();
+
+        const ack = await gateway.handleOp(socket as never, {
+            diagramId: 'd1',
+            op: 'deleteTable',
+            args: { diagramId: 'd1', id: 't1', version: 2 },
+        });
+
+        assert(ack.ok === false, 'stale delete must not ack ok');
+        assert(broadcast.length === 0, 'stale delete must not broadcast to room');
+        assert(emitted.length === 1, 'stale delete must emit exactly one correction');
+        const payload = emitted[0].payload as {
+            op: string;
+            args: { table: { id: string; name: string } };
+        };
+        assert(
+            payload.op === 'addTable',
+            'delete conflict must restore via addTable, not a same-op patch'
+        );
+        assert(
+            payload.args.table.name === 'still-here',
+            'restore must carry the server-authoritative row'
+        );
+    }
+
     console.log('OK: collaboration.gateway conflict routing behaves correctly');
 }
 

@@ -72,10 +72,18 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        putTable: ({ diagramId, table }) =>
-            storage.putTable(diagramId as string, table as never),
-        deleteTable: ({ diagramId, id }) =>
-            storage.deleteTable(diagramId as string, id as string),
+        putTable: ({ diagramId, table, version }) =>
+            storage.putTable(
+                diagramId as string,
+                table as never,
+                version as number | undefined
+            ),
+        deleteTable: ({ diagramId, id, version }) =>
+            storage.deleteTable(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         addRelationship: ({ diagramId, relationship }) =>
             storage.addRelationship(diagramId as string, relationship as never),
         updateRelationship: ({ id, attributes, version }) =>
@@ -245,12 +253,28 @@ export class CollaborationGateway
                     >;
                 };
                 if (current) {
-                    const { id, version, ...attributes } = current;
-                    client.emit('op:rejected', {
-                        op: message.op,
-                        args: { id, attributes },
-                        version,
-                    });
+                    // deleteTable/putTable may have already been removed (or
+                    // never matched) in the client's local list, where the
+                    // same-op {id, attributes} patch used for updateTable is
+                    // a no-op (patch() only touches items already present).
+                    // addTable upserts, so it restores the row either way.
+                    if (message.op === 'putTable' || message.op === 'deleteTable') {
+                        client.emit('op:rejected', {
+                            op: 'addTable',
+                            args: {
+                                diagramId: message.diagramId,
+                                table: current,
+                            },
+                            version: current.version,
+                        });
+                    } else {
+                        const { id, version, ...attributes } = current;
+                        client.emit('op:rejected', {
+                            op: message.op,
+                            args: { id, attributes },
+                            version,
+                        });
+                    }
                 }
                 return { ok: false, error: 'conflict' };
             }

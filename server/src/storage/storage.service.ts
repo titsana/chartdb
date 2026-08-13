@@ -155,12 +155,36 @@ export class StorageService implements OnModuleInit {
         return this.versionedUpdate(this.tables, id, attributes, expectedVersion);
     }
 
-    async putTable(diagramId: string, table: TableEntity) {
-        await this.tables.save({ ...table, diagramId });
+    // ponytail: routed through versionedUpdate (UPDATE, not upsert) — the
+    // one caller (removing a dangling FK field when another table is
+    // deleted, see chartdb-provider.tsx) always targets a table that already
+    // exists. If a future caller needs putTable to insert a missing row,
+    // it'll need its own upsert-then-check path.
+    async putTable(
+        diagramId: string,
+        table: TableEntity,
+        expectedVersion?: number
+    ) {
+        const { id, ...attributes } = table;
+        return this.versionedUpdate(
+            this.tables,
+            id,
+            { ...attributes, diagramId } as Partial<TableEntity>,
+            expectedVersion
+        );
     }
 
-    async deleteTable(diagramId: string, id: string) {
-        await this.tables.update({ id, diagramId }, { deletedAt: new Date() });
+    async deleteTable(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.tables,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<TableEntity>,
+            expectedVersion
+        );
     }
 
     async listTables(diagramId: string) {

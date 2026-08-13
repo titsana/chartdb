@@ -36,11 +36,14 @@ function fieldKeysFor(op: string, args: Record<string, unknown>): string[] {
     );
 }
 
-// Entity-level version key — only `update*` ops carry a version to check
-// (adds have no prior state to conflict with, deletes are delete-wins,
-// updateDiagram is exempt, see storage.service.ts comment).
+// Entity-level version key — carried by ops that can race a concurrent write
+// on the same row. Table also version-checks putTable/deleteTable (see
+// storage.service.ts); other entity types don't yet (add has no prior state
+// to conflict with, delete-wins is accepted there, updateDiagram is exempt).
 const VERSIONED_UPDATE_OPS = new Set([
     'updateTable',
+    'putTable',
+    'deleteTable',
     'updateRelationship',
     'updateDependency',
     'updateArea',
@@ -48,8 +51,27 @@ const VERSIONED_UPDATE_OPS = new Set([
     'updateNote',
 ]);
 
+// A conflict correction may arrive as a same-op patch ({id, attributes}) or,
+// for putTable/deleteTable, as an addTable upsert ({table: {...}}) — see the
+// gateway comment on why deletes/puts restore via addTable. Strip whichever
+// known verb prefix the op has so both shapes key into the same version slot.
+function entityTypeOf(op: string): string {
+    for (const prefix of ['update', 'delete', 'put', 'add']) {
+        if (op.startsWith(prefix)) return op.slice(prefix.length);
+    }
+    return op;
+}
+
+function idFor(op: string, args: Record<string, unknown>): string | undefined {
+    if (typeof args.id === 'string') return args.id;
+    if (op === 'putTable' || op === 'addTable') {
+        return (args.table as { id?: string } | undefined)?.id;
+    }
+    return undefined;
+}
+
 function versionKeyFor(op: string, id: string): string {
-    return `${op.slice('update'.length)}:${id}`;
+    return `${entityTypeOf(op)}:${id}`;
 }
 
 export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
@@ -222,7 +244,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     args: Record<string, unknown>;
                     newVersion?: number;
                 }) => {
-                    const id = args.id as string | undefined;
+                    const id = idFor(op, args);
                     if (id && newVersion !== undefined) {
                         versionsRef.current.set(
                             versionKeyFor(op, id),
@@ -241,13 +263,12 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     version,
                 }: {
                     op: string;
-                    args: { id: string };
+                    args: Record<string, unknown>;
                     version: number;
                 }) => {
-                    versionsRef.current.set(
-                        versionKeyFor(op, args.id),
-                        version
-                    );
+                    const id = idFor(op, args);
+                    if (id)
+                        versionsRef.current.set(versionKeyFor(op, id), version);
                 }
             );
             socket.on(
@@ -310,7 +331,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     )
                 );
             }
-            const id = args.id as string | undefined;
+            const id = idFor(op, args);
             const versioned = VERSIONED_UPDATE_OPS.has(op) && id;
             const sentArgs = versioned
                 ? {
