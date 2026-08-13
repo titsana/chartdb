@@ -100,11 +100,24 @@ export const ChartDBProvider: React.FC<
 
     diffEvents.useSubscription(diffCalculatedHandler);
 
-    const { socket, checkClobber } = useCollaboration();
+    const { socket, checkClobber, seedVersions } = useCollaboration();
     const { toast } = useToast();
 
     useEffect(() => {
         if (!socket) return;
+
+        const applySetters = {
+            setTables,
+            setRelationships,
+            setDependencies,
+            setAreas,
+            setCustomTypes,
+            setNotes,
+            setDiagramName,
+            setDiagramUpdatedAt,
+            setDatabaseType,
+            setDatabaseEdition,
+        };
 
         const handleOp = ({
             op,
@@ -121,23 +134,31 @@ export const ChartDBProvider: React.FC<
                         'A field you just edited was changed again by someone else.',
                 });
             }
-            applyRemoteOp(op, args, {
-                setTables,
-                setRelationships,
-                setDependencies,
-                setAreas,
-                setCustomTypes,
-                setNotes,
-                setDiagramName,
-                setDiagramUpdatedAt,
-                setDatabaseType,
-                setDatabaseEdition,
+            applyRemoteOp(op, args, applySetters);
+        };
+
+        // This tab's own edit lost a version race — the value it just wrote
+        // locally never made it to the server, so patch back to what did.
+        const handleRejected = ({
+            op,
+            args,
+        }: {
+            op: string;
+            args: Record<string, unknown>;
+        }) => {
+            toast({
+                title: 'Edit conflict',
+                description:
+                    'Someone else edited this at the same time — your change was discarded, showing the latest version.',
             });
+            applyRemoteOp(op, args, applySetters);
         };
 
         socket.on('op', handleOp);
+        socket.on('op:rejected', handleRejected);
         return () => {
             socket.off('op', handleOp);
+            socket.off('op:rejected', handleRejected);
         };
     }, [socket, checkClobber, toast]);
 
@@ -1940,6 +1961,29 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId(undefined);
                 setNotes(diagram.notes ?? []);
 
+                // Prime collab optimistic-concurrency baselines from what the
+                // server just sent (entities carry `version`, not part of the
+                // typed domain shape — see collaboration-provider.tsx).
+                const withVersion = (entityType: string) => (e: object) => ({
+                    entityType,
+                    id: (e as { id: string }).id,
+                    version: (e as { version?: number }).version ?? 0,
+                });
+                seedVersions([
+                    ...(diagram.tables ?? []).map(withVersion('Table')),
+                    ...(diagram.relationships ?? []).map(
+                        withVersion('Relationship')
+                    ),
+                    ...(diagram.dependencies ?? []).map(
+                        withVersion('Dependency')
+                    ),
+                    ...(diagram.areas ?? []).map(withVersion('Area')),
+                    ...(diagram.customTypes ?? []).map(
+                        withVersion('CustomType')
+                    ),
+                    ...(diagram.notes ?? []).map(withVersion('Note')),
+                ]);
+
                 events.emit({ action: 'load_diagram', data: { diagram } });
 
                 resetRedoStack();
@@ -1955,6 +1999,7 @@ export const ChartDBProvider: React.FC<
                 setDependencies,
                 setAreas,
                 setCustomTypes,
+                seedVersions,
                 setDiagramCreatedAt,
                 setDiagramUpdatedAt,
                 setHighlightedCustomTypeId,

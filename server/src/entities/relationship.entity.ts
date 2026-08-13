@@ -40,6 +40,9 @@ export class RelationshipEntity {
     @Column('bigint', { transformer: numericTransformer })
     createdAt: number;
 
+    @Column('int', { default: 0 })
+    version: number;
+
     @Column('timestamptz', { nullable: true })
     deletedAt?: Date | null;
 }

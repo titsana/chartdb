@@ -66,6 +66,39 @@ export class StorageService implements OnModuleInit {
         }
     }
 
+    // Optimistic concurrency for the ops a live collab session sends most:
+    // field-level updates on an already-existing row. When expectedVersion is
+    // given (socket path) the WHERE clause makes the increment atomic — no
+    // read-then-write race — and a mismatch means someone else wrote first,
+    // so we reject rather than silently overwrite (last-write-wins bug).
+    // The REST path (single-user / no expectedVersion) still bumps version
+    // but skips the check, since there's no concurrent writer to race.
+    private async versionedUpdate<T extends { id: string; version: number }>(
+        repo: Repository<T>,
+        id: string,
+        attributes: Partial<T>,
+        expectedVersion?: number
+    ): Promise<number> {
+        const qb = repo
+            .createQueryBuilder()
+            .update(repo.target)
+            .set({
+                ...attributes,
+                version: () => '"version" + 1',
+            } as never)
+            .where('id = :id', { id });
+        if (expectedVersion !== undefined) {
+            qb.andWhere('version = :expectedVersion', { expectedVersion });
+        }
+        const result = await qb.execute();
+        if (expectedVersion !== undefined && result.affected === 0) {
+            const current = await repo.findOneBy({ id } as never);
+            throw new ConflictException({ message: 'version-mismatch', current });
+        }
+        const row = await repo.findOneBy({ id } as never);
+        return row?.version ?? 0;
+    }
+
     // Config
     async getConfig() {
         return (await this.config.findOneBy({ id: 1 })) ?? undefined;
@@ -114,8 +147,12 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async updateTable(id: string, attributes: Partial<TableEntity>) {
-        await this.tables.update(id, attributes);
+    async updateTable(
+        id: string,
+        attributes: Partial<TableEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(this.tables, id, attributes, expectedVersion);
     }
 
     async putTable(diagramId: string, table: TableEntity) {
@@ -158,9 +195,15 @@ export class StorageService implements OnModuleInit {
 
     async updateRelationship(
         id: string,
-        attributes: Partial<RelationshipEntity>
+        attributes: Partial<RelationshipEntity>,
+        expectedVersion?: number
     ) {
-        await this.relationships.update(id, attributes);
+        return this.versionedUpdate(
+            this.relationships,
+            id,
+            attributes,
+            expectedVersion
+        );
     }
 
     async deleteRelationship(diagramId: string, id: string) {
@@ -206,8 +249,17 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async updateDependency(id: string, attributes: Partial<DependencyEntity>) {
-        await this.dependencies.update(id, attributes);
+    async updateDependency(
+        id: string,
+        attributes: Partial<DependencyEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.dependencies,
+            id,
+            attributes,
+            expectedVersion
+        );
     }
 
     async deleteDependency(diagramId: string, id: string) {
@@ -250,8 +302,12 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async updateArea(id: string, attributes: Partial<AreaEntity>) {
-        await this.areas.update(id, attributes);
+    async updateArea(
+        id: string,
+        attributes: Partial<AreaEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(this.areas, id, attributes, expectedVersion);
     }
 
     async deleteArea(diagramId: string, id: string) {
@@ -288,8 +344,17 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async updateCustomType(id: string, attributes: Partial<CustomTypeEntity>) {
-        await this.customTypes.update(id, attributes);
+    async updateCustomType(
+        id: string,
+        attributes: Partial<CustomTypeEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.customTypes,
+            id,
+            attributes,
+            expectedVersion
+        );
     }
 
     async deleteCustomType(diagramId: string, id: string) {
@@ -329,8 +394,12 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async updateNote(id: string, attributes: Partial<NoteEntity>) {
-        await this.notes.update(id, attributes);
+    async updateNote(
+        id: string,
+        attributes: Partial<NoteEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(this.notes, id, attributes, expectedVersion);
     }
 
     async deleteNote(diagramId: string, id: string) {

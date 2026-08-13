@@ -7,7 +7,7 @@ import {
     WebSocketGateway,
     WebSocketServer,
 } from '@nestjs/websockets';
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Server, Socket } from 'socket.io';
 import { StorageService } from '../storage/storage.service';
@@ -66,40 +66,64 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
     return {
         addTable: ({ diagramId, table }) =>
             storage.addTable(diagramId as string, table as never),
-        updateTable: ({ id, attributes }) =>
-            storage.updateTable(id as string, attributes as never),
+        updateTable: ({ id, attributes, version }) =>
+            storage.updateTable(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         putTable: ({ diagramId, table }) =>
             storage.putTable(diagramId as string, table as never),
         deleteTable: ({ diagramId, id }) =>
             storage.deleteTable(diagramId as string, id as string),
         addRelationship: ({ diagramId, relationship }) =>
             storage.addRelationship(diagramId as string, relationship as never),
-        updateRelationship: ({ id, attributes }) =>
-            storage.updateRelationship(id as string, attributes as never),
+        updateRelationship: ({ id, attributes, version }) =>
+            storage.updateRelationship(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         deleteRelationship: ({ diagramId, id }) =>
             storage.deleteRelationship(diagramId as string, id as string),
         addDependency: ({ diagramId, dependency }) =>
             storage.addDependency(diagramId as string, dependency as never),
-        updateDependency: ({ id, attributes }) =>
-            storage.updateDependency(id as string, attributes as never),
+        updateDependency: ({ id, attributes, version }) =>
+            storage.updateDependency(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         deleteDependency: ({ diagramId, id }) =>
             storage.deleteDependency(diagramId as string, id as string),
         addArea: ({ diagramId, area }) =>
             storage.addArea(diagramId as string, area as never),
-        updateArea: ({ id, attributes }) =>
-            storage.updateArea(id as string, attributes as never),
+        updateArea: ({ id, attributes, version }) =>
+            storage.updateArea(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         deleteArea: ({ diagramId, id }) =>
             storage.deleteArea(diagramId as string, id as string),
         addCustomType: ({ diagramId, customType }) =>
             storage.addCustomType(diagramId as string, customType as never),
-        updateCustomType: ({ id, attributes }) =>
-            storage.updateCustomType(id as string, attributes as never),
+        updateCustomType: ({ id, attributes, version }) =>
+            storage.updateCustomType(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         deleteCustomType: ({ diagramId, id }) =>
             storage.deleteCustomType(diagramId as string, id as string),
         addNote: ({ diagramId, note }) =>
             storage.addNote(diagramId as string, note as never),
-        updateNote: ({ id, attributes }) =>
-            storage.updateNote(id as string, attributes as never),
+        updateNote: ({ id, attributes, version }) =>
+            storage.updateNote(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
         deleteNote: ({ diagramId, id }) =>
             storage.deleteNote(diagramId as string, id as string),
         updateDiagram: ({ id, attributes }) =>
@@ -204,13 +228,40 @@ export class CollaborationGateway
     ) {
         const handler = this.ops[message.op];
         if (!handler) return { ok: false, error: `Unknown op: ${message.op}` };
+        let newVersion: unknown;
         try {
-            await handler(message.args);
+            newVersion = await handler(message.args);
         } catch (err) {
+            if (err instanceof ConflictException) {
+                // Someone else's write landed first — tell only the sender
+                // what's actually in the DB now instead of persisting their
+                // stale value (that would be the last-write-wins data loss).
+                // Reusing the 'op' event lets the client's existing op
+                // patcher apply it like any other update.
+                const { current } = err.getResponse() as {
+                    current?: { id: string; version: number } & Record<
+                        string,
+                        unknown
+                    >;
+                };
+                if (current) {
+                    const { id, version, ...attributes } = current;
+                    client.emit('op:rejected', {
+                        op: message.op,
+                        args: { id, attributes },
+                        version,
+                    });
+                }
+                return { ok: false, error: 'conflict' };
+            }
             return { ok: false, error: (err as Error).message };
         }
-        client.to(message.diagramId).emit('op', message);
-        return { ok: true };
+        const payload =
+            typeof newVersion === 'number'
+                ? { ...message, newVersion }
+                : message;
+        client.to(message.diagramId).emit('op', payload);
+        return { ok: true, newVersion };
     }
 
     // Broadcast-only — never persisted, used purely for live drag preview.

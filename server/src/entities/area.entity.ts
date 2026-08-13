@@ -30,6 +30,9 @@ export class AreaEntity {
     @Column('int', { nullable: true })
     order?: number;
 
+    @Column('int', { default: 0 })
+    version: number;
+
     @Column('timestamptz', { nullable: true })
     deletedAt?: Date | null;
 }

@@ -54,6 +54,12 @@ export interface CollaborationContext {
     // fields it touched; every op this tab receives checks against that.
     recordOwnEdit: (op: string, args: Record<string, unknown>) => void;
     checkClobber: (op: string, args: Record<string, unknown>) => string[];
+    // Optimistic-concurrency version per entity (entityType:id), used so a
+    // stale edit is rejected server-side instead of silently overwriting a
+    // newer one (see emitOp). Seed from freshly-loaded entities on diagram load.
+    seedVersions: (
+        entries: Array<{ entityType: string; id: string; version: number }>
+    ) => void;
 }
 
 export const collaborationInitialValue: CollaborationContext = {
@@ -76,6 +82,7 @@ export const collaborationInitialValue: CollaborationContext = {
     unfollowUser: emptyFn,
     recordOwnEdit: emptyFn,
     checkClobber: (): string[] => [],
+    seedVersions: emptyFn,
 };
 
 export const collaborationContext = createContext<CollaborationContext>(

@@ -36,6 +36,22 @@ function fieldKeysFor(op: string, args: Record<string, unknown>): string[] {
     );
 }
 
+// Entity-level version key — only `update*` ops carry a version to check
+// (adds have no prior state to conflict with, deletes are delete-wins,
+// updateDiagram is exempt, see storage.service.ts comment).
+const VERSIONED_UPDATE_OPS = new Set([
+    'updateTable',
+    'updateRelationship',
+    'updateDependency',
+    'updateArea',
+    'updateCustomType',
+    'updateNote',
+]);
+
+function versionKeyFor(op: string, id: string): string {
+    return `${op.slice('update'.length)}:${id}`;
+}
+
 export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
     children,
 }) => {
@@ -58,6 +74,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
     );
     const socketRef = useRef<Socket | null>(null);
     const ownEditsRef = useRef<Map<string, number>>(new Map());
+    const versionsRef = useRef<Map<string, number>>(new Map());
     const lastCursorEmitRef = useRef(0);
     const lastViewportEmitRef = useRef(0);
     const identity = useMemo(() => getOrCreateIdentity(), []);
@@ -191,6 +208,48 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                         return next;
                     })
             );
+            // Track the latest known version per entity regardless of who
+            // wrote it — otherwise this tab's next edit would send a stale
+            // baseVersion and get rejected even though it's not stale.
+            socket.on(
+                'op',
+                ({
+                    op,
+                    args,
+                    newVersion,
+                }: {
+                    op: string;
+                    args: Record<string, unknown>;
+                    newVersion?: number;
+                }) => {
+                    const id = args.id as string | undefined;
+                    if (id && newVersion !== undefined) {
+                        versionsRef.current.set(
+                            versionKeyFor(op, id),
+                            newVersion
+                        );
+                    }
+                }
+            );
+            // This tab's own write was rejected as stale — adopt the
+            // server's version so the retry (if any) isn't rejected again.
+            socket.on(
+                'op:rejected',
+                ({
+                    op,
+                    args,
+                    version,
+                }: {
+                    op: string;
+                    args: { id: string };
+                    version: number;
+                }) => {
+                    versionsRef.current.set(
+                        versionKeyFor(op, args.id),
+                        version
+                    );
+                }
+            );
             socket.on(
                 'follow',
                 ({
@@ -251,21 +310,56 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     )
                 );
             }
+            const id = args.id as string | undefined;
+            const versioned = VERSIONED_UPDATE_OPS.has(op) && id;
+            const sentArgs = versioned
+                ? {
+                      ...args,
+                      version: versionsRef.current.get(versionKeyFor(op, id)),
+                  }
+                : args;
             return new Promise<void>((resolve, reject) => {
                 socket.emit(
                     'op',
-                    { diagramId, op, args },
-                    (ack: { ok: boolean; error?: string }) => {
-                        if (ack?.ok) resolve();
-                        else
+                    { diagramId, op, args: sentArgs },
+                    (ack: {
+                        ok: boolean;
+                        error?: string;
+                        newVersion?: number;
+                    }) => {
+                        if (ack?.ok) {
+                            if (versioned && ack.newVersion !== undefined) {
+                                versionsRef.current.set(
+                                    versionKeyFor(op, id),
+                                    ack.newVersion
+                                );
+                            }
+                            resolve();
+                        } else {
                             reject(
                                 new Error(ack?.error ?? `op "${op}" failed`)
                             );
+                        }
                     }
                 );
             });
         },
         [diagramId]
+    );
+
+    const seedVersions = useCallback(
+        (
+            entries: Array<{
+                entityType: string;
+                id: string;
+                version: number;
+            }>
+        ) => {
+            for (const { entityType, id, version } of entries) {
+                versionsRef.current.set(`${entityType}:${id}`, version);
+            }
+        },
+        []
     );
 
     const emitDrag = useCallback(
@@ -378,6 +472,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             unfollowUser,
             recordOwnEdit,
             checkClobber,
+            seedVersions,
         }),
         [
             connected,
@@ -398,6 +493,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             unfollowUser,
             recordOwnEdit,
             checkClobber,
+            seedVersions,
         ]
     );
 

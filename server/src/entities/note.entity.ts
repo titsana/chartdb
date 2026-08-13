@@ -34,6 +34,9 @@ export class NoteEntity {
     @Column('varchar', { nullable: true })
     parentAreaId?: string | null;
 
+    @Column('int', { default: 0 })
+    version: number;
+
     @Column('timestamptz', { nullable: true })
     deletedAt?: Date | null;
 }
