@@ -24,8 +24,9 @@ import { CollaborationModule } from './collaboration/collaboration.module';
                 type: 'postgres',
                 url: config.get<string>('DATABASE_URL'),
                 autoLoadEntities: true,
-                // ponytail: synchronize=true for now, switch to migrations before prod
-                synchronize: true,
+                synchronize: false,
+                migrationsRun: true,
+                migrations: [__dirname + '/migrations/*{.ts,.js}'],
             }),
         }),
         AuthModule,

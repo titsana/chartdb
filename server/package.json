@@ -5,7 +5,10 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "start": "node dist/main.js",
-        "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts"
+        "start:dev": "ts-node-dev --respawn --transpile-only src/main.ts",
+        "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/data-source.ts",
+        "migration:run": "typeorm-ts-node-commonjs migration:run -d src/data-source.ts",
+        "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/data-source.ts"
     },
     "dependencies": {
         "@nestjs/common": "^10.4.15",
@@ -16,6 +19,7 @@
         "@nestjs/platform-socket.io": "^10.4.15",
         "@nestjs/typeorm": "^10.0.2",
         "@nestjs/websockets": "^10.4.15",
+        "dotenv": "^17.4.2",
         "joi": "^17.13.3",
         "passport": "^0.7.0",
         "passport-azure-ad": "^4.3.5",
@@ -28,6 +32,7 @@
     "devDependencies": {
         "@types/node": "^22.10.2",
         "@types/passport-azure-ad": "^4.3.6",
+        "ts-node": "^10.9.2",
         "ts-node-dev": "^2.0.0",
         "typescript": "^5.7.2"
     }
