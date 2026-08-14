@@ -23,11 +23,11 @@ export class TableEntity {
     @Column('double precision')
     y: number;
 
-    @Column('jsonb')
+    @Column('jsonb', { default: [] })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fields: any[];
 
-    @Column('jsonb')
+    @Column('jsonb', { default: [] })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     indexes: any[];
 
