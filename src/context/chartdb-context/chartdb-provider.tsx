@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from 'react';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
 import { defaultTableColor, randomColor, viewColor } from '@/lib/colors';
@@ -104,6 +110,20 @@ export const ChartDBProvider: React.FC<
     const { socket, checkClobber, seedVersions } = useCollaboration();
     const { toast } = useToast();
 
+    // updateTable/updateRelationship/etc. are declared later in this
+    // component — referencing them directly in the effect below's
+    // dependency array would be a temporal-dead-zone reference (that array
+    // is evaluated eagerly during render, unlike the effect callback itself).
+    // Synced after all six are declared, near the end of this function.
+    const retryUpdateFnsRef = useRef<{
+        updateTable: ChartDBContext['updateTable'];
+        updateRelationship: ChartDBContext['updateRelationship'];
+        updateDependency: ChartDBContext['updateDependency'];
+        updateArea: ChartDBContext['updateArea'];
+        updateCustomType: ChartDBContext['updateCustomType'];
+        updateNote: ChartDBContext['updateNote'];
+    }>();
+
     useEffect(() => {
         if (!socket) return;
 
@@ -155,22 +175,30 @@ export const ChartDBProvider: React.FC<
             const retry = attempted?.id
                 ? () => {
                       const { id, attributes } = attempted;
+                      const fns = retryUpdateFnsRef.current;
+                      if (!fns) return;
                       switch (op) {
                           case 'updateTable':
-                              return updateTable(id, attributes as never);
+                              return fns.updateTable(id, attributes as never);
                           case 'updateRelationship':
-                              return updateRelationship(
+                              return fns.updateRelationship(
                                   id,
                                   attributes as never
                               );
                           case 'updateDependency':
-                              return updateDependency(id, attributes as never);
+                              return fns.updateDependency(
+                                  id,
+                                  attributes as never
+                              );
                           case 'updateArea':
-                              return updateArea(id, attributes as never);
+                              return fns.updateArea(id, attributes as never);
                           case 'updateCustomType':
-                              return updateCustomType(id, attributes as never);
+                              return fns.updateCustomType(
+                                  id,
+                                  attributes as never
+                              );
                           case 'updateNote':
-                              return updateNote(id, attributes as never);
+                              return fns.updateNote(id, attributes as never);
                       }
                   }
                 : undefined;
@@ -198,17 +226,7 @@ export const ChartDBProvider: React.FC<
             socket.off('op', handleOp);
             socket.off('op:rejected', handleRejected);
         };
-    }, [
-        socket,
-        checkClobber,
-        toast,
-        updateTable,
-        updateRelationship,
-        updateDependency,
-        updateArea,
-        updateCustomType,
-        updateNote,
-    ]);
+    }, [socket, checkClobber, toast]);
 
     const defaultSchemaName = useMemo(
         () => defaultSchemas[databaseType],
@@ -2236,6 +2254,18 @@ export const ChartDBProvider: React.FC<
             diagramId,
         ]
     );
+
+    // Keeps the retry handler above (declared before these six exist) able
+    // to call the latest version of each without a TDZ reference in its
+    // effect dependency array — see retryUpdateFnsRef's declaration.
+    retryUpdateFnsRef.current = {
+        updateTable,
+        updateRelationship,
+        updateDependency,
+        updateArea,
+        updateCustomType,
+        updateNote,
+    };
 
     return (
         <chartDBContext.Provider
