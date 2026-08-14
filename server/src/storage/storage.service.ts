@@ -86,16 +86,21 @@ export class StorageService implements OnModuleInit {
                 ...attributes,
                 version: () => '"version" + 1',
             } as never)
-            .where('id = :id', { id });
+            .where('id = :id', { id })
+            .returning('*');
         if (expectedVersion !== undefined) {
             qb.andWhere('version = :expectedVersion', { expectedVersion });
         }
         const result = await qb.execute();
+        // RETURNING gives us the post-update row for free on the hot
+        // (successful write) path — no separate SELECT needed there. The
+        // conflict path still needs one: RETURNING comes back empty and we
+        // have to fetch the current row to tell the sender what actually won.
         if (expectedVersion !== undefined && result.affected === 0) {
             const current = await repo.findOneBy({ id } as never);
             throw new ConflictException({ message: 'version-mismatch', current });
         }
-        const row = await repo.findOneBy({ id } as never);
+        const row = (result.raw?.[0] as T | undefined) ?? (await repo.findOneBy({ id } as never));
         return row?.version ?? 0;
     }
 
