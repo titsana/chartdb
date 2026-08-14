@@ -4,6 +4,7 @@ import { Input } from '@/components/input/input';
 import { generateDBFieldSuffix, type DBField } from '@/lib/domain/db-field';
 import type { DatabaseType, DBTable } from '@/lib/domain';
 import { useUpdateTableField } from '@/hooks/use-update-table-field';
+import { useFieldLock } from '@/hooks/use-field-lock';
 import {
     Tooltip,
     TooltipContent,
@@ -42,6 +43,12 @@ export const TableEditModeField: React.FC<TableEditModeFieldProps> = React.memo(
 
         const inputRef = React.useRef<HTMLInputElement>(null);
 
+        const {
+            onFocus: onFieldNameFocus,
+            onBlur: onFieldNameBlur,
+            editors: fieldNameEditors,
+        } = useFieldLock(`Table:${table.id}:field:${field.id}:name`);
+
         const typeRequiresNotNull = requiresNotNull(field.type.name);
 
         // Animate the highlight after mount if focused
@@ -78,6 +85,13 @@ export const TableEditModeField: React.FC<TableEditModeFieldProps> = React.memo(
                                 <Input
                                     ref={inputRef}
                                     className="h-8 w-full !truncate bg-background focus-visible:ring-0"
+                                    style={
+                                        fieldNameEditors[0]
+                                            ? {
+                                                  boxShadow: `0 0 0 1.5px ${fieldNameEditors[0].color}`,
+                                              }
+                                            : undefined
+                                    }
                                     type="text"
                                     placeholder={t(
                                         'side_panel.tables_section.table.field_name'
@@ -86,10 +100,16 @@ export const TableEditModeField: React.FC<TableEditModeFieldProps> = React.memo(
                                     onChange={(e) =>
                                         handleNameChange(e.target.value)
                                     }
+                                    onFocus={onFieldNameFocus}
+                                    onBlur={onFieldNameBlur}
                                     autoFocus={focused}
                                 />
                             </TooltipTrigger>
-                            <TooltipContent>{fieldName}</TooltipContent>
+                            <TooltipContent>
+                                {fieldNameEditors.length > 0
+                                    ? `Editing: ${fieldNameEditors.map((e) => e.name).join(', ')}`
+                                    : fieldName}
+                            </TooltipContent>
                         </Tooltip>
                         {field.comments ? (
                             <Tooltip>

@@ -56,6 +56,13 @@ interface FollowMessage {
     targetSocketId: string | null;
 }
 
+interface FieldFocusMessage {
+    diagramId: string;
+    // "${EntityType}:${id}:${field}", same convention as the client's
+    // fieldKeysFor — null on blur, clearing the lock (mirrors FollowMessage).
+    key: string | null;
+}
+
 type OpHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
 // Same write surface StorageController exposes over REST, using the exact
@@ -346,6 +353,21 @@ export class CollaborationGateway
         client.to(message.diagramId).emit('follow', {
             socketId: client.id,
             targetSocketId: message.targetSocketId,
+        });
+    }
+
+    // Broadcast-only, not tracked in `rooms` — same gap as follow above: a
+    // client that joins mid-session won't see fields already locked by
+    // others, only ones focused afterward. Fine for a visual "someone's
+    // editing this" affordance, not a real lock.
+    @SubscribeMessage('field:focus')
+    handleFieldFocus(
+        @ConnectedSocket() client: Socket,
+        @MessageBody() message: FieldFocusMessage
+    ) {
+        client.to(message.diagramId).emit('field:focus', {
+            socketId: client.id,
+            key: message.key,
         });
     }
 }

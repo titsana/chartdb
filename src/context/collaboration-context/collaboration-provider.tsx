@@ -94,6 +94,10 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
     const [followingSocketId, setFollowingSocketId] = useState<string | null>(
         null
     );
+    // socketId -> "EntityType:id:field" the field currently focused there.
+    const [remoteFieldFocus, setRemoteFieldFocus] = useState<
+        Map<string, string>
+    >(new Map());
     const socketRef = useRef<Socket | null>(null);
     const ownEditsRef = useRef<Map<string, number>>(new Map());
     const versionsRef = useRef<Map<string, number>>(new Map());
@@ -180,6 +184,12 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                     setFollowingSocketId((prev) =>
                         prev === socketId ? null : prev
                     );
+                    setRemoteFieldFocus((prev) => {
+                        if (!prev.has(socketId)) return prev;
+                        const next = new Map(prev);
+                        next.delete(socketId);
+                        return next;
+                    });
                 }
             );
             socket.on(
@@ -287,6 +297,16 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                         return next;
                     })
             );
+            socket.on(
+                'field:focus',
+                ({ socketId, key }: { socketId: string; key: string | null }) =>
+                    setRemoteFieldFocus((prev) => {
+                        const next = new Map(prev);
+                        if (key) next.set(socketId, key);
+                        else next.delete(socketId);
+                        return next;
+                    })
+            );
         })();
 
         // ponytail: sweeps stale cursors on a fixed tick instead of a
@@ -318,6 +338,7 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             setRemoteViewports(new Map());
             setFollowMap(new Map());
             setFollowingSocketId(null);
+            setRemoteFieldFocus(new Map());
         };
     }, [enabled, diagramId, identity]);
 
@@ -446,6 +467,15 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
         socket.emit('follow', { diagramId, targetSocketId: null });
     }, [diagramId]);
 
+    const emitFieldFocus = useCallback(
+        (key: string | null) => {
+            const socket = socketRef.current;
+            if (!socket || !socket.connected || !diagramId) return;
+            socket.emit('field:focus', { diagramId, key });
+        },
+        [diagramId]
+    );
+
     const recordOwnEdit = useCallback(
         (op: string, args: Record<string, unknown>) => {
             const now = Date.now();
@@ -491,6 +521,8 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             followingSocketId,
             followUser,
             unfollowUser,
+            remoteFieldFocus,
+            emitFieldFocus,
             recordOwnEdit,
             checkClobber,
             seedVersions,
@@ -512,6 +544,8 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             followingSocketId,
             followUser,
             unfollowUser,
+            remoteFieldFocus,
+            emitFieldFocus,
             recordOwnEdit,
             checkClobber,
             seedVersions,

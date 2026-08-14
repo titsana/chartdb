@@ -50,6 +50,11 @@ export interface CollaborationContext {
     followingSocketId: string | null;
     followUser: (socketId: string) => void;
     unfollowUser: () => void;
+    // Who's focused on which field right now: socketId -> "EntityType:id:field"
+    // (same key convention as fieldKeysFor). Visual "someone's editing this"
+    // affordance only, not a real lock — see use-field-lock.ts.
+    remoteFieldFocus: Map<string, string>;
+    emitFieldFocus: (key: string | null) => void;
     // Field-level clobber tracking — every op this tab sends records the
     // fields it touched; every op this tab receives checks against that.
     recordOwnEdit: (op: string, args: Record<string, unknown>) => void;
@@ -80,6 +85,8 @@ export const collaborationInitialValue: CollaborationContext = {
     followingSocketId: null,
     followUser: emptyFn,
     unfollowUser: emptyFn,
+    remoteFieldFocus: new Map(),
+    emitFieldFocus: emptyFn,
     recordOwnEdit: emptyFn,
     checkClobber: (): string[] => [],
     seedVersions: emptyFn,

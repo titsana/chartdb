@@ -3,6 +3,7 @@ import { GripVertical, KeyRound } from 'lucide-react';
 import { Input } from '@/components/input/input';
 import { generateDBFieldSuffix, type DBField } from '@/lib/domain/db-field';
 import { useUpdateTableField } from '@/hooks/use-update-table-field';
+import { useFieldLock } from '@/hooks/use-field-lock';
 import {
     Tooltip,
     TooltipContent,
@@ -51,6 +52,12 @@ export const TableField: React.FC<TableFieldProps> = ({
         primaryKey,
     } = useUpdateTableField(table, field, updateField);
 
+    const {
+        onFocus: onFieldNameFocus,
+        onBlur: onFieldNameBlur,
+        editors: fieldNameEditors,
+    } = useFieldLock(`Table:${table.id}:field:${field.id}:name`);
+
     const style = {
         transform: CSS.Translate.toString(transform),
         transition,
@@ -84,6 +91,13 @@ export const TableField: React.FC<TableFieldProps> = ({
                         <TooltipTrigger asChild>
                             <Input
                                 className="h-8 w-full !truncate focus-visible:ring-0"
+                                style={
+                                    fieldNameEditors[0]
+                                        ? {
+                                              boxShadow: `0 0 0 1.5px ${fieldNameEditors[0].color}`,
+                                          }
+                                        : undefined
+                                }
                                 type="text"
                                 placeholder={t(
                                     'side_panel.tables_section.table.field_name'
@@ -92,10 +106,16 @@ export const TableField: React.FC<TableFieldProps> = ({
                                 onChange={(e) =>
                                     handleNameChange(e.target.value)
                                 }
+                                onFocus={onFieldNameFocus}
+                                onBlur={onFieldNameBlur}
                                 readOnly={readonly}
                             />
                         </TooltipTrigger>
-                        <TooltipContent>{field.name}</TooltipContent>
+                        <TooltipContent>
+                            {fieldNameEditors.length > 0
+                                ? `Editing: ${fieldNameEditors.map((e) => e.name).join(', ')}`
+                                : field.name}
+                        </TooltipContent>
                     </Tooltip>
                     {field.comments ? (
                         <Tooltip>

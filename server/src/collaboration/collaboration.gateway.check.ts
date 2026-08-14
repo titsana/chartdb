@@ -141,6 +141,31 @@ async function main() {
         );
     }
 
+    // 4. field:focus relay: broadcast-only to the room, tagged with the
+    // sender's socketId, sender excluded (client.to() never echoes back).
+    {
+        const gateway = new CollaborationGateway({} as never, {
+            get: () => undefined,
+        } as never);
+        const { socket, emitted, broadcast } = fakeSocket();
+
+        gateway.handleFieldFocus(socket as never, {
+            diagramId: 'd1',
+            key: 'Table:t1:name',
+        });
+
+        assert(emitted.length === 0, 'field:focus must not ack the sender');
+        assert(broadcast.length === 1, 'field:focus must broadcast once');
+        const payload = broadcast[0].payload as {
+            socketId: string;
+            key: string | null;
+        };
+        assert(
+            payload.key === 'Table:t1:name',
+            'broadcast must carry the focused key'
+        );
+    }
+
     console.log('OK: collaboration.gateway conflict routing behaves correctly');
 }
 

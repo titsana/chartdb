@@ -16,6 +16,7 @@ import { ColorPicker } from '@/components/color-picker/color-picker';
 import { Separator } from '@/components/separator/separator';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { useUpdateTable } from '@/hooks/use-update-table';
+import { useFieldLock } from '@/hooks/use-field-lock';
 import { useTranslation } from 'react-i18next';
 import { useLayout } from '@/hooks/use-layout';
 import { SelectBox } from '@/components/select-box/select-box';
@@ -45,6 +46,11 @@ export const TableEditMode: React.FC<TableEditModeProps> = React.memo(
         const { t } = useTranslation();
         const { openTableFromSidebar, selectSidebarSection } = useLayout();
         const { tableName, handleTableNameChange } = useUpdateTable(table);
+        const {
+            onFocus: onTableNameFocus,
+            onBlur: onTableNameBlur,
+            editors: tableNameEditors,
+        } = useFieldLock(`Table:${table.id}:name`);
         const [focusFieldId, setFocusFieldId] = useState<string | undefined>(
             focusFieldIdProp
         );
@@ -283,11 +289,25 @@ export const TableEditMode: React.FC<TableEditModeProps> = React.memo(
                         <Input
                             ref={inputRef}
                             className="h-6 flex-1 rounded-sm border-slate-600 bg-background text-sm"
+                            style={
+                                tableNameEditors[0]
+                                    ? {
+                                          boxShadow: `0 0 0 1.5px ${tableNameEditors[0].color}`,
+                                      }
+                                    : undefined
+                            }
+                            title={
+                                tableNameEditors.length > 0
+                                    ? `Editing: ${tableNameEditors.map((e) => e.name).join(', ')}`
+                                    : undefined
+                            }
                             placeholder="Table name"
                             value={tableName}
                             onChange={(e) =>
                                 handleTableNameChange(e.target.value)
                             }
+                            onFocus={onTableNameFocus}
+                            onBlur={onTableNameBlur}
                         />
                     </div>
                     <div className="flex shrink-0 flex-row gap-1">
