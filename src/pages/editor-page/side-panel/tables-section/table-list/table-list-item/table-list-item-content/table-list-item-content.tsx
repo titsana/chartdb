@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     Plus,
     FileType2,
@@ -38,6 +38,7 @@ import {
     verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { ColorPicker } from '@/components/color-picker/color-picker';
+import { useDebounce } from '@/hooks/use-debounce-v2';
 
 type AccordionItemValue = 'fields' | 'indexes' | 'checks';
 
@@ -68,6 +69,32 @@ export const TableListItemContent: React.FC<TableListItemContentProps> = ({
         AccordionItemValue[]
     >(['fields']);
     const sensors = useSensors(useSensor(PointerSensor));
+
+    // Local buffer + debounce so typing in the comments box doesn't fire an
+    // updateTable (WS op + DB write) per keystroke — same pattern as table
+    // name / field name (see use-update-table.ts / use-update-table-field.ts).
+    const [localComments, setLocalComments] = useState(table.comments ?? '');
+    useEffect(() => {
+        setLocalComments(table.comments ?? '');
+    }, [table.comments]);
+    const debouncedCommentsUpdate = useDebounce(
+        useCallback(
+            (value: string) => {
+                if (value !== (table.comments ?? '')) {
+                    updateTable(table.id, { comments: value });
+                }
+            },
+            [updateTable, table.id, table.comments]
+        ),
+        500
+    );
+    const handleCommentsChange = useCallback(
+        (value: string) => {
+            setLocalComments(value);
+            debouncedCommentsUpdate(value);
+        },
+        [debouncedCommentsUpdate]
+    );
 
     // Create a memoized version of the field updater that handles primary key logic
     const handleFieldUpdate = useCallback(
@@ -395,11 +422,9 @@ export const TableListItemContent: React.FC<TableListItemContentProps> = ({
                     </AccordionTrigger>
                     <AccordionContent className="pb-0 pt-1">
                         <Textarea
-                            value={table.comments ?? undefined}
+                            value={localComments}
                             onChange={(e) =>
-                                updateTable(table.id, {
-                                    comments: e.target.value,
-                                })
+                                handleCommentsChange(e.target.value)
                             }
                             placeholder={t(
                                 'side_panel.tables_section.table.no_comments'
