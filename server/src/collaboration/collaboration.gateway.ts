@@ -156,7 +156,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
 }
 
 @Injectable()
-@WebSocketGateway({ cors: { origin: true, credentials: true } })
+@WebSocketGateway({ cors: false })
 export class CollaborationGateway
     implements OnGatewayConnection, OnGatewayDisconnect
 {
@@ -212,6 +212,7 @@ export class CollaborationGateway
         }
 
         client.join(diagramId);
+        client.data.diagramId = diagramId;
         const presence = this.resolvePresence(client);
         if (!this.rooms.has(diagramId)) this.rooms.set(diagramId, new Map());
         this.rooms.get(diagramId)!.set(client.id, presence);
@@ -241,6 +242,13 @@ export class CollaborationGateway
         @ConnectedSocket() client: Socket,
         @MessageBody() message: OpMessage
     ) {
+        // Trust the diagram the socket actually joined, not whatever the
+        // payload claims — a stale/buggy/malicious diagramId here would
+        // otherwise route the broadcast or write to the wrong diagram.
+        message.diagramId = client.data.diagramId;
+        if ('diagramId' in message.args) {
+            message.args.diagramId = client.data.diagramId;
+        }
         const handler = this.ops[message.op];
         if (!handler) return { ok: false, error: `Unknown op: ${message.op}` };
         let newVersion: unknown;
@@ -305,7 +313,7 @@ export class CollaborationGateway
         @ConnectedSocket() client: Socket,
         @MessageBody() message: DragMessage
     ) {
-        client.to(message.diagramId).emit('drag', message);
+        client.to(client.data.diagramId).emit('drag', message);
     }
 
     // Broadcast-only — live cursor position, never persisted.
@@ -315,7 +323,7 @@ export class CollaborationGateway
         @MessageBody() message: CursorMessage
     ) {
         client
-            .to(message.diagramId)
+            .to(client.data.diagramId)
             .emit('cursor', { socketId: client.id, ...message });
     }
 
@@ -326,7 +334,7 @@ export class CollaborationGateway
         @MessageBody() message: SelectionMessage
     ) {
         client
-            .to(message.diagramId)
+            .to(client.data.diagramId)
             .emit('selection', { socketId: client.id, ...message });
     }
 
@@ -337,7 +345,7 @@ export class CollaborationGateway
         @MessageBody() message: ViewportMessage
     ) {
         client
-            .to(message.diagramId)
+            .to(client.data.diagramId)
             .emit('viewport', { socketId: client.id, ...message });
     }
 
@@ -350,7 +358,7 @@ export class CollaborationGateway
         @ConnectedSocket() client: Socket,
         @MessageBody() message: FollowMessage
     ) {
-        client.to(message.diagramId).emit('follow', {
+        client.to(client.data.diagramId).emit('follow', {
             socketId: client.id,
             targetSocketId: message.targetSocketId,
         });
@@ -365,7 +373,7 @@ export class CollaborationGateway
         @ConnectedSocket() client: Socket,
         @MessageBody() message: FieldFocusMessage
     ) {
-        client.to(message.diagramId).emit('field:focus', {
+        client.to(client.data.diagramId).emit('field:focus', {
             socketId: client.id,
             key: message.key,
         });

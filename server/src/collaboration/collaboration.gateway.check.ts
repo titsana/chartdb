@@ -17,6 +17,7 @@ function fakeSocket() {
         emitted,
         broadcast,
         socket: {
+            data: { diagramId: 'd1' },
             emit: (event: string, payload: unknown) =>
                 emitted.push({ event, payload }),
             to: () => ({
