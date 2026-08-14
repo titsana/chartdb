@@ -759,13 +759,15 @@ export const ChartDBProvider: React.FC<
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
+            const { fields, indexes } = updateTableFn(table);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
+                // Only fields/indexes actually changed — sending the whole
+                // table (name, x, y, color, comments...) would bloat the WS
+                // payload and DB write for no reason on a wide table.
                 db.updateTable({
                     id: tableId,
-                    attributes: {
-                        ...updateTableFn(table),
-                    },
+                    attributes: { fields, indexes },
                 }),
             ]);
 
@@ -832,13 +834,13 @@ export const ChartDBProvider: React.FC<
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
+            const { fields, indexes } = updateTableFn(table);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
+                // Only fields/indexes actually changed, see updateField.
                 db.updateTable({
                     id: tableId,
-                    attributes: {
-                        ...updateTableFn(table),
-                    },
+                    attributes: { fields, indexes },
                 }),
             ]);
 
@@ -873,10 +875,10 @@ export const ChartDBProvider: React.FC<
             setTables((tables) => {
                 return tables.map((table) => {
                     if (table.id === tableId) {
+                        // Only fields changed, see updateField.
                         db.updateTable({
                             id: tableId,
                             attributes: {
-                                ...table,
                                 fields: [...table.fields, field],
                             },
                         });
@@ -980,10 +982,10 @@ export const ChartDBProvider: React.FC<
             setDiagramUpdatedAt(updatedAt);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
+                // Only indexes changed, see updateField.
                 db.updateTable({
                     id: tableId,
                     attributes: {
-                        ...dbTable,
                         indexes: [...dbTable.indexes, index],
                     },
                 }),
@@ -1034,10 +1036,10 @@ export const ChartDBProvider: React.FC<
             setDiagramUpdatedAt(updatedAt);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
+                // Only indexes changed, see updateField.
                 db.updateTable({
                     id: tableId,
                     attributes: {
-                        ...dbTable,
                         indexes: dbTable.indexes.filter(
                             (i) => i.id !== indexId
                         ),
@@ -1106,10 +1108,10 @@ export const ChartDBProvider: React.FC<
             setDiagramUpdatedAt(updatedAt);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
+                // Only indexes changed, see updateField.
                 db.updateTable({
                     id: tableId,
                     attributes: {
-                        ...dbTable,
                         indexes: dbTable.indexes.map((i) =>
                             i.id === indexId ? { ...i, ...index } : i
                         ),
@@ -1162,10 +1164,10 @@ export const ChartDBProvider: React.FC<
                         id: diagramId,
                         attributes: { updatedAt },
                     }),
+                    // Only checkConstraints changed, see updateField.
                     db.updateTable({
                         id: tableId,
                         attributes: {
-                            ...dbTable,
                             checkConstraints: [
                                 ...(dbTable.checkConstraints ?? []),
                                 constraint,
@@ -1239,10 +1241,10 @@ export const ChartDBProvider: React.FC<
                         id: diagramId,
                         attributes: { updatedAt },
                     }),
+                    // Only checkConstraints changed, see updateField.
                     db.updateTable({
                         id: tableId,
                         attributes: {
-                            ...dbTable,
                             checkConstraints: (
                                 dbTable.checkConstraints ?? []
                             ).filter((c) => c.id !== constraintId),
@@ -1304,10 +1306,10 @@ export const ChartDBProvider: React.FC<
                         id: diagramId,
                         attributes: { updatedAt },
                     }),
+                    // Only checkConstraints changed, see updateField.
                     db.updateTable({
                         id: tableId,
                         attributes: {
-                            ...dbTable,
                             checkConstraints: (
                                 dbTable.checkConstraints ?? []
                             ).map((c) =>
