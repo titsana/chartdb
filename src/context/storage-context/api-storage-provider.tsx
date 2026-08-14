@@ -3,6 +3,7 @@ import type { StorageContext } from './storage-context';
 import { storageContext } from './storage-context';
 import type { Diagram } from '@/lib/domain/diagram';
 import type { DBTable } from '@/lib/domain/db-table';
+import type { DBField } from '@/lib/domain/db-field';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
 import type { ChartDBConfig } from '@/lib/domain/config';
 import type { DBDependency } from '@/lib/domain/db-dependency';
@@ -269,6 +270,48 @@ export function useApiStorage(): StorageContext {
                 method: 'DELETE',
             });
         }, []);
+
+    const addField: StorageContext['addField'] = useCallback(
+        async ({ diagramId, tableId, field }) => {
+            await apiFetch(`/diagrams/${diagramId}/tables/${tableId}/fields`, {
+                method: 'POST',
+                body: JSON.stringify(field),
+            });
+        },
+        []
+    );
+
+    const getField: StorageContext['getField'] = useCallback(
+        async ({ diagramId, tableId, id }) => {
+            return await apiFetch<DBField | undefined>(
+                `/diagrams/${diagramId}/tables/${tableId}/fields/${id}`
+            );
+        },
+        []
+    );
+
+    const updateField: StorageContext['updateField'] = useCallback(
+        async ({ id, attributes }) => {
+            await apiFetch(`/fields/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(attributes),
+            });
+        },
+        []
+    );
+
+    const deleteField: StorageContext['deleteField'] = useCallback(
+        async ({ diagramId, tableId, id, tableAttributes }) => {
+            await apiFetch(
+                `/diagrams/${diagramId}/tables/${tableId}/fields/${id}`,
+                {
+                    method: 'DELETE',
+                    body: JSON.stringify(tableAttributes),
+                }
+            );
+        },
+        []
+    );
 
     const addRelationship: StorageContext['addRelationship'] = useCallback(
         async ({ diagramId, relationship }) => {
@@ -555,6 +598,10 @@ export function useApiStorage(): StorageContext {
             deleteTable,
             listTables,
             deleteDiagramTables,
+            addField,
+            getField,
+            updateField,
+            deleteField,
             addRelationship,
             getRelationship,
             updateRelationship,
@@ -608,6 +655,10 @@ export function useApiStorage(): StorageContext {
             deleteTable,
             listTables,
             deleteDiagramTables,
+            addField,
+            getField,
+            updateField,
+            deleteField,
             addRelationship,
             getRelationship,
             updateRelationship,

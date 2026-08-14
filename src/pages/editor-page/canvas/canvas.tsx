@@ -784,7 +784,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
                     // Get target edge counts for this table's fields
                     const tableTargetEdgeCounts: Record<string, number> = {};
-                    table.fields.forEach((field) => {
+                    table.fields?.forEach((field) => {
                         if (targetEdgeCountsByField[field.id]) {
                             tableTargetEdgeCounts[field.id] =
                                 targetEdgeCountsByField[field.id];

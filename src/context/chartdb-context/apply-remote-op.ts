@@ -1,4 +1,5 @@
 import type { DBTable } from '@/lib/domain/db-table';
+import type { DBField } from '@/lib/domain/db-field';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
 import type { DBDependency } from '@/lib/domain/db-dependency';
 import type { Area } from '@/lib/domain/area';
@@ -43,6 +44,43 @@ function remove<T extends { id: string }>(list: T[], id: string): T[] {
     return list.filter((x) => x.id !== id);
 }
 
+// Fields stay nested inside their table (client state wasn't normalized for
+// this change, see chartdb-provider.tsx) — these patch into `table.fields`
+// by tableId instead of operating on a top-level list.
+function upsertField(
+    tables: DBTable[],
+    tableId: string,
+    field: DBField
+): DBTable[] {
+    return tables.map((t) =>
+        t.id === tableId ? { ...t, fields: upsert(t.fields, field) } : t
+    );
+}
+
+function patchField(
+    tables: DBTable[],
+    tableId: string,
+    id: string,
+    attributes: Partial<DBField>
+): DBTable[] {
+    return tables.map((t) =>
+        t.id === tableId ? { ...t, fields: patch(t.fields, id, attributes) } : t
+    );
+}
+
+function deleteFieldFrom(
+    tables: DBTable[],
+    tableId: string,
+    id: string,
+    tableAttributes?: Partial<DBTable>
+): DBTable[] {
+    return tables.map((t) =>
+        t.id === tableId
+            ? { ...t, ...tableAttributes, fields: remove(t.fields, id) }
+            : t
+    );
+}
+
 // Minimal state patchers for ops broadcast from other clients — no
 // persistence (the sender's server round-trip already persisted this) and no
 // undo-stack entry (undo/redo is local-only, see collaboration design docs).
@@ -72,6 +110,32 @@ export function applyRemoteOp(
             return;
         case 'deleteTable':
             s.setTables((prev) => remove(prev, args.id as string));
+            return;
+
+        case 'addField': {
+            const field = args.field as DBField & { tableId: string };
+            s.setTables((prev) => upsertField(prev, field.tableId, field));
+            return;
+        }
+        case 'updateField':
+            s.setTables((prev) =>
+                patchField(
+                    prev,
+                    args.tableId as string,
+                    args.id as string,
+                    args.attributes as Partial<DBField>
+                )
+            );
+            return;
+        case 'deleteField':
+            s.setTables((prev) =>
+                deleteFieldFrom(
+                    prev,
+                    args.tableId as string,
+                    args.id as string,
+                    args.tableAttributes as Partial<DBTable>
+                )
+            );
             return;
 
         case 'addRelationship':

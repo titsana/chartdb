@@ -3,6 +3,9 @@ import type { Diagram } from '@/lib/domain/diagram';
 import { emptyFn } from '@/lib/utils';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
 import type { DBTable } from '@/lib/domain/db-table';
+import type { DBField } from '@/lib/domain/db-field';
+import type { DBIndex } from '@/lib/domain/db-index';
+import type { DBCheckConstraint } from '@/lib/domain/db-check-constraint';
 import type { ChartDBConfig } from '@/lib/domain/config';
 import type { DBDependency } from '@/lib/domain/db-dependency';
 import type { Area } from '@/lib/domain/area';
@@ -74,6 +77,35 @@ export interface StorageContext {
     deleteTable: (params: { diagramId: string; id: string }) => Promise<void>;
     listTables: (diagramId: string) => Promise<DBTable[]>;
     deleteDiagramTables: (diagramId: string) => Promise<void>;
+
+    // Field operations
+    addField: (params: {
+        diagramId: string;
+        tableId: string;
+        field: DBField;
+    }) => Promise<void>;
+    getField: (params: {
+        diagramId: string;
+        tableId: string;
+        id: string;
+    }) => Promise<DBField | undefined>;
+    updateField: (params: {
+        // Not needed server-side (the field row already knows its table),
+        // but the local Dexie provider stores fields nested inside the
+        // table row and needs it to find which row to patch.
+        tableId: string;
+        id: string;
+        attributes: Partial<DBField>;
+    }) => Promise<void>;
+    deleteField: (params: {
+        diagramId: string;
+        tableId: string;
+        id: string;
+        tableAttributes: {
+            indexes: DBIndex[];
+            checkConstraints?: DBCheckConstraint[] | null;
+        };
+    }) => Promise<void>;
 
     // Relationships operations
     addRelationship: (params: {
@@ -190,6 +222,11 @@ export const storageInitialValue: StorageContext = {
     deleteTable: emptyFn,
     listTables: emptyFn,
     deleteDiagramTables: emptyFn,
+
+    addField: emptyFn,
+    getField: emptyFn,
+    updateField: emptyFn,
+    deleteField: emptyFn,
 
     addRelationship: emptyFn,
     getRelationship: emptyFn,

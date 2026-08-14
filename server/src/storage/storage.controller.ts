@@ -169,6 +169,45 @@ export class StorageController {
         return this.storage.deleteDiagramTables(diagramId);
     }
 
+    // Fields
+    @Post('diagrams/:diagramId/tables/:tableId/fields')
+    addField(
+        @Param('diagramId') diagramId: string,
+        @Param('tableId') tableId: string,
+        @Body() body: Record<string, unknown>
+    ) {
+        return this.storage.addField(diagramId, { ...body, tableId } as never);
+    }
+
+    @Get('diagrams/:diagramId/tables/:tableId/fields/:id')
+    getField(@Param('tableId') tableId: string, @Param('id') id: string) {
+        return this.storage.getField(tableId, id);
+    }
+
+    @Patch('fields/:id')
+    updateField(
+        @Param('id') id: string,
+        @Body() body: Record<string, unknown>
+    ) {
+        return this.storage.updateField(id, body);
+    }
+
+    @Delete('diagrams/:diagramId/tables/:tableId/fields/:id')
+    @HttpCode(204)
+    deleteField(
+        @Param('diagramId') diagramId: string,
+        @Param('tableId') tableId: string,
+        @Param('id') id: string,
+        @Body() body: Record<string, unknown>
+    ) {
+        return this.storage.deleteField(diagramId, tableId, id, body);
+    }
+
+    @Get('diagrams/:diagramId/tables/:tableId/fields')
+    listFields(@Param('tableId') tableId: string) {
+        return this.storage.listFields(tableId);
+    }
+
     // Relationships
     @Post('diagrams/:diagramId/relationships')
     addRelationship(

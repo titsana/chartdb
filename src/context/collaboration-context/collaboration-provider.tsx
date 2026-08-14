@@ -29,6 +29,8 @@ const VERSIONED_UPDATE_OPS = new Set([
     'updateTable',
     'putTable',
     'deleteTable',
+    'updateField',
+    'deleteField',
     'updateRelationship',
     'deleteRelationship',
     'updateDependency',

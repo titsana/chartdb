@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DiagramEntity } from '../entities/diagram.entity';
 import { TableEntity } from '../entities/table.entity';
+import { FieldEntity } from '../entities/field.entity';
 import { RelationshipEntity } from '../entities/relationship.entity';
 import { DependencyEntity } from '../entities/dependency.entity';
 import { AreaEntity } from '../entities/area.entity';
@@ -18,6 +19,7 @@ import { StorageService } from './storage.service';
         TypeOrmModule.forFeature([
             DiagramEntity,
             TableEntity,
+            FieldEntity,
             RelationshipEntity,
             DependencyEntity,
             AreaEntity,

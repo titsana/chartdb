@@ -640,6 +640,7 @@ export const ChartDBProvider: React.FC<
             updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[],
             options = { updateHistory: true, forceOverride: false }
         ) => {
+            console.log('updateTablesState called with options:', options);
             const updateTables = (prevTables: DBTable[]) => {
                 const updatedTables = updateFn(prevTables);
                 if (options.forceOverride) {
@@ -817,17 +818,25 @@ export const ChartDBProvider: React.FC<
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
-            const { fields, indexes } = updateTableFn(table);
-            await Promise.all([
+            const { indexes } = updateTableFn(table);
+            const writes = [
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                // Only fields/indexes actually changed — sending the whole
-                // table (name, x, y, color, comments...) would bloat the WS
-                // payload and DB write for no reason on a wide table.
-                db.updateTable({
-                    id: tableId,
-                    attributes: { fields, indexes },
-                }),
-            ]);
+                // The field itself is now its own versioned row — saving it
+                // no longer false-conflicts with someone else editing a
+                // different field on this same table (see the fields
+                // entity split).
+                db.updateField({ tableId, id: fieldId, attributes: field }),
+            ];
+            // Most field edits don't change indexes (e.g. renaming a
+            // non-key column) — only bump the table's own version when they
+            // actually did, so unrelated concurrent table edits don't
+            // false-conflict either.
+            if (JSON.stringify(indexes) !== JSON.stringify(table.indexes)) {
+                writes.push(
+                    db.updateTable({ id: tableId, attributes: { indexes } })
+                );
+            }
+            await Promise.all(writes);
 
             if (!!prevField && options.updateHistory) {
                 addUndoAction({
@@ -895,12 +904,17 @@ export const ChartDBProvider: React.FC<
             const updatedTable = updateTableFn(table);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                // Only fields/indexes actually changed, see updateField.
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        fields: updatedTable.fields,
+                // Deleting the field row and stripping it out of the
+                // table's indexes/checkConstraints happens in one DB
+                // transaction server-side (see StorageService.deleteField)
+                // so a crash between the two can't leave a dangling ref.
+                db.deleteField({
+                    diagramId,
+                    tableId,
+                    id: fieldId,
+                    tableAttributes: {
                         indexes: updatedTable.indexes,
+                        checkConstraints: updatedTable.checkConstraints,
                     },
                 }),
             ]);
@@ -936,13 +950,7 @@ export const ChartDBProvider: React.FC<
             setTables((tables) => {
                 return tables.map((table) => {
                     if (table.id === tableId) {
-                        // Only fields changed, see updateField.
-                        db.updateTable({
-                            id: tableId,
-                            attributes: {
-                                fields: [...table.fields, field],
-                            },
-                        });
+                        db.addField({ diagramId, tableId, field });
 
                         return { ...table, fields: [...table.fields, field] };
                     }

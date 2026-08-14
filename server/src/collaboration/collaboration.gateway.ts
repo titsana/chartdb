@@ -70,6 +70,7 @@ type OpHandler = (args: Record<string, unknown>) => Promise<unknown>;
 const RESTORE_OPS: Record<string, { addOp: string; argKey: string }> = {
     putTable: { addOp: 'addTable', argKey: 'table' },
     deleteTable: { addOp: 'addTable', argKey: 'table' },
+    deleteField: { addOp: 'addField', argKey: 'field' },
     deleteRelationship: { addOp: 'addRelationship', argKey: 'relationship' },
     deleteDependency: { addOp: 'addDependency', argKey: 'dependency' },
     deleteArea: { addOp: 'addArea', argKey: 'area' },
@@ -101,6 +102,22 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
             storage.deleteTable(
                 diagramId as string,
                 id as string,
+                version as number | undefined
+            ),
+        addField: ({ diagramId, field }) =>
+            storage.addField(diagramId as string, field as never),
+        updateField: ({ id, attributes, version }) =>
+            storage.updateField(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
+        deleteField: ({ diagramId, tableId, id, tableAttributes, version }) =>
+            storage.deleteField(
+                diagramId as string,
+                tableId as string,
+                id as string,
+                tableAttributes as never,
                 version as number | undefined
             ),
         addRelationship: ({ diagramId, relationship }) =>
@@ -308,11 +325,24 @@ export class CollaborationGateway
                     // the row either way.
                     const restore = RESTORE_OPS[message.op];
                     if (restore) {
+                        // `current` is the raw entity row — for tables that
+                        // no longer includes `fields` (split into its own
+                        // entity), and the client's addTable handler does a
+                        // full replace, not a merge. Re-hydrate it the same
+                        // way a normal read would, so a rejected put/delete
+                        // doesn't wipe the table's fields on restore.
+                        const restored =
+                            restore.addOp === 'addTable'
+                                ? (await this.storage.getTable(
+                                      message.diagramId,
+                                      current.id
+                                  )) ?? current
+                                : current;
                         client.emit('op:rejected', {
                             op: restore.addOp,
                             args: {
                                 diagramId: message.diagramId,
-                                [restore.argKey]: current,
+                                [restore.argKey]: restored,
                             },
                             version: current.version,
                         });

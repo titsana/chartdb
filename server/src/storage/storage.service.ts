@@ -4,6 +4,7 @@ import { ILike, IsNull, Not, type Repository } from 'typeorm';
 import { DiagramEntity } from '../entities/diagram.entity';
 import { GroupEntity } from '../entities/group.entity';
 import { TableEntity } from '../entities/table.entity';
+import { FieldEntity } from '../entities/field.entity';
 import { RelationshipEntity } from '../entities/relationship.entity';
 import { DependencyEntity } from '../entities/dependency.entity';
 import { AreaEntity } from '../entities/area.entity';
@@ -38,6 +39,8 @@ export class StorageService implements OnModuleInit {
         private readonly diagrams: Repository<DiagramEntity>,
         @InjectRepository(TableEntity)
         private readonly tables: Repository<TableEntity>,
+        @InjectRepository(FieldEntity)
+        private readonly fields: Repository<FieldEntity>,
         @InjectRepository(RelationshipEntity)
         private readonly relationships: Repository<RelationshipEntity>,
         @InjectRepository(DependencyEntity)
@@ -59,6 +62,11 @@ export class StorageService implements OnModuleInit {
     // ponytail: mirrors the Dexie client's dexieDB.on('ready') seed — the
     // client's useDiagramLoader treats config===undefined as "still loading",
     // so a config row must always exist after first boot or it hangs forever
+    // ponytail: fields data migration lives in scripts/backfill-fields.sql,
+    // run manually against the DB before deploying this code — see that
+    // file for why it can't be an onModuleInit step (synchronize=true drops
+    // the old tables.fields column on this code's first boot, before any
+    // in-app migration would get a chance to read it).
     async onModuleInit() {
         const existing = await this.config.findOneBy({ id: 1 });
         if (!existing) {
@@ -132,24 +140,39 @@ export class StorageService implements OnModuleInit {
     }
 
     // Tables
-    async addTable(diagramId: string, table: Partial<TableEntity>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async addTable(diagramId: string, table: Partial<TableEntity> & { fields?: any[] }) {
+        const { fields, ...tableAttrs } = table;
         // ponytail: save() upserts by id — insert() alone conflicts with a
         // soft-deleted row sharing the same id (see deletedAt on this entity)
         await this.tables.save({
-            ...table,
+            ...tableAttrs,
             diagramId,
             deletedAt: null,
         } as TableEntity);
+
+        if (fields?.length) {
+            await this.fields.insert(
+                fields.map((field, order) => ({
+                    ...field,
+                    diagramId,
+                    tableId: table.id as string,
+                    order,
+                    version: 0,
+                    deletedAt: null,
+                }))
+            );
+        }
     }
 
     async getTable(diagramId: string, id: string) {
-        return (
-            (await this.tables.findOneBy({
-                id,
-                diagramId,
-                deletedAt: IsNull(),
-            })) ?? undefined
-        );
+        const table = await this.tables.findOneBy({
+            id,
+            diagramId,
+            deletedAt: IsNull(),
+        });
+        if (!table) return undefined;
+        return { ...table, fields: await this.listFields(id) };
     }
 
     async updateTable(
@@ -165,18 +188,39 @@ export class StorageService implements OnModuleInit {
     // deleted, see chartdb-provider.tsx) always targets a table that already
     // exists. If a future caller needs putTable to insert a missing row,
     // it'll need its own upsert-then-check path.
+    // `fields` is a full replace of that table's field set (hard delete +
+    // reinsert, not soft-delete — this is the table's own fields being
+    // replaced wholesale, not fields removed elsewhere referencing it).
     async putTable(
         diagramId: string,
-        table: TableEntity,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        table: TableEntity & { fields?: any[] },
         expectedVersion?: number
     ) {
-        const { id, ...attributes } = table;
-        return this.versionedUpdate(
-            this.tables,
-            id,
-            { ...attributes, diagramId } as Partial<TableEntity>,
-            expectedVersion
-        );
+        const { id, fields, ...attributes } = table;
+        return this.tables.manager.transaction(async (manager) => {
+            const newVersion = await this.versionedUpdate(
+                manager.getRepository(TableEntity),
+                id,
+                { ...attributes, diagramId } as Partial<TableEntity>,
+                expectedVersion
+            );
+            const fieldsRepo = manager.getRepository(FieldEntity);
+            await fieldsRepo.delete({ tableId: id });
+            if (fields?.length) {
+                await fieldsRepo.insert(
+                    fields.map((field, order) => ({
+                        ...field,
+                        diagramId,
+                        tableId: id,
+                        order,
+                        version: 0,
+                        deletedAt: null,
+                    }))
+                );
+            }
+            return newVersion;
+        });
     }
 
     async deleteTable(
@@ -184,20 +228,116 @@ export class StorageService implements OnModuleInit {
         id: string,
         expectedVersion?: number
     ) {
-        return this.versionedUpdate(
-            this.tables,
-            id,
-            { deletedAt: new Date(), diagramId } as Partial<TableEntity>,
-            expectedVersion
-        );
+        return this.tables.manager.transaction(async (manager) => {
+            const newVersion = await this.versionedUpdate(
+                manager.getRepository(TableEntity),
+                id,
+                { deletedAt: new Date(), diagramId } as Partial<TableEntity>,
+                expectedVersion
+            );
+            await manager
+                .getRepository(FieldEntity)
+                .update({ tableId: id }, { deletedAt: new Date() });
+            return newVersion;
+        });
     }
 
     async listTables(diagramId: string) {
-        return await this.tables.findBy({ diagramId, deletedAt: IsNull() });
+        const tables = await this.tables.findBy({
+            diagramId,
+            deletedAt: IsNull(),
+        });
+        return await Promise.all(
+            tables.map(async (table) => ({
+                ...table,
+                fields: await this.listFields(table.id),
+            }))
+        );
     }
 
     async deleteDiagramTables(diagramId: string) {
         await this.tables.update({ diagramId }, { deletedAt: new Date() });
+        await this.fields.update({ diagramId }, { deletedAt: new Date() });
+    }
+
+    // Fields
+    // tableId comes from `field` itself (like every other entity here, the
+    // full row already carries the ids it needs) — keeps this callable
+    // symmetrically from both the REST route (tableId in the URL, merged
+    // into the body) and the gateway's op-rejection restore path (which only
+    // has {diagramId, field}, the same shape addTable/addRelationship use).
+    async addField(
+        diagramId: string,
+        field: Partial<FieldEntity> & { tableId: string }
+    ) {
+        const { tableId } = field;
+        const { max } = (await this.fields
+            .createQueryBuilder('field')
+            .select('MAX(field.order)', 'max')
+            .where('field.tableId = :tableId', { tableId })
+            .getRawOne()) as { max: number | null };
+        await this.fields.save({
+            ...field,
+            diagramId,
+            order: (max ?? -1) + 1,
+            deletedAt: null,
+        } as FieldEntity);
+    }
+
+    async getField(tableId: string, id: string) {
+        return (
+            (await this.fields.findOneBy({
+                id,
+                tableId,
+                deletedAt: IsNull(),
+            })) ?? undefined
+        );
+    }
+
+    async updateField(
+        id: string,
+        attributes: Partial<FieldEntity>,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(this.fields, id, attributes, expectedVersion);
+    }
+
+    // Removing a field is two writes — soft-delete the field row and strip
+    // its references from the table's indexes/checkConstraints jsonb — done
+    // in one transaction so a crash between them can't leave a dangling
+    // reference. tableAttributes is the caller-precomputed post-removal
+    // indexes/checkConstraints (chartdb-provider already computes this via
+    // getTableIndexesWithPrimaryKey). No expectedVersion on the table side:
+    // this is a cascade of the field's own version-checked delete, not a
+    // separate user-supplied edit.
+    async deleteField(
+        diagramId: string,
+        tableId: string,
+        id: string,
+        tableAttributes: Partial<TableEntity>,
+        expectedVersion?: number
+    ) {
+        return this.fields.manager.transaction(async (manager) => {
+            const newVersion = await this.versionedUpdate(
+                manager.getRepository(FieldEntity),
+                id,
+                { deletedAt: new Date(), diagramId, tableId } as Partial<FieldEntity>,
+                expectedVersion
+            );
+            await this.versionedUpdate(
+                manager.getRepository(TableEntity),
+                tableId,
+                { ...tableAttributes, diagramId } as Partial<TableEntity>
+            );
+            return newVersion;
+        });
+    }
+
+    async listFields(tableId: string) {
+        return await this.fields.find({
+            where: { tableId, deletedAt: IsNull() },
+            order: { order: 'ASC' },
+        });
     }
 
     // Relationships
@@ -567,6 +707,7 @@ export class StorageService implements OnModuleInit {
             const newId = attributes.id;
             await Promise.all([
                 this.tables.update({ diagramId: id }, { diagramId: newId }),
+                this.fields.update({ diagramId: id }, { diagramId: newId }),
                 this.relationships.update(
                     { diagramId: id },
                     { diagramId: newId }
@@ -590,6 +731,7 @@ export class StorageService implements OnModuleInit {
         await Promise.all([
             this.diagrams.update(id, { deletedAt }),
             this.tables.update({ diagramId: id }, { deletedAt }),
+            this.fields.update({ diagramId: id }, { deletedAt }),
             this.relationships.update({ diagramId: id }, { deletedAt }),
             this.dependencies.update({ diagramId: id }, { deletedAt }),
             this.areas.update({ diagramId: id }, { deletedAt }),

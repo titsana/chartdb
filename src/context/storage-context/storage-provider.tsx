@@ -378,6 +378,54 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
         [db]
     );
 
+    // Dexie/local-only mode keeps fields nested inside the table row (no
+    // concurrent writers to conflict with locally) — these are thin
+    // wrappers over that nested array, just to keep the StorageContext
+    // interface uniform across both storage backends.
+    const addField: StorageContext['addField'] = useCallback(
+        async ({ tableId, field }) => {
+            const table = await db.db_tables.get(tableId);
+            if (!table) return;
+            await db.db_tables.update(tableId, {
+                fields: [...table.fields, field],
+            });
+        },
+        [db]
+    );
+
+    const getField: StorageContext['getField'] = useCallback(
+        async ({ tableId, id }) => {
+            const table = await db.db_tables.get(tableId);
+            return table?.fields.find((f) => f.id === id);
+        },
+        [db]
+    );
+
+    const updateField: StorageContext['updateField'] = useCallback(
+        async ({ tableId, id, attributes }) => {
+            const table = await db.db_tables.get(tableId);
+            if (!table) return;
+            await db.db_tables.update(tableId, {
+                fields: table.fields.map((f) =>
+                    f.id === id ? { ...f, ...attributes } : f
+                ),
+            });
+        },
+        [db]
+    );
+
+    const deleteField: StorageContext['deleteField'] = useCallback(
+        async ({ tableId, id, tableAttributes }) => {
+            const table = await db.db_tables.get(tableId);
+            if (!table) return;
+            await db.db_tables.update(tableId, {
+                fields: table.fields.filter((f) => f.id !== id),
+                ...tableAttributes,
+            });
+        },
+        [db]
+    );
+
     const addRelationship: StorageContext['addRelationship'] = useCallback(
         async ({ diagramId, relationship }) => {
             await db.db_relationships.add({
@@ -971,6 +1019,10 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
                 putTable,
                 deleteTable,
                 listTables,
+                addField,
+                getField,
+                updateField,
+                deleteField,
                 addRelationship,
                 getRelationship,
                 updateRelationship,
