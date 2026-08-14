@@ -142,6 +142,48 @@ async function main() {
         );
     }
 
+    // 3b. Stale deleteRelationship: same restore-via-addX treatment as
+    // deleteTable, extended via RESTORE_OPS to the other four entity types
+    // that previously had no version check at all.
+    {
+        const storage = {
+            deleteRelationship: async () => {
+                throw new ConflictException({
+                    message: 'version-mismatch',
+                    current: { id: 'r1', version: 2, name: 'still-here' },
+                });
+            },
+        } as unknown as StorageService;
+        const gateway = new CollaborationGateway(storage, {
+            get: () => undefined,
+        } as never);
+        const { socket, emitted, broadcast } = fakeSocket();
+
+        const ack = await gateway.handleOp(socket as never, {
+            diagramId: 'd1',
+            op: 'deleteRelationship',
+            args: { diagramId: 'd1', id: 'r1', version: 1 },
+        });
+
+        assert(ack.ok === false, 'stale deleteRelationship must not ack ok');
+        assert(
+            broadcast.length === 0,
+            'stale deleteRelationship must not broadcast to room'
+        );
+        const payload = emitted[0].payload as {
+            op: string;
+            args: { relationship: { id: string; name: string } };
+        };
+        assert(
+            payload.op === 'addRelationship',
+            'deleteRelationship conflict must restore via addRelationship'
+        );
+        assert(
+            payload.args.relationship.name === 'still-here',
+            'restore must carry the server-authoritative row'
+        );
+    }
+
     // 4. field:focus relay: broadcast-only to the room, tagged with the
     // sender's socketId, sender excluded (client.to() never echoes back).
     {

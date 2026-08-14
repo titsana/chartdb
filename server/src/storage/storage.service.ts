@@ -235,10 +235,16 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async deleteRelationship(diagramId: string, id: string) {
-        await this.relationships.update(
-            { id, diagramId },
-            { deletedAt: new Date() }
+    async deleteRelationship(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.relationships,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<RelationshipEntity>,
+            expectedVersion
         );
     }
 
@@ -291,10 +297,16 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async deleteDependency(diagramId: string, id: string) {
-        await this.dependencies.update(
-            { id, diagramId },
-            { deletedAt: new Date() }
+    async deleteDependency(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.dependencies,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<DependencyEntity>,
+            expectedVersion
         );
     }
 
@@ -339,8 +351,17 @@ export class StorageService implements OnModuleInit {
         return this.versionedUpdate(this.areas, id, attributes, expectedVersion);
     }
 
-    async deleteArea(diagramId: string, id: string) {
-        await this.areas.update({ id, diagramId }, { deletedAt: new Date() });
+    async deleteArea(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.areas,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<AreaEntity>,
+            expectedVersion
+        );
     }
 
     async listAreas(diagramId: string) {
@@ -386,10 +407,16 @@ export class StorageService implements OnModuleInit {
         );
     }
 
-    async deleteCustomType(diagramId: string, id: string) {
-        await this.customTypes.update(
-            { id, diagramId },
-            { deletedAt: new Date() }
+    async deleteCustomType(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.customTypes,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<CustomTypeEntity>,
+            expectedVersion
         );
     }
 
@@ -431,8 +458,17 @@ export class StorageService implements OnModuleInit {
         return this.versionedUpdate(this.notes, id, attributes, expectedVersion);
     }
 
-    async deleteNote(diagramId: string, id: string) {
-        await this.notes.update({ id, diagramId }, { deletedAt: new Date() });
+    async deleteNote(
+        diagramId: string,
+        id: string,
+        expectedVersion?: number
+    ) {
+        return this.versionedUpdate(
+            this.notes,
+            id,
+            { deletedAt: new Date(), diagramId } as Partial<NoteEntity>,
+            expectedVersion
+        );
     }
 
     async listNotes(diagramId: string) {

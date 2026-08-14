@@ -37,18 +37,22 @@ function fieldKeysFor(op: string, args: Record<string, unknown>): string[] {
 }
 
 // Entity-level version key — carried by ops that can race a concurrent write
-// on the same row. Table also version-checks putTable/deleteTable (see
-// storage.service.ts); other entity types don't yet (add has no prior state
-// to conflict with, delete-wins is accepted there, updateDiagram is exempt).
+// on the same row (see storage.service.ts's versionedUpdate). add* has no
+// prior state to conflict with; updateDiagram is exempt (no version column).
 const VERSIONED_UPDATE_OPS = new Set([
     'updateTable',
     'putTable',
     'deleteTable',
     'updateRelationship',
+    'deleteRelationship',
     'updateDependency',
+    'deleteDependency',
     'updateArea',
+    'deleteArea',
     'updateCustomType',
+    'deleteCustomType',
     'updateNote',
+    'deleteNote',
 ]);
 
 // A conflict correction may arrive as a same-op patch ({id, attributes}) or,

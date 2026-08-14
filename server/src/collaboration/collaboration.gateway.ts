@@ -65,6 +65,18 @@ interface FieldFocusMessage {
 
 type OpHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
+// Ops whose rejection must restore the row via its addX upsert rather than
+// patch it in place — see the ConflictException branch in handleOp.
+const RESTORE_OPS: Record<string, { addOp: string; argKey: string }> = {
+    putTable: { addOp: 'addTable', argKey: 'table' },
+    deleteTable: { addOp: 'addTable', argKey: 'table' },
+    deleteRelationship: { addOp: 'addRelationship', argKey: 'relationship' },
+    deleteDependency: { addOp: 'addDependency', argKey: 'dependency' },
+    deleteArea: { addOp: 'addArea', argKey: 'area' },
+    deleteCustomType: { addOp: 'addCustomType', argKey: 'customType' },
+    deleteNote: { addOp: 'addNote', argKey: 'note' },
+};
+
 // Same write surface StorageController exposes over REST, using the exact
 // param names the client's StorageContext methods already take (see
 // src/context/storage-context/storage-context.tsx) — the client sends its
@@ -99,8 +111,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteRelationship: ({ diagramId, id }) =>
-            storage.deleteRelationship(diagramId as string, id as string),
+        deleteRelationship: ({ diagramId, id, version }) =>
+            storage.deleteRelationship(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         addDependency: ({ diagramId, dependency }) =>
             storage.addDependency(diagramId as string, dependency as never),
         updateDependency: ({ id, attributes, version }) =>
@@ -109,8 +125,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteDependency: ({ diagramId, id }) =>
-            storage.deleteDependency(diagramId as string, id as string),
+        deleteDependency: ({ diagramId, id, version }) =>
+            storage.deleteDependency(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         addArea: ({ diagramId, area }) =>
             storage.addArea(diagramId as string, area as never),
         updateArea: ({ id, attributes, version }) =>
@@ -119,8 +139,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteArea: ({ diagramId, id }) =>
-            storage.deleteArea(diagramId as string, id as string),
+        deleteArea: ({ diagramId, id, version }) =>
+            storage.deleteArea(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         addCustomType: ({ diagramId, customType }) =>
             storage.addCustomType(diagramId as string, customType as never),
         updateCustomType: ({ id, attributes, version }) =>
@@ -129,8 +153,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteCustomType: ({ diagramId, id }) =>
-            storage.deleteCustomType(diagramId as string, id as string),
+        deleteCustomType: ({ diagramId, id, version }) =>
+            storage.deleteCustomType(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         addNote: ({ diagramId, note }) =>
             storage.addNote(diagramId as string, note as never),
         updateNote: ({ id, attributes, version }) =>
@@ -139,8 +167,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteNote: ({ diagramId, id }) =>
-            storage.deleteNote(diagramId as string, id as string),
+        deleteNote: ({ diagramId, id, version }) =>
+            storage.deleteNote(
+                diagramId as string,
+                id as string,
+                version as number | undefined
+            ),
         updateDiagram: ({ id, attributes }) =>
             storage.updateDiagram(id as string, attributes as never),
     };
@@ -268,17 +300,19 @@ export class CollaborationGateway
                     >;
                 };
                 if (current) {
-                    // deleteTable/putTable may have already been removed (or
-                    // never matched) in the client's local list, where the
-                    // same-op {id, attributes} patch used for updateTable is
-                    // a no-op (patch() only touches items already present).
-                    // addTable upserts, so it restores the row either way.
-                    if (message.op === 'putTable' || message.op === 'deleteTable') {
+                    // A rejected delete/put may have already removed (or
+                    // never matched) the row in the client's local list,
+                    // where the same-op {id, attributes} patch used for
+                    // update is a no-op (patch() only touches items already
+                    // present). The matching addX upserts, so it restores
+                    // the row either way.
+                    const restore = RESTORE_OPS[message.op];
+                    if (restore) {
                         client.emit('op:rejected', {
-                            op: 'addTable',
+                            op: restore.addOp,
                             args: {
                                 diagramId: message.diagramId,
-                                table: current,
+                                [restore.argKey]: current,
                             },
                             version: current.version,
                         });
