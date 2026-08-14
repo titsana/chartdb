@@ -882,13 +882,16 @@ export const ChartDBProvider: React.FC<
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
-            const { fields, indexes } = updateTableFn(table);
+            const updatedTable = updateTableFn(table);
             await Promise.all([
                 db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
                 // Only fields/indexes actually changed, see updateField.
                 db.updateTable({
                     id: tableId,
-                    attributes: { fields, indexes },
+                    attributes: {
+                        fields: updatedTable.fields,
+                        indexes: updatedTable.indexes,
+                    },
                 }),
             ]);
 
