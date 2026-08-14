@@ -18,23 +18,9 @@ import type {
 } from './collaboration-context';
 import { collaborationContext } from './collaboration-context';
 
-const CLOBBER_WINDOW_MS = 5000;
 const CURSOR_EMIT_THROTTLE_MS = 50;
 const CURSOR_IDLE_MS = 5000;
 const VIEWPORT_EMIT_THROTTLE_MS = 50;
-
-// Field-level keys only (see collaboration design decision: entity-level
-// add/remove never triggers a clobber notification, only same-field updates).
-function fieldKeysFor(op: string, args: Record<string, unknown>): string[] {
-    if (!op.startsWith('update')) return [];
-    const entityType = op.slice('update'.length);
-    const id = args.id as string | undefined;
-    const attributes = args.attributes as Record<string, unknown> | undefined;
-    if (!id || !attributes) return [];
-    return Object.keys(attributes).map(
-        (field) => `${entityType}:${id}:${field}`
-    );
-}
 
 // Entity-level version key — carried by ops that can race a concurrent write
 // on the same row (see storage.service.ts's versionedUpdate). add* has no
@@ -103,7 +89,6 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
         Map<string, string>
     >(new Map());
     const socketRef = useRef<Socket | null>(null);
-    const ownEditsRef = useRef<Map<string, number>>(new Map());
     const versionsRef = useRef<Map<string, number>>(new Map());
     const lastCursorEmitRef = useRef(0);
     const lastViewportEmitRef = useRef(0);
@@ -480,32 +465,6 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
         [diagramId]
     );
 
-    const recordOwnEdit = useCallback(
-        (op: string, args: Record<string, unknown>) => {
-            const now = Date.now();
-            for (const key of fieldKeysFor(op, args)) {
-                ownEditsRef.current.set(key, now);
-            }
-        },
-        []
-    );
-
-    const checkClobber = useCallback(
-        (op: string, args: Record<string, unknown>): string[] => {
-            const now = Date.now();
-            const matched: string[] = [];
-            for (const key of fieldKeysFor(op, args)) {
-                const touchedAt = ownEditsRef.current.get(key);
-                if (touchedAt && now - touchedAt < CLOBBER_WINDOW_MS) {
-                    matched.push(key);
-                    ownEditsRef.current.delete(key);
-                }
-            }
-            return matched;
-        },
-        []
-    );
-
     const value = useMemo(
         () => ({
             connected,
@@ -527,8 +486,6 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             unfollowUser,
             remoteFieldFocus,
             emitFieldFocus,
-            recordOwnEdit,
-            checkClobber,
             seedVersions,
         }),
         [
@@ -550,8 +507,6 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             unfollowUser,
             remoteFieldFocus,
             emitFieldFocus,
-            recordOwnEdit,
-            checkClobber,
             seedVersions,
         ]
     );

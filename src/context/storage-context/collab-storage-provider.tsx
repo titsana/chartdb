@@ -37,7 +37,7 @@ export const CollabStorageProvider: React.FC<React.PropsWithChildren> = ({
     children,
 }) => {
     const api = useApiStorage();
-    const { emitOp, connected, recordOwnEdit } = useCollaboration();
+    const { emitOp, connected } = useCollaboration();
 
     const writeOp = useCallback(
         (op: string, args: Record<string, unknown>): Promise<void> => {
@@ -48,10 +48,9 @@ export const CollabStorageProvider: React.FC<React.PropsWithChildren> = ({
                     )
                 );
             }
-            recordOwnEdit(op, args);
             return emitOp(op, args);
         },
-        [connected, emitOp, recordOwnEdit]
+        [connected, emitOp]
     );
 
     const value = useMemo<StorageContext>(() => {

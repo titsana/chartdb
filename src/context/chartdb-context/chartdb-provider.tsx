@@ -107,7 +107,7 @@ export const ChartDBProvider: React.FC<
 
     diffEvents.useSubscription(diffCalculatedHandler);
 
-    const { socket, checkClobber, seedVersions } = useCollaboration();
+    const { socket, seedVersions } = useCollaboration();
     const { toast } = useToast();
 
     // updateTable/updateRelationship/etc. are declared later in this
@@ -147,14 +147,6 @@ export const ChartDBProvider: React.FC<
             op: string;
             args: Record<string, unknown>;
         }) => {
-            const clobbered = checkClobber(op, args);
-            if (clobbered.length > 0) {
-                toast({
-                    title: 'Updated by another collaborator',
-                    description:
-                        'A field you just edited was changed again by someone else.',
-                });
-            }
             applyRemoteOp(op, args, applySetters);
         };
 
@@ -226,7 +218,7 @@ export const ChartDBProvider: React.FC<
             socket.off('op', handleOp);
             socket.off('op:rejected', handleRejected);
         };
-    }, [socket, checkClobber, toast]);
+    }, [socket, toast]);
 
     const defaultSchemaName = useMemo(
         () => defaultSchemas[databaseType],
