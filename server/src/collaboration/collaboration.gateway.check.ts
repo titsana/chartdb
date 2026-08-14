@@ -59,12 +59,17 @@ async function main() {
         const payload = emitted[0].payload as {
             args: { id: string; attributes: { name: string } };
             version: number;
+            attempted: { id: string; attributes: { name: string } };
         };
         assert(
             payload.args.attributes.name === 'server-name',
             'correction must carry the server-authoritative value, not the stale write'
         );
         assert(payload.version === 3, 'correction must carry current version');
+        assert(
+            payload.attempted?.attributes?.name === 'my-stale-name',
+            'correction must echo back what the sender tried to write, so they can retry it'
+        );
     }
 
     // 2. Successful write: broadcasts to the room with the new version, acks ok.

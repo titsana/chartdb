@@ -273,6 +273,10 @@ export class CollaborationGateway
                             op: message.op,
                             args: { id, attributes },
                             version,
+                            // What the sender actually tried to write, so
+                            // they can retry just their own change instead
+                            // of it being gone with no way to recover it.
+                            attempted: message.args,
                         });
                     }
                 }

@@ -37,6 +37,7 @@ import { getDefaultPrimaryKeyType } from '@/lib/data/data-types/data-types';
 import { useCollaboration } from '@/hooks/use-collaboration';
 import { applyRemoteOp } from './apply-remote-op';
 import { useToast } from '@/components/toast/use-toast';
+import { ToastAction } from '@/components/toast/toast';
 
 export interface ChartDBProviderProps {
     diagram?: Diagram;
@@ -139,17 +140,54 @@ export const ChartDBProvider: React.FC<
 
         // This tab's own edit lost a version race — the value it just wrote
         // locally never made it to the server, so patch back to what did.
+        // `attempted` (the sender's original args, echoed by the gateway)
+        // lets the user retry just their own change instead of it being
+        // gone with no way to recover it.
         const handleRejected = ({
             op,
             args,
+            attempted,
         }: {
             op: string;
             args: Record<string, unknown>;
+            attempted?: { id: string; attributes: Record<string, unknown> };
         }) => {
+            const retry = attempted?.id
+                ? () => {
+                      const { id, attributes } = attempted;
+                      switch (op) {
+                          case 'updateTable':
+                              return updateTable(id, attributes as never);
+                          case 'updateRelationship':
+                              return updateRelationship(
+                                  id,
+                                  attributes as never
+                              );
+                          case 'updateDependency':
+                              return updateDependency(id, attributes as never);
+                          case 'updateArea':
+                              return updateArea(id, attributes as never);
+                          case 'updateCustomType':
+                              return updateCustomType(id, attributes as never);
+                          case 'updateNote':
+                              return updateNote(id, attributes as never);
+                      }
+                  }
+                : undefined;
+
             toast({
                 title: 'Edit conflict',
                 description:
                     'Someone else edited this at the same time — your change was discarded, showing the latest version.',
+                // No retry action for putTable/deleteTable corrections
+                // (these arrive as an addTable restore, see the gateway) —
+                // retrying a delete that lost a race should be a deliberate
+                // re-decision, not a button reflex.
+                action: retry ? (
+                    <ToastAction altText="Retry my edit" onClick={retry}>
+                        Retry my edit
+                    </ToastAction>
+                ) : undefined,
             });
             applyRemoteOp(op, args, applySetters);
         };
@@ -160,7 +198,17 @@ export const ChartDBProvider: React.FC<
             socket.off('op', handleOp);
             socket.off('op:rejected', handleRejected);
         };
-    }, [socket, checkClobber, toast]);
+    }, [
+        socket,
+        checkClobber,
+        toast,
+        updateTable,
+        updateRelationship,
+        updateDependency,
+        updateArea,
+        updateCustomType,
+        updateNote,
+    ]);
 
     const defaultSchemaName = useMemo(
         () => defaultSchemas[databaseType],
