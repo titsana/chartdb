@@ -1185,7 +1185,13 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                         change.position?.y !== undefined &&
                         !isNaN(change.position.x) &&
                         !isNaN(change.position.y)) ||
-                    (change.type === 'dimensions' && change.resizing) ||
+                    // Commit once the resize gesture ends, same as position
+                    // (!dragging) above — `resizing` is true on every
+                    // intermediate frame while the handle is being dragged.
+                    // Persisting on every frame fired dozens of versioned
+                    // updateTable writes per resize, each racing the last
+                    // one's not-yet-acked version and self-conflicting.
+                    (change.type === 'dimensions' && !change.resizing) ||
                     change.type === 'remove'
                 ) {
                     const node = getNode(change.id);
@@ -1219,7 +1225,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             ) as NodeRemoveChange[];
 
             const sizeChanges: NodeDimensionChange[] = relevantChanges.filter(
-                (change) => change.type === 'dimensions' && change.resizing
+                (change) => change.type === 'dimensions' && !change.resizing
             ) as NodeDimensionChange[];
 
             return {
