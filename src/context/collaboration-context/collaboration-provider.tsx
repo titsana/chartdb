@@ -327,7 +327,22 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                 );
             }
             const id = idFor(op, args);
-            const versioned = VERSIONED_UPDATE_OPS.has(op) && id;
+            // updateDiagram doubles as a plain "bump updatedAt" call fired
+            // alongside nearly every other op (see chartdb-provider.tsx) —
+            // often several in flight at once from the same tab (e.g. a
+            // continuous table drag fires one updateTablesState per frame).
+            // Version-guarding those against each other produces constant
+            // self-inflicted conflicts with nothing real to protect (a
+            // stale timestamp is harmless); only guard updateDiagram when
+            // it's actually changing user-visible data (rename, database
+            // type/edition).
+            const isDiagramTimestampBump =
+                op === 'updateDiagram' &&
+                Object.keys((args.attributes as object) ?? {}).every(
+                    (key) => key === 'updatedAt'
+                );
+            const versioned =
+                VERSIONED_UPDATE_OPS.has(op) && id && !isDiagramTimestampBump;
             const sentArgs: Record<string, unknown> = versioned
                 ? {
                       ...args,
