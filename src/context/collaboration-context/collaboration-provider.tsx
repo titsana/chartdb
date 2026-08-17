@@ -21,10 +21,11 @@ import { collaborationContext } from './collaboration-context';
 const CURSOR_EMIT_THROTTLE_MS = 50;
 const CURSOR_IDLE_MS = 5000;
 const VIEWPORT_EMIT_THROTTLE_MS = 50;
+const OP_ACK_TIMEOUT_MS = 15_000;
 
 // Entity-level version key — carried by ops that can race a concurrent write
 // on the same row (see storage.service.ts's versionedUpdate). add* has no
-// prior state to conflict with; updateDiagram is exempt (no version column).
+// prior state to conflict with.
 const VERSIONED_UPDATE_OPS = new Set([
     'updateTable',
     'putTable',
@@ -41,6 +42,7 @@ const VERSIONED_UPDATE_OPS = new Set([
     'deleteCustomType',
     'updateNote',
     'deleteNote',
+    'updateDiagram',
 ]);
 
 // A conflict correction may arrive as a same-op patch ({id, attributes}) or,
@@ -106,202 +108,181 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
     useEffect(() => {
         if (!enabled || !diagramId) return;
 
-        let cancelled = false;
-        let socket: Socket | undefined;
+        console.log('Connecting to collaboration socket', WS_URL, {
+            diagramId,
+            identity,
+        });
 
-        (async () => {
-            const token = await getAccessToken();
-            if (cancelled) return;
+        // Callback form (not a plain object) — socket.io calls this before
+        // *every* connection attempt, including reconnects after a drop, so
+        // a token that expired mid-session gets refreshed instead of the
+        // same stale value being replayed on every retry forever.
+        const socket: Socket = io(WS_URL, {
+            query: { diagramId },
+            auth: (cb) => {
+                getAccessToken().then((token) => cb({ ...identity, token }));
+            },
+        });
+        socketRef.current = socket;
 
-            console.log('Connecting to collaboration socket', WS_URL, {
-                diagramId,
-                identity,
+        socket.on('connect', () => setConnected(true));
+        socket.on('disconnect', () => setConnected(false));
+        // Manager-level 'reconnect' — fires only after a drop + successful
+        // re-establish, never on the initial connect.
+        socket.io.on('reconnect', () =>
+            setReconnectCount((count) => count + 1)
+        );
+        socket.on('presence:list', (list: CollabPresence[]) =>
+            setPresence(list)
+        );
+        socket.on('presence:join', (p: CollabPresence) =>
+            setPresence((prev) => [
+                ...prev.filter((x) => x.socketId !== p.socketId),
+                p,
+            ])
+        );
+        socket.on('presence:leave', ({ socketId }: { socketId: string }) => {
+            setPresence((prev) => prev.filter((x) => x.socketId !== socketId));
+            setRemoteCursors((prev) => {
+                if (!prev.has(socketId)) return prev;
+                const next = new Map(prev);
+                next.delete(socketId);
+                return next;
             });
-
-            socket = io(WS_URL, {
-                query: { diagramId },
-                auth: { ...identity, token },
+            setRemoteSelections((prev) => {
+                if (!prev.has(socketId)) return prev;
+                const next = new Map(prev);
+                next.delete(socketId);
+                return next;
             });
-            socketRef.current = socket;
-
-            socket.on('connect', () => setConnected(true));
-            socket.on('disconnect', () => setConnected(false));
-            // Manager-level 'reconnect' — fires only after a drop + successful
-            // re-establish, never on the initial connect.
-            socket.io.on('reconnect', () =>
-                setReconnectCount((count) => count + 1)
-            );
-            socket.on('presence:list', (list: CollabPresence[]) =>
-                setPresence(list)
-            );
-            socket.on('presence:join', (p: CollabPresence) =>
-                setPresence((prev) => [
-                    ...prev.filter((x) => x.socketId !== p.socketId),
-                    p,
-                ])
-            );
-            socket.on(
-                'presence:leave',
-                ({ socketId }: { socketId: string }) => {
-                    setPresence((prev) =>
-                        prev.filter((x) => x.socketId !== socketId)
-                    );
-                    setRemoteCursors((prev) => {
-                        if (!prev.has(socketId)) return prev;
-                        const next = new Map(prev);
-                        next.delete(socketId);
-                        return next;
-                    });
-                    setRemoteSelections((prev) => {
-                        if (!prev.has(socketId)) return prev;
-                        const next = new Map(prev);
-                        next.delete(socketId);
-                        return next;
-                    });
-                    setRemoteViewports((prev) => {
-                        if (!prev.has(socketId)) return prev;
-                        const next = new Map(prev);
-                        next.delete(socketId);
-                        return next;
-                    });
-                    setFollowMap((prev) => {
-                        let changed = false;
-                        const next = new Map(prev);
-                        for (const [follower, target] of prev) {
-                            if (follower === socketId || target === socketId) {
-                                next.delete(follower);
-                                changed = true;
-                            }
-                        }
-                        return changed ? next : prev;
-                    });
-                    setFollowingSocketId((prev) =>
-                        prev === socketId ? null : prev
-                    );
-                    setRemoteFieldFocus((prev) => {
-                        if (!prev.has(socketId)) return prev;
-                        const next = new Map(prev);
-                        next.delete(socketId);
-                        return next;
-                    });
-                }
-            );
-            socket.on(
-                'cursor',
-                ({
-                    socketId,
-                    x,
-                    y,
-                }: {
-                    socketId: string;
-                    x: number;
-                    y: number;
-                }) =>
-                    setRemoteCursors((prev) => {
-                        const next = new Map(prev);
-                        next.set(socketId, { x, y, lastMoved: Date.now() });
-                        return next;
-                    })
-            );
-            socket.on(
-                'selection',
-                ({
-                    socketId,
-                    ...selection
-                }: { socketId: string } & RemoteSelection) =>
-                    setRemoteSelections((prev) => {
-                        const next = new Map(prev);
-                        next.set(socketId, selection);
-                        return next;
-                    })
-            );
-            socket.on(
-                'viewport',
-                ({
-                    socketId,
-                    x,
-                    y,
-                    zoom,
-                }: {
-                    socketId: string;
-                    x: number;
-                    y: number;
-                    zoom: number;
-                }) =>
-                    setRemoteViewports((prev) => {
-                        const next = new Map(prev);
-                        next.set(socketId, { x, y, zoom });
-                        return next;
-                    })
-            );
-            // Track the latest known version per entity regardless of who
-            // wrote it — otherwise this tab's next edit would send a stale
-            // baseVersion and get rejected even though it's not stale.
-            socket.on(
-                'op',
-                ({
-                    op,
-                    args,
-                    newVersion,
-                }: {
-                    op: string;
-                    args: Record<string, unknown>;
-                    newVersion?: number;
-                }) => {
-                    const id = idFor(op, args);
-                    if (id && newVersion !== undefined) {
-                        versionsRef.current.set(
-                            versionKeyFor(op, id),
-                            newVersion
-                        );
+            setRemoteViewports((prev) => {
+                if (!prev.has(socketId)) return prev;
+                const next = new Map(prev);
+                next.delete(socketId);
+                return next;
+            });
+            setFollowMap((prev) => {
+                let changed = false;
+                const next = new Map(prev);
+                for (const [follower, target] of prev) {
+                    if (follower === socketId || target === socketId) {
+                        next.delete(follower);
+                        changed = true;
                     }
                 }
-            );
-            // This tab's own write was rejected as stale — adopt the
-            // server's version so the retry (if any) isn't rejected again.
-            socket.on(
-                'op:rejected',
-                ({
-                    op,
-                    args,
-                    version,
-                }: {
-                    op: string;
-                    args: Record<string, unknown>;
-                    version: number;
-                }) => {
-                    const id = idFor(op, args);
-                    if (id)
-                        versionsRef.current.set(versionKeyFor(op, id), version);
+                return changed ? next : prev;
+            });
+            setFollowingSocketId((prev) => (prev === socketId ? null : prev));
+            setRemoteFieldFocus((prev) => {
+                if (!prev.has(socketId)) return prev;
+                const next = new Map(prev);
+                next.delete(socketId);
+                return next;
+            });
+        });
+        socket.on(
+            'cursor',
+            ({ socketId, x, y }: { socketId: string; x: number; y: number }) =>
+                setRemoteCursors((prev) => {
+                    const next = new Map(prev);
+                    next.set(socketId, { x, y, lastMoved: Date.now() });
+                    return next;
+                })
+        );
+        socket.on(
+            'selection',
+            ({
+                socketId,
+                ...selection
+            }: { socketId: string } & RemoteSelection) =>
+                setRemoteSelections((prev) => {
+                    const next = new Map(prev);
+                    next.set(socketId, selection);
+                    return next;
+                })
+        );
+        socket.on(
+            'viewport',
+            ({
+                socketId,
+                x,
+                y,
+                zoom,
+            }: {
+                socketId: string;
+                x: number;
+                y: number;
+                zoom: number;
+            }) =>
+                setRemoteViewports((prev) => {
+                    const next = new Map(prev);
+                    next.set(socketId, { x, y, zoom });
+                    return next;
+                })
+        );
+        // Track the latest known version per entity regardless of who
+        // wrote it — otherwise this tab's next edit would send a stale
+        // baseVersion and get rejected even though it's not stale.
+        socket.on(
+            'op',
+            ({
+                op,
+                args,
+                newVersion,
+            }: {
+                op: string;
+                args: Record<string, unknown>;
+                newVersion?: number;
+            }) => {
+                const id = idFor(op, args);
+                if (id && newVersion !== undefined) {
+                    versionsRef.current.set(versionKeyFor(op, id), newVersion);
                 }
-            );
-            socket.on(
-                'follow',
-                ({
-                    socketId,
-                    targetSocketId,
-                }: {
-                    socketId: string;
-                    targetSocketId: string | null;
-                }) =>
-                    setFollowMap((prev) => {
-                        const next = new Map(prev);
-                        if (targetSocketId) next.set(socketId, targetSocketId);
-                        else next.delete(socketId);
-                        return next;
-                    })
-            );
-            socket.on(
-                'field:focus',
-                ({ socketId, key }: { socketId: string; key: string | null }) =>
-                    setRemoteFieldFocus((prev) => {
-                        const next = new Map(prev);
-                        if (key) next.set(socketId, key);
-                        else next.delete(socketId);
-                        return next;
-                    })
-            );
-        })();
+            }
+        );
+        // This tab's own write was rejected as stale — adopt the
+        // server's version so the retry (if any) isn't rejected again.
+        socket.on(
+            'op:rejected',
+            ({
+                op,
+                args,
+                version,
+            }: {
+                op: string;
+                args: Record<string, unknown>;
+                version: number;
+            }) => {
+                const id = idFor(op, args);
+                if (id) versionsRef.current.set(versionKeyFor(op, id), version);
+            }
+        );
+        socket.on(
+            'follow',
+            ({
+                socketId,
+                targetSocketId,
+            }: {
+                socketId: string;
+                targetSocketId: string | null;
+            }) =>
+                setFollowMap((prev) => {
+                    const next = new Map(prev);
+                    if (targetSocketId) next.set(socketId, targetSocketId);
+                    else next.delete(socketId);
+                    return next;
+                })
+        );
+        socket.on(
+            'field:focus',
+            ({ socketId, key }: { socketId: string; key: string | null }) =>
+                setRemoteFieldFocus((prev) => {
+                    const next = new Map(prev);
+                    if (key) next.set(socketId, key);
+                    else next.delete(socketId);
+                    return next;
+                })
+        );
 
         // ponytail: sweeps stale cursors on a fixed tick instead of a
         // per-cursor timer — simplest way to satisfy "hide after ~5s idle".
@@ -321,9 +302,8 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
         }, 1000);
 
         return () => {
-            cancelled = true;
             clearInterval(idleSweep);
-            socket?.disconnect();
+            socket.disconnect();
             socketRef.current = null;
             setConnected(false);
             setPresence([]);
@@ -365,14 +345,30 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                 );
             }
             return new Promise<void>((resolve, reject) => {
-                socket.emit(
+                // .timeout() — without it, a dropped/crashed server (or one
+                // that throws outside handleOp's own try/catch) never acks,
+                // and this promise hangs forever; every caller `await`-ing
+                // db.updateX(...) would then hang too, with no error, no
+                // retry, nothing visible to the user.
+                socket.timeout(OP_ACK_TIMEOUT_MS).emit(
                     'op',
                     { diagramId, op, args: sentArgs },
-                    (ack: {
-                        ok: boolean;
-                        error?: string;
-                        newVersion?: number;
-                    }) => {
+                    (
+                        err: Error | null,
+                        ack?: {
+                            ok: boolean;
+                            error?: string;
+                            newVersion?: number;
+                        }
+                    ) => {
+                        if (err) {
+                            reject(
+                                new Error(
+                                    `op "${op}" timed out waiting for server ack`
+                                )
+                            );
+                            return;
+                        }
                         if (ack?.ok) {
                             // Seed regardless of `versioned` — add* ops now
                             // return their fresh row's version (always 0)

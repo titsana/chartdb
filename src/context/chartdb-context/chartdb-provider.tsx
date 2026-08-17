@@ -2057,6 +2057,7 @@ export const ChartDBProvider: React.FC<
                     version: (e as { version?: number }).version ?? 0,
                 });
                 seedVersions([
+                    withVersion('Diagram')(diagram),
                     ...(diagram.tables ?? []).map(withVersion('Table')),
                     // Fields nest inside table.fields (not their own
                     // top-level diagram list, see apply-remote-op.ts) — flatten

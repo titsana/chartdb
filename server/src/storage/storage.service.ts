@@ -144,22 +144,29 @@ export class StorageService implements OnModuleInit {
         await this.config.update(1, attributes);
     }
 
-    // Diagram filter
-    async getDiagramFilter(diagramId: string) {
+    // Diagram filter — personal scope (diagramId + userId), see
+    // DiagramFilterEntity's comment on why userId exists.
+    async getDiagramFilter(diagramId: string, userId: string) {
         return (
-            (await this.diagramFilters.findOneBy({ diagramId })) ?? undefined
+            (await this.diagramFilters.findOneBy({ diagramId, userId })) ??
+            undefined
         );
     }
 
     async updateDiagramFilter(
         diagramId: string,
+        userId: string,
         filter: Partial<DiagramFilterEntity>
     ) {
-        await this.diagramFilters.save({ diagramId, ...filter, deletedAt: null } as DiagramFilterEntity);
+        await this.diagramFilters.save({
+            diagramId,
+            userId,
+            ...filter,
+        } as DiagramFilterEntity);
     }
 
-    async deleteDiagramFilter(diagramId: string) {
-        await this.diagramFilters.delete({ diagramId });
+    async deleteDiagramFilter(diagramId: string, userId: string) {
+        await this.diagramFilters.delete({ diagramId, userId });
     }
 
     // Tables
@@ -685,6 +692,7 @@ export class StorageService implements OnModuleInit {
         }
         await this.diagrams.save({
             ...diagramRow,
+            version: 0,
             deletedAt: null,
         } as DiagramEntity);
 
@@ -749,7 +757,11 @@ export class StorageService implements OnModuleInit {
         return await this.hydrate(diagram, options);
     }
 
-    async updateDiagram(id: string, attributes: Partial<DiagramEntity>) {
+    async updateDiagram(
+        id: string,
+        attributes: Partial<DiagramEntity>,
+        expectedVersion?: number
+    ) {
         const diagramRow: Partial<DiagramEntity> = {};
         for (const key of DIAGRAM_COLUMNS) {
             if ((attributes as Record<string, unknown>)[key] !== undefined) {
@@ -758,7 +770,17 @@ export class StorageService implements OnModuleInit {
                 )[key];
             }
         }
-        await this.diagrams.update(id, diagramRow);
+        // Was a plain unconditional update — two users changing diagram-level
+        // settings (rename, databaseType, databaseEdition) at the same time
+        // silently last-write-won with no conflict, no correction, since
+        // DiagramEntity had no version column to check. Now guarded like
+        // every other entity's write.
+        const newVersion = await this.versionedUpdate(
+            this.diagrams,
+            id,
+            diagramRow,
+            expectedVersion
+        );
 
         if (attributes.id && attributes.id !== id) {
             const newId = attributes.id;
@@ -781,6 +803,7 @@ export class StorageService implements OnModuleInit {
                 this.notes.update({ diagramId: id }, { diagramId: newId }),
             ]);
         }
+        return newVersion;
     }
 
     async deleteDiagram(id: string) {

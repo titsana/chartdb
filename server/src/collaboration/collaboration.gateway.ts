@@ -198,8 +198,12 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 id as string,
                 version as number | undefined
             ),
-        updateDiagram: ({ id, attributes }) =>
-            storage.updateDiagram(id as string, attributes as never),
+        updateDiagram: ({ id, attributes, version }) =>
+            storage.updateDiagram(
+                id as string,
+                attributes as never,
+                version as number | undefined
+            ),
     };
 }
 

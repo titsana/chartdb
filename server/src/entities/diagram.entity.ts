@@ -23,6 +23,9 @@ export class DiagramEntity {
     @Column('timestamptz')
     updatedAt: Date;
 
+    @Column('int', { default: 0 })
+    version: number;
+
     @Column('timestamptz', { nullable: true })
     deletedAt?: Date | null;
 }

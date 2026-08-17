@@ -9,7 +9,9 @@ import {
     Post,
     Put,
     Query,
+    Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { StorageService } from './storage.service';
 import type { DiagramIncludeOptions } from './storage.service';
 
@@ -24,6 +26,14 @@ function parseIncludeOptions(
         includeCustomTypes: query.includeCustomTypes === 'true',
         includeNotes: query.includeNotes === 'true',
     };
+}
+
+// Azure AD's `oid` claim is the stable per-user identifier (see
+// AzureAdStrategy) — falls back to a single shared bucket when Azure AD
+// isn't configured (ConditionalAzureAdGuard leaves req.user undefined
+// there), since there's no real per-user identity to key on in that mode.
+function userIdFrom(req: Request): string {
+    return (req.user as { oid?: string } | undefined)?.oid ?? 'local';
 }
 
 @Controller()
@@ -41,24 +51,30 @@ export class StorageController {
         return this.storage.updateConfig(body);
     }
 
-    // Diagram filter
+    // Diagram filter — personal scope, keyed by the requesting user
+    // (see userIdFrom above).
     @Get('diagrams/:diagramId/filter')
-    getDiagramFilter(@Param('diagramId') diagramId: string) {
-        return this.storage.getDiagramFilter(diagramId);
+    getDiagramFilter(@Param('diagramId') diagramId: string, @Req() req: Request) {
+        return this.storage.getDiagramFilter(diagramId, userIdFrom(req));
     }
 
     @Put('diagrams/:diagramId/filter')
     updateDiagramFilter(
         @Param('diagramId') diagramId: string,
-        @Body() body: Record<string, unknown>
+        @Body() body: Record<string, unknown>,
+        @Req() req: Request
     ) {
-        return this.storage.updateDiagramFilter(diagramId, body);
+        return this.storage.updateDiagramFilter(
+            diagramId,
+            userIdFrom(req),
+            body
+        );
     }
 
     @Delete('diagrams/:diagramId/filter')
     @HttpCode(204)
-    deleteDiagramFilter(@Param('diagramId') diagramId: string) {
-        return this.storage.deleteDiagramFilter(diagramId);
+    deleteDiagramFilter(@Param('diagramId') diagramId: string, @Req() req: Request) {
+        return this.storage.deleteDiagramFilter(diagramId, userIdFrom(req));
     }
 
     // Diagrams
