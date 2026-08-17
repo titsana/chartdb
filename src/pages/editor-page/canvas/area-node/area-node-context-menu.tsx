@@ -26,7 +26,7 @@ export const AreaNodeContextMenu: React.FC<
         readonly,
         tables,
         relationships,
-        updateTablesState,
+        repositionTablesInArea,
         updateArea,
     } = useChartDB();
     const { isMd: isDesktop } = useBreakpoint('md');
@@ -64,16 +64,15 @@ export const AreaNodeContextMenu: React.FC<
             });
         }
 
-        updateTablesState(
-            (currentTables) =>
-                currentTables.map((t) => {
-                    const pos = positions.find((p) => p.id === t.id);
-                    if (!pos) return t;
-                    return { ...t, x: pos.x, y: pos.y };
-                }),
-            { updateHistory: true }
-        );
-    }, [area, tables, relationships, updateTablesState, updateArea, getNodes]);
+        repositionTablesInArea(positions);
+    }, [
+        area,
+        tables,
+        relationships,
+        repositionTablesInArea,
+        updateArea,
+        getNodes,
+    ]);
 
     if (!isDesktop || readonly) {
         return <>{children}</>;

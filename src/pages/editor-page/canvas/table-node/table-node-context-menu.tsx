@@ -44,7 +44,8 @@ export const TableNodeContextMenu: React.FC<
         tables,
         relationships,
         updateArea,
-        updateTablesState,
+        moveTablesToArea,
+        removeTablesFromArea,
     } = useChartDB();
     const { closeAllTablesInSidebar } = useLayout();
     const { t } = useTranslation();
@@ -150,22 +151,9 @@ export const TableNodeContextMenu: React.FC<
                 });
             }
 
-            updateTablesState(
-                (currentTables) =>
-                    currentTables.map((t) => {
-                        const pos = positions.find((p) => p.id === t.id);
-                        if (!pos) return t;
-                        return {
-                            ...t,
-                            parentAreaId: areaId,
-                            x: pos.x,
-                            y: pos.y,
-                        };
-                    }),
-                { updateHistory: true }
-            );
+            moveTablesToArea([...tableIdSet], areaId, positions);
         },
-        [tables, relationships, areas, getNodes, updateArea, updateTablesState]
+        [tables, relationships, areas, getNodes, updateArea, moveTablesToArea]
     );
 
     const moveToAreaHandler = useCallback(
@@ -173,15 +161,7 @@ export const TableNodeContextMenu: React.FC<
             const tableIds = isMultiSelect ? selectedTableIds : [table.id];
 
             if (areaId === null) {
-                updateTablesState(
-                    (currentTables) =>
-                        currentTables.map((t) =>
-                            tableIds.includes(t.id)
-                                ? { ...t, parentAreaId: null }
-                                : t
-                        ),
-                    { updateHistory: true }
-                );
+                removeTablesFromArea(tableIds);
                 return;
             }
 
@@ -192,7 +172,7 @@ export const TableNodeContextMenu: React.FC<
             selectedTableIds,
             table.id,
             moveToArea,
-            updateTablesState,
+            removeTablesFromArea,
         ]
     );
 

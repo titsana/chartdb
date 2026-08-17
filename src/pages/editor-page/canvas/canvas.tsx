@@ -298,6 +298,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         createRelationship,
         createDependency,
         updateTablesState,
+        syncTablesParentArea,
         removeRelationships,
         removeDependencies,
         getField,
@@ -962,22 +963,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             });
 
             if (needsUpdate.length > 0) {
-                updateTablesState(
-                    (currentTables) =>
-                        currentTables.map((table) => {
-                            const update = needsUpdate.find(
-                                (u) => u.id === table.id
-                            );
-                            if (update) {
-                                return {
-                                    id: table.id,
-                                    parentAreaId: update.parentAreaId,
-                                };
-                            }
-                            return table;
-                        }),
-                    { updateHistory: false }
-                );
+                syncTablesParentArea(needsUpdate);
             }
 
             const updatedNotes = updateNotesParentAreas(
@@ -1002,7 +988,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         }, 300);
 
         checkParentAreas();
-    }, [nodes, updateTablesState, updateNote]);
+    }, [nodes, syncTablesParentArea, updateNote]);
 
     const onConnectHandler = useCallback(
         async (params: AddEdgeParams) => {

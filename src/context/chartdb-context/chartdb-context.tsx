@@ -134,6 +134,18 @@ export interface ChartDBContext {
         updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[],
         options?: { updateHistory: boolean; forceOverride?: boolean }
     ) => Promise<void>;
+    repositionTablesInArea: (
+        positions: { id: string; x: number; y: number }[]
+    ) => Promise<void>;
+    moveTablesToArea: (
+        tableIds: string[],
+        areaId: string,
+        positions: { id: string; x: number; y: number }[]
+    ) => Promise<void>;
+    removeTablesFromArea: (tableIds: string[]) => Promise<void>;
+    syncTablesParentArea: (
+        updates: { id: string; parentAreaId: string | null }[]
+    ) => Promise<void>;
 
     // Field operations
     getField: (tableId: string, fieldId: string) => DBField | null;
@@ -374,6 +386,10 @@ export const chartDBContext = createContext<ChartDBContext>({
     removeTables: emptyFn,
     updateTable: emptyFn,
     updateTablesState: emptyFn,
+    repositionTablesInArea: emptyFn,
+    moveTablesToArea: emptyFn,
+    removeTablesFromArea: emptyFn,
+    syncTablesParentArea: emptyFn,
 
     // Field operations
     updateField: emptyFn,

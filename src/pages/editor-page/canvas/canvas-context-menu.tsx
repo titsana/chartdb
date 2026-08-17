@@ -45,7 +45,7 @@ export const CanvasContextMenu: React.FC<React.PropsWithChildren> = ({
         tables,
         relationships,
         updateArea,
-        updateTablesState,
+        moveTablesToArea,
     } = useChartDB();
     const { schemasDisplayed } = useDiagramFilter();
     const { openCreateRelationshipDialog, openImportDatabaseDialog } =
@@ -240,24 +240,11 @@ export const CanvasContextMenu: React.FC<React.PropsWithChildren> = ({
                 });
             }
 
-            updateTablesState(
-                (currentTables) =>
-                    currentTables.map((t) => {
-                        const pos = positions.find((p) => p.id === t.id);
-                        if (!pos) return t;
-                        return {
-                            ...t,
-                            parentAreaId: areaId,
-                            x: pos.x,
-                            y: pos.y,
-                        };
-                    }),
-                { updateHistory: true }
-            );
+            moveTablesToArea([...tableIdSet], areaId, positions);
         },
         [
             selectedTableIds,
-            updateTablesState,
+            moveTablesToArea,
             updateArea,
             tables,
             relationships,

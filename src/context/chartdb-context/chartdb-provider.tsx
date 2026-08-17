@@ -750,6 +750,65 @@ export const ChartDBProvider: React.FC<
         [db, tables, setTables, diagramId, relationships, events, dependencies]
     );
 
+    const repositionTablesInArea: ChartDBContext['repositionTablesInArea'] =
+        useCallback(
+            (positions) =>
+                updateTablesState((currentTables) =>
+                    currentTables.map((t) => {
+                        const pos = positions.find((p) => p.id === t.id);
+                        return pos ? { ...t, x: pos.x, y: pos.y } : t;
+                    })
+                ),
+            [updateTablesState]
+        );
+
+    const moveTablesToArea: ChartDBContext['moveTablesToArea'] = useCallback(
+        (tableIds, areaId, positions) =>
+            updateTablesState((currentTables) =>
+                currentTables.map((t) => {
+                    if (!tableIds.includes(t.id)) return t;
+                    const pos = positions.find((p) => p.id === t.id);
+                    return {
+                        ...t,
+                        parentAreaId: areaId,
+                        ...(pos ? { x: pos.x, y: pos.y } : {}),
+                    };
+                })
+            ),
+        [updateTablesState]
+    );
+
+    const removeTablesFromArea: ChartDBContext['removeTablesFromArea'] =
+        useCallback(
+            (tableIds) =>
+                updateTablesState((currentTables) =>
+                    currentTables.map((t) =>
+                        tableIds.includes(t.id)
+                            ? { ...t, parentAreaId: null }
+                            : t
+                    )
+                ),
+            [updateTablesState]
+        );
+
+    const syncTablesParentArea: ChartDBContext['syncTablesParentArea'] =
+        useCallback(
+            (updates) =>
+                updateTablesState(
+                    (currentTables) =>
+                        currentTables.map((t) => {
+                            const update = updates.find(
+                                (u) => u.id === t.id
+                            );
+                            return update
+                                ? { id: t.id, parentAreaId: update.parentAreaId }
+                                : t;
+                        }),
+                    { updateHistory: false }
+                ),
+            [updateTablesState]
+        );
+
     const getField: ChartDBContext['getField'] = useCallback(
         (tableId: string, fieldId: string) => {
             const table = getTable(tableId);
@@ -2301,6 +2360,10 @@ export const ChartDBProvider: React.FC<
                 removeTables,
                 updateTable,
                 updateTablesState,
+                repositionTablesInArea,
+                moveTablesToArea,
+                removeTablesFromArea,
+                syncTablesParentArea,
                 updateField,
                 removeField,
                 createField,
