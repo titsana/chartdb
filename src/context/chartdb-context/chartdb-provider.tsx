@@ -711,12 +711,17 @@ export const ChartDBProvider: React.FC<
 
             const promises = [];
             for (const updatedTable of updatedTables) {
-                promises.push(
-                    db.putTable({
-                        diagramId,
-                        table: updatedTable,
-                    })
-                );
+                // Not putTable: that upserts by delete+reinsert of the
+                // *entire* fields set from this client's (possibly stale)
+                // cached copy — every caller here only ever changes
+                // table-level attributes (position, area, order, width,
+                // schema — see the audit in the collab-data-loss fix), so
+                // sending just those, version-guarded per table, can't
+                // clobber a concurrent field edit landing on the same
+                // table from someone else's tab.
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const { id, fields, ...attributes } = updatedTable;
+                promises.push(db.updateTable({ id, attributes }));
             }
 
             for (const table of tablesToDelete) {
@@ -831,6 +836,17 @@ export const ChartDBProvider: React.FC<
             // non-key column) — only bump the table's own version when they
             // actually did, so unrelated concurrent table edits don't
             // false-conflict either.
+            // ponytail: this and the field write above are two separate
+            // ops, not one transaction — if this one conflicts (someone
+            // else touched this table's indexes) while the field write
+            // above already landed, the field data itself isn't lost, but
+            // the index derived from *this* edit doesn't get persisted.
+            // Self-heals: `updateTable` is version-guarded, so a conflict
+            // here still round-trips through the existing op:rejected path
+            // and patches this client's local `indexes` back to whatever
+            // the server actually has. Upgrade to one atomic op (like
+            // deleteField's field+table transaction) if that gap ever
+            // needs to be closed, not just self-corrected.
             if (JSON.stringify(indexes) !== JSON.stringify(table.indexes)) {
                 writes.push(
                     db.updateTable({ id: tableId, attributes: { indexes } })
@@ -2042,6 +2058,14 @@ export const ChartDBProvider: React.FC<
                 });
                 seedVersions([
                     ...(diagram.tables ?? []).map(withVersion('Table')),
+                    // Fields nest inside table.fields (not their own
+                    // top-level diagram list, see apply-remote-op.ts) — flatten
+                    // them out here or every field's *first* edit after a
+                    // (re)load races unguarded (undefined baseVersion skips
+                    // the server's version check entirely).
+                    ...(diagram.tables ?? [])
+                        .flatMap((t) => t.fields ?? [])
+                        .map(withVersion('Field')),
                     ...(diagram.relationships ?? []).map(
                         withVersion('Relationship')
                     ),

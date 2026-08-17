@@ -113,6 +113,11 @@ async function main() {
                     },
                 });
             },
+            // handleOp's addTable-restore path re-hydrates via getTable
+            // (to recover `fields`, split into its own entity — see the
+            // gateway's comment on RESTORE_OPS); no row here means it falls
+            // back to `current`, same as before that rehydration existed.
+            getTable: async () => undefined,
         } as unknown as StorageService;
         const gateway = new CollaborationGateway(storage, {
             get: () => undefined,
@@ -181,6 +186,81 @@ async function main() {
         assert(
             payload.args.relationship.name === 'still-here',
             'restore must carry the server-authoritative row'
+        );
+    }
+
+    // 3c. deleteField whose *table*-side write (indexes/checkConstraints)
+    // conflicts, not the field-side one: the transaction rolled back, so
+    // the field is untouched server-side — correction must restore the
+    // field fresh (via getField, not the stale `current` table row) AND
+    // separately patch the table, never misroute the TableEntity `current`
+    // through the field-shaped RESTORE_OPS path.
+    {
+        const storage = {
+            deleteField: async () => {
+                throw new ConflictException({
+                    message: 'version-mismatch',
+                    entity: 'Table',
+                    current: {
+                        id: 'tbl1',
+                        version: 9,
+                        indexes: ['other-users-index'],
+                    },
+                });
+            },
+            getField: async () => ({
+                id: 'f1',
+                tableId: 'tbl1',
+                version: 4,
+                name: 'still-here-field',
+            }),
+        } as unknown as StorageService;
+        const gateway = new CollaborationGateway(storage, {
+            get: () => undefined,
+        } as never);
+        const { socket, emitted, broadcast } = fakeSocket();
+
+        const ack = await gateway.handleOp(socket as never, {
+            diagramId: 'd1',
+            op: 'deleteField',
+            args: {
+                diagramId: 'd1',
+                tableId: 'tbl1',
+                id: 'f1',
+                tableAttributes: { indexes: [] },
+                version: 3,
+                tableVersion: 1,
+            },
+        });
+
+        assert(ack.ok === false, 'table-side conflict must not ack ok');
+        assert(
+            broadcast.length === 0,
+            'table-side conflict must not broadcast to room'
+        );
+        assert(
+            emitted.length === 2,
+            'table-side conflict must emit both a field restore and a table patch'
+        );
+        const [fieldRestore, tablePatch] = emitted.map((e) => e.payload) as [
+            { op: string; args: { field: { name: string } } },
+            { op: string; args: { id: string; attributes: unknown } },
+        ];
+        assert(
+            fieldRestore.op === 'addField',
+            'field must be restored via addField, not treated as the conflicting entity'
+        );
+        assert(
+            fieldRestore.args.field.name === 'still-here-field',
+            'field restore must come from a fresh getField, not the table\'s `current`'
+        );
+        assert(
+            tablePatch.op === 'updateTable',
+            'table side must correct via updateTable, not the deleteField/addField restore shape'
+        );
+        assert(
+            tablePatch.args.id === 'tbl1',
+            'table patch must target the table, not the field'
         );
     }
 

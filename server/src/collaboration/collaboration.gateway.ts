@@ -112,13 +112,21 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 attributes as never,
                 version as number | undefined
             ),
-        deleteField: ({ diagramId, tableId, id, tableAttributes, version }) =>
+        deleteField: ({
+            diagramId,
+            tableId,
+            id,
+            tableAttributes,
+            version,
+            tableVersion,
+        }) =>
             storage.deleteField(
                 diagramId as string,
                 tableId as string,
                 id as string,
                 tableAttributes as never,
-                version as number | undefined
+                version as number | undefined,
+                tableVersion as number | undefined
             ),
         addRelationship: ({ diagramId, relationship }) =>
             storage.addRelationship(diagramId as string, relationship as never),
@@ -310,13 +318,47 @@ export class CollaborationGateway
                 // stale value (that would be the last-write-wins data loss).
                 // Reusing the 'op' event lets the client's existing op
                 // patcher apply it like any other update.
-                const { current } = err.getResponse() as {
+                const { current, entity } = err.getResponse() as {
                     current?: { id: string; version: number } & Record<
                         string,
                         unknown
                     >;
+                    entity?: string;
                 };
                 if (current) {
+                    // deleteField writes two rows in one transaction (the
+                    // field itself, then the table's indexes/checkConstraints
+                    // — see StorageService.deleteField) — if the *table* side
+                    // is what conflicted, `current` is a TableEntity row, not
+                    // the field this op is nominally about. RESTORE_OPS below
+                    // assumes `current` matches the op's own entity, so
+                    // misapplying it here would emit a corrupt addField (a
+                    // table row wearing a field's clothes). The transaction
+                    // rolled back, so the field itself is untouched —
+                    // restore it fresh, then patch the table separately.
+                    if (entity === 'Table' && message.op === 'deleteField') {
+                        const field = await this.storage.getField(
+                            message.args.tableId as string,
+                            message.args.id as string
+                        );
+                        if (field) {
+                            client.emit('op:rejected', {
+                                op: 'addField',
+                                args: {
+                                    diagramId: message.diagramId,
+                                    field,
+                                },
+                                version: field.version,
+                            });
+                        }
+                        const { id, version, ...attributes } = current;
+                        client.emit('op:rejected', {
+                            op: 'updateTable',
+                            args: { id, attributes },
+                            version,
+                        });
+                        return { ok: false, error: 'conflict' };
+                    }
                     // A rejected delete/put may have already removed (or
                     // never matched) the row in the client's local list,
                     // where the same-op {id, attributes} patch used for

@@ -54,12 +54,15 @@ function entityTypeOf(op: string): string {
     return op;
 }
 
+// add*/putTable ops carry the entity nested under a lowercase key named
+// after its type ({table: {...}}, {field: {...}}, {relationship: {...}}...)
+// — same convention as RESTORE_OPS' argKey on the gateway
+// (collaboration.gateway.ts) — instead of a top-level `id`.
 function idFor(op: string, args: Record<string, unknown>): string | undefined {
     if (typeof args.id === 'string') return args.id;
-    if (op === 'putTable' || op === 'addTable') {
-        return (args.table as { id?: string } | undefined)?.id;
-    }
-    return undefined;
+    const entity = entityTypeOf(op);
+    const key = entity.charAt(0).toLowerCase() + entity.slice(1);
+    return (args[key] as { id?: string } | undefined)?.id;
 }
 
 function versionKeyFor(op: string, id: string): string {
@@ -345,12 +348,22 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
             }
             const id = idFor(op, args);
             const versioned = VERSIONED_UPDATE_OPS.has(op) && id;
-            const sentArgs = versioned
+            const sentArgs: Record<string, unknown> = versioned
                 ? {
                       ...args,
                       version: versionsRef.current.get(versionKeyFor(op, id)),
                   }
-                : args;
+                : { ...args };
+            // deleteField also writes the table's indexes/checkConstraints
+            // as part of the same server-side transaction (see
+            // StorageService.deleteField) — guard that write with the
+            // table's own baseVersion too, or a concurrent edit to this
+            // table's indexes gets silently overwritten with no conflict.
+            if (op === 'deleteField' && typeof args.tableId === 'string') {
+                sentArgs.tableVersion = versionsRef.current.get(
+                    `Table:${args.tableId}`
+                );
+            }
             return new Promise<void>((resolve, reject) => {
                 socket.emit(
                     'op',
@@ -361,7 +374,12 @@ export const CollaborationProvider: React.FC<React.PropsWithChildren> = ({
                         newVersion?: number;
                     }) => {
                         if (ack?.ok) {
-                            if (versioned && ack.newVersion !== undefined) {
+                            // Seed regardless of `versioned` — add* ops now
+                            // return their fresh row's version (always 0)
+                            // too, not just update/delete/put ops, so this
+                            // entity's *next* edit doesn't race unguarded
+                            // with an undefined baseVersion.
+                            if (id && ack.newVersion !== undefined) {
                                 versionsRef.current.set(
                                     versionKeyFor(op, id),
                                     ack.newVersion

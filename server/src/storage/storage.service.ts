@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
+import {
+    ConflictException,
+    Injectable,
+    NotFoundException,
+    OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, IsNull, Not, type Repository } from 'typeorm';
 import { DiagramEntity } from '../entities/diagram.entity';
@@ -85,7 +90,14 @@ export class StorageService implements OnModuleInit {
         repo: Repository<T>,
         id: string,
         attributes: Partial<T>,
-        expectedVersion?: number
+        expectedVersion?: number,
+        // Tags the ConflictException so a caller that runs more than one
+        // versionedUpdate in the same op (deleteField: field row + the
+        // table's indexes/checkConstraints) can tell which entity actually
+        // conflicted — without it, the gateway has no way to know `current`
+        // is a TableEntity row rather than the op's own primary entity, and
+        // would misroute the restore (see collaboration.gateway.ts).
+        entityLabel?: string
     ): Promise<number> {
         const qb = repo
             .createQueryBuilder()
@@ -104,9 +116,20 @@ export class StorageService implements OnModuleInit {
         // (successful write) path — no separate SELECT needed there. The
         // conflict path still needs one: RETURNING comes back empty and we
         // have to fetch the current row to tell the sender what actually won.
-        if (expectedVersion !== undefined && result.affected === 0) {
+        if (result.affected === 0) {
             const current = await repo.findOneBy({ id } as never);
-            throw new ConflictException({ message: 'version-mismatch', current });
+            if (expectedVersion !== undefined) {
+                throw new ConflictException({
+                    message: 'version-mismatch',
+                    entity: entityLabel,
+                    current,
+                });
+            }
+            // No expectedVersion means there was nothing to optimistically
+            // race against — affected === 0 here only means the row itself
+            // doesn't exist. Previously this fell through and reported
+            // success (newVersion 0) for a write that touched nothing.
+            throw new NotFoundException(`Row ${id} not found`);
         }
         const row = (result.raw?.[0] as T | undefined) ?? (await repo.findOneBy({ id } as never));
         return row?.version ?? 0;
@@ -148,6 +171,7 @@ export class StorageService implements OnModuleInit {
         await this.tables.save({
             ...tableAttrs,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as TableEntity);
 
@@ -163,6 +187,11 @@ export class StorageService implements OnModuleInit {
                 }))
             );
         }
+        // Return the newly-inserted row's version so the gateway can seed
+        // the collab client's baseVersion for this entity — otherwise its
+        // first edit races unguarded (see collaboration-provider.tsx's
+        // versionsRef seeding).
+        return 0;
     }
 
     async getTable(diagramId: string, id: string) {
@@ -280,8 +309,11 @@ export class StorageService implements OnModuleInit {
             ...field,
             diagramId,
             order: (max ?? -1) + 1,
+            version: 0,
             deletedAt: null,
         } as FieldEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getField(tableId: string, id: string) {
@@ -315,7 +347,8 @@ export class StorageService implements OnModuleInit {
         tableId: string,
         id: string,
         tableAttributes: Partial<TableEntity>,
-        expectedVersion?: number
+        expectedVersion?: number,
+        expectedTableVersion?: number
     ) {
         return this.fields.manager.transaction(async (manager) => {
             const newVersion = await this.versionedUpdate(
@@ -324,10 +357,19 @@ export class StorageService implements OnModuleInit {
                 { deletedAt: new Date(), diagramId, tableId } as Partial<FieldEntity>,
                 expectedVersion
             );
+            // Now guarded like every other table write — without it, a
+            // concurrent edit to this same table's indexes/checkConstraints
+            // (from someone editing a *different* field on it) gets
+            // silently overwritten with no conflict, no correction, no way
+            // to recover it. Tagged 'Table' so the gateway's ConflictException
+            // handler doesn't mistake `current` (a TableEntity row) for the
+            // field this op is nominally about — see RESTORE_OPS there.
             await this.versionedUpdate(
                 manager.getRepository(TableEntity),
                 tableId,
-                { ...tableAttributes, diagramId } as Partial<TableEntity>
+                { ...tableAttributes, diagramId } as Partial<TableEntity>,
+                expectedTableVersion,
+                'Table'
             );
             return newVersion;
         });
@@ -348,8 +390,11 @@ export class StorageService implements OnModuleInit {
         await this.relationships.save({
             ...relationship,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as RelationshipEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getRelationship(diagramId: string, id: string) {
@@ -410,8 +455,11 @@ export class StorageService implements OnModuleInit {
         await this.dependencies.save({
             ...dependency,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as DependencyEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getDependency(diagramId: string, id: string) {
@@ -469,8 +517,11 @@ export class StorageService implements OnModuleInit {
         await this.areas.save({
             ...area,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as AreaEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getArea(diagramId: string, id: string) {
@@ -520,8 +571,11 @@ export class StorageService implements OnModuleInit {
         await this.customTypes.save({
             ...customType,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as CustomTypeEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getCustomType(diagramId: string, id: string) {
@@ -576,8 +630,11 @@ export class StorageService implements OnModuleInit {
         await this.notes.save({
             ...note,
             diagramId,
+            version: 0,
             deletedAt: null,
         } as NoteEntity);
+        // See addTable's comment — seeds the collab client's version map.
+        return 0;
     }
 
     async getNote(diagramId: string, id: string) {
