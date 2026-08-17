@@ -720,6 +720,24 @@ export const ChartDBProvider: React.FC<
                 // table from someone else's tab.
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 const { id, fields, ...attributes } = updatedTable;
+
+                // Bulk callers (reorder, auto-arrange) run updateFn over
+                // every table and only a handful actually moved — skip the
+                // version-guarded write for the rest instead of racing N
+                // unrelated tables against every other collaborator's edits
+                // on every drag.
+                const prevTable = prevTables.find((t) => t.id === id);
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const { fields: _prevFields, ...prevAttributes } =
+                    prevTable ?? {};
+                if (
+                    prevTable &&
+                    JSON.stringify(attributes) ===
+                        JSON.stringify(prevAttributes)
+                ) {
+                    continue;
+                }
+
                 promises.push(db.updateTable({ id, attributes }));
             }
 
@@ -805,6 +823,85 @@ export const ChartDBProvider: React.FC<
                                 : t;
                         }),
                     { updateHistory: false }
+                ),
+            [updateTablesState]
+        );
+
+    const applyCanvasTableChanges: ChartDBContext['applyCanvasTableChanges'] =
+        useCallback(
+            ({
+                positionChanges,
+                sizeChanges,
+                removeChanges,
+                childTableMovements,
+                areaRemoveChanges,
+            }) =>
+                updateTablesState((currentTables) =>
+                    currentTables
+                        .map((currentTable) => {
+                            const removedArea = areaRemoveChanges.find(
+                                (change) =>
+                                    change.id === currentTable.parentAreaId
+                            );
+                            const positionChange = positionChanges.find(
+                                (change) => change.id === currentTable.id
+                            );
+                            const sizeChange = sizeChanges.find(
+                                (change) => change.id === currentTable.id
+                            );
+                            const areaMovement = childTableMovements.get(
+                                currentTable.id
+                            );
+
+                            if (
+                                !removedArea &&
+                                !positionChange &&
+                                !sizeChange &&
+                                !areaMovement
+                            ) {
+                                return currentTable;
+                            }
+
+                            const x = positionChange?.position?.x;
+                            const y = positionChange?.position?.y;
+
+                            return {
+                                ...currentTable,
+                                ...(removedArea
+                                    ? { parentAreaId: null }
+                                    : {}),
+                                ...(positionChange &&
+                                x !== undefined &&
+                                y !== undefined &&
+                                !isNaN(x) &&
+                                !isNaN(y)
+                                    ? { x, y }
+                                    : {}),
+                                ...(areaMovement && !positionChange
+                                    ? {
+                                          x:
+                                              currentTable.x +
+                                              areaMovement.deltaX,
+                                          y:
+                                              currentTable.y +
+                                              areaMovement.deltaY,
+                                      }
+                                    : {}),
+                                ...(sizeChange
+                                    ? {
+                                          width:
+                                              sizeChange.dimensions?.width ??
+                                              currentTable.width,
+                                      }
+                                    : {}),
+                            };
+                        })
+                        .filter(
+                            (table) =>
+                                !removeChanges.some(
+                                    (change) => change.id === table.id
+                                )
+                        )
                 ),
             [updateTablesState]
         );
@@ -2364,6 +2461,7 @@ export const ChartDBProvider: React.FC<
                 moveTablesToArea,
                 removeTablesFromArea,
                 syncTablesParentArea,
+                applyCanvasTableChanges,
                 updateField,
                 removeField,
                 createField,

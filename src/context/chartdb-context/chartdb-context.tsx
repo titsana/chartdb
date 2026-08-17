@@ -146,6 +146,19 @@ export interface ChartDBContext {
     syncTablesParentArea: (
         updates: { id: string; parentAreaId: string | null }[]
     ) => Promise<void>;
+    applyCanvasTableChanges: (params: {
+        positionChanges: {
+            id: string;
+            position?: { x: number; y: number };
+        }[];
+        sizeChanges: {
+            id: string;
+            dimensions?: { width?: number; height?: number };
+        }[];
+        removeChanges: { id: string }[];
+        childTableMovements: Map<string, { deltaX: number; deltaY: number }>;
+        areaRemoveChanges: { id: string }[];
+    }) => Promise<void>;
 
     // Field operations
     getField: (tableId: string, fieldId: string) => DBField | null;
@@ -390,6 +403,7 @@ export const chartDBContext = createContext<ChartDBContext>({
     moveTablesToArea: emptyFn,
     removeTablesFromArea: emptyFn,
     syncTablesParentArea: emptyFn,
+    applyCanvasTableChanges: emptyFn,
 
     // Field operations
     updateField: emptyFn,
