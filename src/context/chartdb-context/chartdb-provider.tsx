@@ -640,7 +640,6 @@ export const ChartDBProvider: React.FC<
             updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[],
             options = { updateHistory: true, forceOverride: false }
         ) => {
-            console.log('updateTablesState called with options:', options);
             const updateTables = (prevTables: DBTable[]) => {
                 const updatedTables = updateFn(prevTables);
                 if (options.forceOverride) {
@@ -747,31 +746,8 @@ export const ChartDBProvider: React.FC<
             );
 
             await Promise.all(promises);
-
-            if (options.updateHistory) {
-                addUndoAction({
-                    action: 'updateTablesState',
-                    redoData: { tables: updatedTables },
-                    undoData: {
-                        tables: prevTables,
-                        relationships: relationshipsToRemove,
-                        dependencies: dependenciesToRemove,
-                    },
-                });
-                resetRedoStack();
-            }
         },
-        [
-            db,
-            tables,
-            setTables,
-            diagramId,
-            addUndoAction,
-            resetRedoStack,
-            relationships,
-            events,
-            dependencies,
-        ]
+        [db, tables, setTables, diagramId, relationships, events, dependencies]
     );
 
     const getField: ChartDBContext['getField'] = useCallback(

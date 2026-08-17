@@ -45,16 +45,6 @@ type RedoUndoActionRemoveTables = RedoUndoActionBase<
     }
 >;
 
-type RedoUndoActionUpdateTablesState = RedoUndoActionBase<
-    'updateTablesState',
-    { tables: DBTable[] },
-    {
-        tables: DBTable[];
-        relationships: DBRelationship[];
-        dependencies: DBDependency[];
-    }
->;
-
 type RedoUndoActionAddField = RedoUndoActionBase<
     'addField',
     { tableId: string; field: DBField },
@@ -212,7 +202,6 @@ export type RedoUndoAction =
     | RedoUndoActionRemoveTables
     | RedoUndoActionUpdateTable
     | RedoUndoActionUpdateDiagramName
-    | RedoUndoActionUpdateTablesState
     | RedoUndoActionAddField
     | RedoUndoActionRemoveField
     | RedoUndoActionUpdateField

@@ -28,7 +28,6 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
         removeDependencies,
         updateDependency,
         updateRelationship,
-        updateTablesState,
         addIndex,
         removeIndex,
         updateIndex,
@@ -60,12 +59,6 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
             },
             updateTable: ({ redoData: { tableId, table } }) => {
                 return updateTable(tableId, table, { updateHistory: false });
-            },
-            updateTablesState: ({ redoData: { tables } }) => {
-                return updateTablesState(() => tables, {
-                    updateHistory: false,
-                    forceOverride: true,
-                });
             },
             addField: ({ redoData: { tableId, field } }) => {
                 return addField(tableId, field, { updateHistory: false });
@@ -185,7 +178,6 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
             updateField,
             addRelationships,
             updateRelationship,
-            updateTablesState,
             addIndex,
             removeIndex,
             updateIndex,
@@ -271,18 +263,6 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
                     updateHistory: false,
                 });
             },
-            updateTablesState: async ({
-                undoData: { tables, relationships, dependencies },
-            }) => {
-                await Promise.all([
-                    updateTablesState(() => tables, {
-                        updateHistory: false,
-                        forceOverride: true,
-                    }),
-                    addRelationships(relationships, { updateHistory: false }),
-                    addDependencies(dependencies, { updateHistory: false }),
-                ]);
-            },
             addIndex: ({ undoData: { tableId, indexId } }) => {
                 return removeIndex(tableId, indexId, { updateHistory: false });
             },
@@ -358,7 +338,6 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
             updateField,
             addRelationships,
             updateRelationship,
-            updateTablesState,
             addIndex,
             removeIndex,
             updateIndex,
