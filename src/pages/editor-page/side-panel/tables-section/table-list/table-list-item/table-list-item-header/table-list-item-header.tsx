@@ -105,9 +105,7 @@ export const TableListItemHeader: React.FC<TableListItemHeaderProps> = ({
         ({ schema }: { schema: DBSchema }) => {
             updateTablesState((currentTables) =>
                 currentTables.map((t) =>
-                    t.id === table.id || !t.schema
-                        ? { ...t, schema: schema.name }
-                        : t
+                    t.id === table.id ? { ...t, schema: schema.name } : t
                 )
             );
         },
