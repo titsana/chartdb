@@ -104,8 +104,11 @@ function buildOpHandlers(storage: StorageService): Record<string, OpHandler> {
                 id as string,
                 version as number | undefined
             ),
-        addField: ({ diagramId, field }) =>
-            storage.addField(diagramId as string, field as never),
+        addField: ({ diagramId, tableId, field }) =>
+            storage.addField(
+                diagramId as string,
+                { ...(field as object), tableId } as never
+            ),
         updateField: ({ id, attributes, version }) =>
             storage.updateField(
                 id as string,

@@ -113,8 +113,14 @@ export function applyRemoteOp(
             return;
 
         case 'addField': {
-            const field = args.field as DBField & { tableId: string };
-            s.setTables((prev) => upsertField(prev, field.tableId, field));
+            // tableId is normally top-level (args.tableId, sent by a real
+            // addField op) but the deleteField rejection-restore path
+            // (op:rejected in collaboration.gateway.ts) only has {diagramId,
+            // field}, where `field` is the raw entity row and carries
+            // tableId nested instead — fall back to that shape too.
+            const field = args.field as DBField & { tableId?: string };
+            const tableId = (args.tableId ?? field.tableId) as string;
+            s.setTables((prev) => upsertField(prev, tableId, field));
             return;
         }
         case 'updateField':

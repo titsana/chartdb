@@ -950,7 +950,20 @@ export const ChartDBProvider: React.FC<
             setTables((tables) => {
                 return tables.map((table) => {
                     if (table.id === tableId) {
-                        db.addField({ diagramId, tableId, field });
+                        // Fire-and-forget: this write happens inside a state
+                        // updater, so it can't be awaited. Without a .catch()
+                        // a failed write (e.g. a collab op rejected by the
+                        // server) fails silently — the optimistic UI update
+                        // above stays, but nothing is actually persisted.
+                        db.addField({ diagramId, tableId, field }).catch(
+                            (err: Error) => {
+                                toast({
+                                    title: 'Failed to add field',
+                                    description: err.message,
+                                    variant: 'destructive',
+                                });
+                            }
+                        );
 
                         return { ...table, fields: [...table.fields, field] };
                     }
@@ -997,6 +1010,7 @@ export const ChartDBProvider: React.FC<
             resetRedoStack,
             events,
             getTable,
+            toast,
         ]
     );
 
