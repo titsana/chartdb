@@ -588,6 +588,41 @@ before any network code exists.
   (PK-implies-not-null, PK-implies-unique) under one elected writer so a
   shared doc doesn't get N redundant correction writes from N clients —
   see the note on #5/#7 in Phase 1 above.
+- **Provider wiring is migrated collection-by-collection, not all at
+  once, and not by method.** `tables` (~25 methods) is too large a first
+  slice, and `areas` looks self-contained (3 methods) but isn't —
+  `DBTable.parentAreaId` cross-references it, and `checkParentAreas` in
+  `canvas.tsx` continuously writes that table field, so an `areas`-only
+  slice still has to reach into `tables`. `notes` is the actual first
+  slice: `{id, content, x, y, width, height, color, order}`, nothing in
+  any other collection holds a `noteId`/back-reference into it (verified
+  by grep across `src/lib/domain` and `src/context`).
+  - **Storage (Dexie) semantics for a Y.Doc-backed collection:** once
+    `notes` is doc-backed, Dexie becomes a **write-through sink only** —
+    every doc mutation still calls `db.addNote`/`db.updateNote`/
+    `db.deleteNote` so existing persistence keeps working, but nothing
+    ever reads `notes` back out of Dexie except the initial diagram
+    load. The doc, not Dexie, is the in-memory source of truth from that
+    point on. This is forward-compatible with Phase 5 retiring Dexie
+    entirely (§5.2, §8) — the write-through calls just get deleted then,
+    nothing about the doc-side logic changes.
+  - **Undo/redo semantics for a Y.Doc-backed collection:** `HistoryProvider`'s
+    undo/redo handlers for `notes` must write their restore *into the
+    doc* (via `upsertItem`/`patchItem`/`removeItemFromCollection` from
+    `y-diagram.ts`), never call `setNotes` directly. If a handler restores
+    into React state instead, the next Yjs observer fire re-derives state
+    from the doc and silently overwrites the undo — it would look like it
+    worked and then not stick. This is also forward-compatible with
+    Phase 5's swap to `Y.UndoManager`: both the interim handler and the
+    eventual `UndoManager` write to the same doc, only the stack
+    bookkeeping changes.
+  - **Object identity:** `yDocToDiagram` builds all-new objects on every
+    call. The observer must not feed a full re-projection into `setNotes`
+    on every doc change — that gives every note a new object identity on
+    every keystroke anywhere in the diagram, and ReactFlow re-renders
+    every node. Project just the `notes` collection (not the whole
+    diagram) and only update the entries the observer reports as
+    changed.
 - Build the adapter so `add*/update*/remove*` methods read/write through a
   local `Y.Doc` instead of raw React state.
 - No `y-indexeddb`, no WebSocket — this `Y.Doc` only ever exists in one
