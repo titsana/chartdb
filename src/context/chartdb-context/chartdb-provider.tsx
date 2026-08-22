@@ -1,19 +1,11 @@
-import React, {
-    useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-} from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
     upsertItem,
     patchItem,
     removeItemFromCollection,
-    readCollection,
-    readItem,
-    compareByDomainOrder,
 } from '@/lib/collab/y-diagram';
+import { useYCollectionSync } from '@/hooks/use-y-collection-sync';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
 import { defaultTableColor, randomColor, viewColor } from '@/lib/colors';
@@ -87,88 +79,41 @@ export const ChartDBProvider: React.FC<
     );
     const [notes, setNotes] = useState<Note[]>(diagram?.notes ?? []);
 
-    // Phase 2 (docs/design/realtime-collaboration.md §10): `notes` is the
-    // first collection migrated to a Y.Doc-backed representation — see the
-    // Dexie-sink/undo/object-identity decision recorded there before this
-    // landed. `notesYDocRef` is the source of truth for `notes` from here
-    // on; the `notes` React state above is a projection of it, kept in
-    // sync by the observer effect below. `db.addNote`/`updateNote`/
-    // `deleteNote` (still called from every mutation) are a write-through
-    // sink only — never read back except at initial diagram load.
-    const notesYDocRef = useRef<Y.Doc | null>(null);
-    if (!notesYDocRef.current) {
+    // Phase 2 (docs/design/realtime-collaboration.md §10): `notes` and
+    // `customTypes` are migrated to a Y.Doc-backed representation — see
+    // the Dexie-sink/undo/object-identity decision recorded there before
+    // `notes` landed, and the isolation check before `customTypes` did.
+    // `collabDocRef` is ONE shared `Y.Doc` per diagram (matches §5.2 — a
+    // single doc with one top-level `Y.Map` per collection, not a doc per
+    // collection, so Phase 4's WebSocket sync has one doc per diagram to
+    // sync), and is the source of truth for every collection migrated so
+    // far; the React state above is a projection of it, kept in sync by
+    // `useYCollectionSync` below. `db.addNote`/`addCustomType`/etc (still
+    // called from every mutation) are a write-through sink only — never
+    // read back except at initial diagram load.
+    const collabDocRef = useRef<Y.Doc | null>(null);
+    if (!collabDocRef.current) {
         const doc = new Y.Doc();
         const notesMap = doc.getMap<unknown>('notes');
         (diagram?.notes ?? []).forEach((note) => upsertItem(notesMap, note));
-        notesYDocRef.current = doc;
+        const customTypesMap = doc.getMap<unknown>('customTypes');
+        (diagram?.customTypes ?? []).forEach((customType) =>
+            upsertItem(customTypesMap, customType)
+        );
+        collabDocRef.current = doc;
     }
-    // bumped whenever loadDiagramFromData replaces notesYDocRef.current
-    // with a fresh doc, so the observer effect below re-subscribes to it.
-    const [notesDocGeneration, setNotesDocGeneration] = useState(0);
 
-    // Projects notesYDocRef's `notes` Y.Map into React state on every
-    // change to it (from this tab's own writes below, or eventually a
-    // remote peer's once Phase 4 wires a WebSocket provider in). A
-    // structural change (a note added/removed — event.target is the
-    // collection map itself) re-derives the full array via
-    // `readCollection`; a non-structural change (an existing note's own
-    // fields changed) patches only that one entry via `readItem`; so
-    // notes untouched by a given edit keep their object identity instead
-    // of every note in the diagram getting a new reference on every
-    // keystroke (see the object-identity note in the design doc).
-    useEffect(() => {
-        const doc = notesYDocRef.current;
-        if (!doc) return;
+    const decodeNote = (r: Record<string, unknown>) => r as unknown as Note;
+    const decodeCustomType = (r: Record<string, unknown>) =>
+        r as unknown as DBCustomType;
 
-        const notesMap = doc.getMap<unknown>('notes');
-        const decodeNote = (r: Record<string, unknown>) => r as unknown as Note;
-
-        const handler = (events: Y.YEvent<Y.Map<unknown>>[]) => {
-            let structural = false;
-            const changedIds = new Set<string>();
-            events.forEach((event) => {
-                if (event.target === notesMap) {
-                    structural = true;
-                    event.changes.keys.forEach((_change, key) =>
-                        changedIds.add(key)
-                    );
-                } else {
-                    changedIds.add(event.path[0] as string);
-                }
-            });
-
-            if (structural) {
-                setNotes(readCollection<Note>(notesMap, decodeNote));
-                return;
-            }
-
-            setNotes((current) => {
-                let next = current;
-                let orderMayHaveChanged = false;
-                changedIds.forEach((id) => {
-                    const decoded = readItem<Note>(notesMap, id, decodeNote);
-                    const idx = next.findIndex((n) => n.id === id);
-                    if (!decoded || idx === -1) return;
-                    if (decoded.order !== next[idx].order) {
-                        orderMayHaveChanged = true;
-                    }
-                    next = next.map((n, i) => (i === idx ? decoded : n));
-                });
-                // the notes side panel's drag-to-reorder writes `order`
-                // via a plain updateNote patch (non-structural — no note
-                // added/removed), so it doesn't get the full
-                // readCollection re-sort above. Re-sort here too whenever
-                // `order` itself was one of the changed fields; stable
-                // sort preserves everyone else's relative position.
-                return orderMayHaveChanged
-                    ? [...next].sort(compareByDomainOrder)
-                    : next;
-            });
-        };
-
-        notesMap.observeDeep(handler);
-        return () => notesMap.unobserveDeep(handler);
-    }, [notesDocGeneration]);
+    useYCollectionSync(collabDocRef.current, 'notes', decodeNote, setNotes);
+    useYCollectionSync(
+        collabDocRef.current,
+        'customTypes',
+        decodeCustomType,
+        setCustomTypes
+    );
 
     // appendix-b:9 — default name/order counters. Deriving these from
     // array.length at call time races: two create*() calls fired in the
@@ -1959,8 +1904,8 @@ export const ChartDBProvider: React.FC<
             // — the observer effect above projects this into `notes`
             // state. Writing straight to `setNotes` here would get
             // silently overwritten by the next doc-driven projection.
-            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
-            notesYDocRef.current!.transact(() => {
+            const notesMap = collabDocRef.current!.getMap<unknown>('notes');
+            collabDocRef.current!.transact(() => {
                 notes.forEach((note) => upsertItem(notesMap, note));
             });
 
@@ -2023,8 +1968,8 @@ export const ChartDBProvider: React.FC<
             ];
 
             // Phase 2: remove from the doc — see addNotes above.
-            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
-            notesYDocRef.current!.transact(() => {
+            const notesMap = collabDocRef.current!.getMap<unknown>('notes');
+            collabDocRef.current!.transact(() => {
                 ids.forEach((id) => removeItemFromCollection(notesMap, id));
             });
 
@@ -2066,8 +2011,8 @@ export const ChartDBProvider: React.FC<
             // Phase 2: patch only the given keys on the doc's entry — see
             // addNotes above. A no-op if `id` no longer exists (e.g. a
             // concurrent delete raced this edit).
-            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
-            notesYDocRef.current!.transact(() => {
+            const notesMap = collabDocRef.current!.getMap<unknown>('notes');
+            collabDocRef.current!.transact(() => {
                 patchItem(notesMap, id, note as Record<string, unknown>);
             });
 
@@ -2119,20 +2064,24 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId(undefined);
                 setNotes(diagram.notes ?? []);
 
-                // Phase 2: rebuild the notes Y.Doc from scratch for the
-                // newly loaded diagram instead of carrying over the
-                // previous diagram's doc. Bumping notesDocGeneration makes
-                // the observer effect re-subscribe to the new doc/map
-                // instance; setNotes above already set the correct initial
+                // Phase 2: rebuild the shared collab Y.Doc from scratch for
+                // the newly loaded diagram instead of carrying over the
+                // previous diagram's doc. `collabDocRef.current` changing
+                // to a new object is what makes `useYCollectionSync`'s
+                // effect re-subscribe (see its doc comment); setNotes/
+                // setCustomTypes above already set the correct initial
                 // React state synchronously, so there's no visible gap.
-                notesYDocRef.current?.destroy();
-                const newNotesDoc = new Y.Doc();
-                const newNotesMap = newNotesDoc.getMap<unknown>('notes');
+                collabDocRef.current?.destroy();
+                const newDoc = new Y.Doc();
+                const newNotesMap = newDoc.getMap<unknown>('notes');
                 (diagram.notes ?? []).forEach((note) =>
                     upsertItem(newNotesMap, note)
                 );
-                notesYDocRef.current = newNotesDoc;
-                setNotesDocGeneration((g) => g + 1);
+                const newCustomTypesMap = newDoc.getMap<unknown>('customTypes');
+                (diagram.customTypes ?? []).forEach((customType) =>
+                    upsertItem(newCustomTypesMap, customType)
+                );
+                collabDocRef.current = newDoc;
 
                 // reset the appendix-b:9 default-name counters so they
                 // reseed from this diagram's actual counts on next use,
@@ -2163,7 +2112,6 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId,
                 events,
                 setNotes,
-                setNotesDocGeneration,
                 resetRedoStack,
                 resetUndoStack,
             ]
@@ -2210,7 +2158,18 @@ export const ChartDBProvider: React.FC<
             customTypes: DBCustomType[],
             options = { updateHistory: true }
         ) => {
-            setCustomTypes((currentTypes) => [...currentTypes, ...customTypes]);
+            // Phase 2: write into the shared collab Y.Doc, not React state
+            // directly — useYCollectionSync's observer projects this into
+            // `customTypes` state. Writing straight to `setCustomTypes`
+            // here would get silently overwritten by that projection.
+            const customTypesMap =
+                collabDocRef.current!.getMap<unknown>('customTypes');
+            collabDocRef.current!.transact(() => {
+                customTypes.forEach((customType) =>
+                    upsertItem(customTypesMap, customType)
+                );
+            });
+
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
 
@@ -2230,7 +2189,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setCustomTypes, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack]
     );
 
     const addCustomType: ChartDBContext['addCustomType'] = useCallback(
@@ -2267,9 +2226,15 @@ export const ChartDBProvider: React.FC<
                 .map((id) => getCustomType(id))
                 .filter(Boolean) as DBCustomType[];
 
-            setCustomTypes((types) =>
-                types.filter((type) => !ids.includes(type.id))
-            );
+            // Phase 2: remove from the shared collab Y.Doc — see
+            // addCustomTypes above.
+            const customTypesMap =
+                collabDocRef.current!.getMap<unknown>('customTypes');
+            collabDocRef.current!.transact(() => {
+                ids.forEach((id) =>
+                    removeItemFromCollection(customTypesMap, id)
+                );
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -2292,14 +2257,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            diagramId,
-            setCustomTypes,
-            addUndoAction,
-            resetRedoStack,
-            getCustomType,
-        ]
+        [db, diagramId, addUndoAction, resetRedoStack, getCustomType]
     );
 
     const removeCustomType: ChartDBContext['removeCustomType'] = useCallback(
@@ -2316,9 +2274,18 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const prevCustomType = getCustomType(id);
-            setCustomTypes((types) =>
-                types.map((t) => (t.id === id ? { ...t, ...customType } : t))
-            );
+
+            // Phase 2: patch only the given keys on the doc's entry — see
+            // addCustomTypes above. A no-op if `id` no longer exists.
+            const customTypesMap =
+                collabDocRef.current!.getMap<unknown>('customTypes');
+            collabDocRef.current!.transact(() => {
+                patchItem(
+                    customTypesMap,
+                    id,
+                    customType as Record<string, unknown>
+                );
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -2337,14 +2304,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            setCustomTypes,
-            addUndoAction,
-            resetRedoStack,
-            getCustomType,
-            diagramId,
-        ]
+        [db, addUndoAction, resetRedoStack, getCustomType, diagramId]
     );
 
     return (

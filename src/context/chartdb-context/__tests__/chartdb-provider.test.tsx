@@ -779,3 +779,184 @@ describe('Phase 2 (docs/design/realtime-collaboration.md §10) — notes are Y.D
         ]);
     });
 });
+
+describe('Phase 2 (docs/design/realtime-collaboration.md §10) — customTypes are Y.Doc-backed', () => {
+    it('createCustomType adds the type to state', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let created: Awaited<
+            ReturnType<typeof result.current.createCustomType>
+        >;
+        await act(async () => {
+            created = await result.current.createCustomType({
+                name: 'status',
+            });
+        });
+
+        expect(result.current.customTypes.map((t) => t.id)).toEqual([
+            created!.id,
+        ]);
+        expect(result.current.customTypes[0].name).toBe('status');
+    });
+
+    it('fix for appendix-b:2 (customTypes slice) — undo after createCustomType removes the type from the Y.Doc itself, not just React state', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let typeA: Awaited<
+            ReturnType<typeof result.current.chartdb.createCustomType>
+        >;
+        await act(async () => {
+            typeA = await result.current.chartdb.createCustomType({
+                name: 'A',
+            });
+        });
+        expect(result.current.chartdb.customTypes.map((t) => t.id)).toEqual([
+            typeA!.id,
+        ]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.customTypes).toEqual([]);
+
+        // discriminating check — see the equivalent notes test above for
+        // why this is necessary, not redundant.
+        let typeB: Awaited<
+            ReturnType<typeof result.current.chartdb.createCustomType>
+        >;
+        await act(async () => {
+            typeB = await result.current.chartdb.createCustomType({
+                name: 'B',
+            });
+        });
+        expect(result.current.chartdb.customTypes.map((t) => t.id)).toEqual([
+            typeB!.id,
+        ]);
+    });
+
+    it('fix for appendix-b:2 (customTypes slice) — undo after updateCustomType reverts the Y.Doc entry itself, not just React state', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let typeA: Awaited<
+            ReturnType<typeof result.current.chartdb.createCustomType>
+        >;
+        await act(async () => {
+            typeA = await result.current.chartdb.createCustomType({
+                name: 'original',
+            });
+        });
+        await act(async () => {
+            await result.current.chartdb.updateCustomType(typeA!.id, {
+                name: 'edited',
+            });
+        });
+        expect(result.current.chartdb.customTypes[0].name).toBe('edited');
+
+        await act(async () => {
+            await result.current.chartdb.createCustomType({ name: 'spacer' });
+        });
+        expect(
+            result.current.chartdb.customTypes.find((t) => t.id === typeA!.id)!
+                .name
+        ).toBe('edited');
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.customTypes.map((t) => t.id)).toEqual([
+            typeA!.id,
+        ]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.customTypes[0].name).toBe('original');
+
+        await act(async () => {
+            await result.current.chartdb.createCustomType({
+                name: 'forces a resync',
+            });
+        });
+        expect(
+            result.current.chartdb.customTypes.find((t) => t.id === typeA!.id)!
+                .name
+        ).toBe('original');
+    });
+
+    it('editing one custom type does not change the object identity of an untouched sibling', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let typeA: Awaited<ReturnType<typeof result.current.createCustomType>>;
+        let typeB: Awaited<ReturnType<typeof result.current.createCustomType>>;
+        await act(async () => {
+            typeA = await result.current.createCustomType({ name: 'A' });
+        });
+        await act(async () => {
+            typeB = await result.current.createCustomType({ name: 'B' });
+        });
+
+        const beforeB = result.current.customTypes.find(
+            (t) => t.id === typeB!.id
+        );
+
+        await act(async () => {
+            await result.current.updateCustomType(typeA!.id, {
+                name: 'A-edited',
+            });
+        });
+
+        expect(result.current.customTypes.find((t) => t.id === typeB!.id)).toBe(
+            beforeB
+        );
+    });
+
+    it('reordering a custom type via updateCustomType({ order }) re-sorts the array immediately', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let typeA: Awaited<ReturnType<typeof result.current.createCustomType>>;
+        let typeB: Awaited<ReturnType<typeof result.current.createCustomType>>;
+        await act(async () => {
+            typeA = await result.current.createCustomType({ name: 'A' });
+        });
+        await act(async () => {
+            typeB = await result.current.createCustomType({ name: 'B' });
+        });
+
+        await act(async () => {
+            await result.current.updateCustomType(typeB!.id, { order: 0 });
+        });
+        await act(async () => {
+            await result.current.updateCustomType(typeA!.id, { order: 1 });
+        });
+
+        expect(result.current.customTypes.map((t) => t.id)).toEqual([
+            typeB!.id,
+            typeA!.id,
+        ]);
+    });
+
+    it('removeCustomTypes removes the type from state, and undo restores it', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let typeA: Awaited<
+            ReturnType<typeof result.current.chartdb.createCustomType>
+        >;
+        await act(async () => {
+            typeA = await result.current.chartdb.createCustomType({
+                name: 'A',
+            });
+        });
+
+        await act(async () => {
+            await result.current.chartdb.removeCustomType(typeA!.id);
+        });
+        expect(result.current.chartdb.customTypes).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.customTypes.map((t) => t.id)).toEqual([
+            typeA!.id,
+        ]);
+    });
+});
