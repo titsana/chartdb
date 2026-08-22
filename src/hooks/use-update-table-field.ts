@@ -105,13 +105,59 @@ export const useUpdateTableField = (
 
     // Auto-correct: Primary key fields must be NOT NULL
     // This fixes any existing data where PK columns were incorrectly set as nullable
+    // appendix-b:5 fix — updateHistory: false, so this corrective write
+    // doesn't push its own undo entry. Previously it did, so a user's next
+    // "undo" could revert this invisible auto-correction instead of their
+    // actual last visible action.
     useEffect(() => {
         if (field.primaryKey && field.nullable) {
-            chartDBUpdateField(table.id, field.id, { nullable: false });
+            chartDBUpdateField(
+                table.id,
+                field.id,
+                { nullable: false },
+                { updateHistory: false }
+            );
         }
     }, [
         field.primaryKey,
         field.nullable,
+        table.id,
+        field.id,
+        chartDBUpdateField,
+    ]);
+
+    // Calculate primary key fields for validation
+    const primaryKeyFields = useMemo(() => {
+        return table.fields.filter((f) => f.primaryKey);
+    }, [table.fields]);
+
+    const primaryKeyCount = useMemo(
+        () => primaryKeyFields.length,
+        [primaryKeyFields.length]
+    );
+
+    // appendix-b:7 fix — recompute the unique flag for a PK field from the
+    // current, fully-committed primaryKeyCount every render, instead of
+    // guessing it from a pre-write local count captured before the write
+    // lands (see debouncedPrimaryKeyUpdate below). Two concurrent
+    // PK-toggles could previously both see primaryKeyCount === 0 and both
+    // set unique: true, producing two single-column unique constraints
+    // instead of one correct composite PK.
+    useEffect(() => {
+        if (!field.primaryKey) return;
+        const shouldBeUnique = primaryKeyCount === 1;
+        if (field.unique !== shouldBeUnique) {
+            chartDBUpdateField(
+                table.id,
+                field.id,
+                { unique: shouldBeUnique },
+                { updateHistory: false }
+            );
+        }
+    }, [
+        field.primaryKey,
+        field.unique,
+        primaryKeyCount,
         table.id,
         field.id,
         chartDBUpdateField,
@@ -128,16 +174,6 @@ export const useUpdateTableField = (
                   ) => customUpdateField(attrs)
                 : chartDBUpdateField,
         [customUpdateField, chartDBUpdateField]
-    );
-
-    // Calculate primary key fields for validation
-    const primaryKeyFields = useMemo(() => {
-        return table.fields.filter((f) => f.primaryKey);
-    }, [table.fields]);
-
-    const primaryKeyCount = useMemo(
-        () => primaryKeyFields.length,
-        [primaryKeyFields.length]
     );
 
     // Generate data type options for select box
@@ -303,20 +339,19 @@ export const useUpdateTableField = (
     );
 
     // Debounced update for primary key toggle
+    // appendix-b:7 fix — no longer guesses `unique` here from a
+    // primaryKeyCount captured before this write lands. The dedicated
+    // effect above recomputes it afterward, from the actually-committed
+    // count, so it can't race with a concurrent PK toggle on another field.
     const debouncedPrimaryKeyUpdate = useDebounce(
         useCallback(
-            (value: boolean, primaryKeyCount: number) => {
+            (value: boolean) => {
                 if (value) {
                     // When setting as primary key
-                    const updates: Partial<DBField> = {
+                    updateField(table.id, field.id, {
                         primaryKey: true,
                         nullable: false, // Primary keys must be NOT NULL
-                    };
-                    // Only auto-set unique if this will be the only primary key
-                    if (primaryKeyCount === 0) {
-                        updates.unique = true;
-                    }
-                    updateField(table.id, field.id, updates);
+                    });
                 } else {
                     // When removing primary key
                     updateField(table.id, field.id, {
@@ -337,9 +372,9 @@ export const useUpdateTableField = (
             if (value) {
                 setLocalNullable(false);
             }
-            debouncedPrimaryKeyUpdate(value, primaryKeyCount);
+            debouncedPrimaryKeyUpdate(value);
         },
-        [primaryKeyCount, debouncedPrimaryKeyUpdate]
+        [debouncedPrimaryKeyUpdate]
     );
 
     // Handle nullable toggle with optimistic update
