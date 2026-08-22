@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (6/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (7/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -474,7 +474,15 @@ already safe to merge, instead of trying to fix these two things at once.
   else in this phase sits on top of.
 - Make cascade-delete of relationships/dependencies a derived
   recomputation (from current state, not a captured closure) instead of a
-  one-shot list (**#3**).
+  one-shot list (**#3**). — ✅ Done (`1304e84`): the filter condition
+  inside `setRelationships`/`setDependencies` is now re-evaluated against
+  whatever is live when React applies the update (`removeTables`: against
+  `ids` directly; `updateTablesState`: against `survivingTableIds`), not
+  against a precomputed list from a closure snapshot. Verified by
+  reverting the fix and confirming the new tests fail against the old
+  code. The db.delete\*()/undo-data half of this still uses the closure
+  snapshot — full enforcement there is merge-time/server-side, per the
+  original fix direction.
 - Add existence re-validation at relationship/dependency creation commit
   time, not just at UI-render time (**#4**).
 - Turn the self-healing effects (PK-implies-not-null,
