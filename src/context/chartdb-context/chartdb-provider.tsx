@@ -115,6 +115,39 @@ export const ChartDBProvider: React.FC<
     // which has no business opening a live collaboration room for
     // whatever id a template happens to carry.
     const providerRef = useRef<HocuspocusProvider | null>(null);
+    // Phase 4 ready-gate (docs/design/realtime-collaboration.md's Phase 4
+    // section has the full writeup of the bug this closes): on the
+    // collab-connect path, `loadDiagramFromData` sets React state
+    // synchronously but leaves `collabDocRef.current`'s Y.Doc itself empty
+    // until the provider's `synced`/`disconnected` event fires and
+    // `reconcileWithRoom` decides seed-vs-adopt. A write landing in that
+    // window is not merely delayed — it's actively wrong three different
+    // ways depending on which method fires: `getLiveTable`-gated writes
+    // (updateField et al.) silently vanish since the doc has no entry to
+    // read; `addTables` (no such gate) writes straight into the doc, which
+    // then makes `roomIsEmpty` look non-empty and skips seeding the rest of
+    // the diagram entirely; `removeTables` (no such gate either) no-ops the
+    // removal against the still-empty doc, and the seed then resurrects the
+    // "deleted" row. `gateWrite` below refuses the whole call outright
+    // during that window instead of letting any of those three happen.
+    // Starts `true`: the very first doc built below (construction-time,
+    // readonly-template-preview case included) is local-only, no provider
+    // involved, always immediately usable.
+    const collabReadyRef = useRef(true);
+    const gateWrite = useCallback(
+        <Args extends unknown[]>(fn: (...args: Args) => Promise<void>) => {
+            return async (...args: Args): Promise<void> => {
+                if (!collabReadyRef.current) {
+                    console.warn(
+                        '[ChartDB] ignored an edit — this diagram has not finished loading yet (waiting on the collaboration server).'
+                    );
+                    return;
+                }
+                return fn(...args);
+            };
+        },
+        []
+    );
     if (!collabDocRef.current) {
         const doc = new Y.Doc();
         (diagram?.tables ?? []).forEach((table) =>
@@ -230,6 +263,11 @@ export const ChartDBProvider: React.FC<
         // unconditional and runs before anything below ever touches the
         // doc, so a readonly session can't write through it.
         if (readonlyRef.current) return;
+        // Phase 4 ready-gate — see gateWrite's doc comment above. This
+        // handler doesn't go through the context value object the way the
+        // other write methods do, so it can't be wrapped there; it gets the
+        // same guard inline instead.
+        if (!collabReadyRef.current) return;
 
         const { tablesToAdd, fieldsToAdd, relationshipsToAdd, areasToAdd } =
             event.data;
@@ -2256,6 +2294,10 @@ export const ChartDBProvider: React.FC<
                 providerRef.current = null;
                 const newDoc = new Y.Doc();
                 collabDocRef.current = newDoc;
+                // Opens the ready-gate window (see gateWrite's doc comment
+                // above) — closed again at the top of reconcileWithRoom
+                // below, the moment seed-vs-adopt is actually decided.
+                collabReadyRef.current = false;
 
                 // Phase 4: seeding this diagram's local (Dexie-loaded) data
                 // into the doc is only correct for a room nobody has
@@ -2272,6 +2314,11 @@ export const ChartDBProvider: React.FC<
                 // whatever was already in the doc before it started
                 // observing.
                 const reconcileWithRoom = () => {
+                    // Closes the ready-gate window — from here on, this
+                    // diagram's doc is known consistent (either freshly
+                    // seeded or adopted from the room), so gated writes are
+                    // safe to let through again.
+                    collabReadyRef.current = true;
                     const tablesMap = newDoc.getMap<unknown>('tables');
                     const relationshipsMap =
                         newDoc.getMap<unknown>('relationships');
@@ -2610,69 +2657,77 @@ export const ChartDBProvider: React.FC<
                 loadDiagramFromData,
                 updateDatabaseType,
                 updateDatabaseEdition,
-                clearDiagramData,
-                deleteDiagram,
+                // Phase 4 ready-gate: every method below that writes into
+                // collabDocRef is wrapped in gateWrite (see its doc comment
+                // near collabReadyRef's declaration) — a call landing while
+                // this diagram hasn't finished seed-vs-adopt reconciliation
+                // yet is refused outright rather than corrupting the doc.
+                // Delegators (addTable -> addTables, removeRelationship ->
+                // removeRelationships, etc.) aren't wrapped individually;
+                // they inherit the gate from the base method they call.
+                clearDiagramData: gateWrite(clearDiagramData),
+                deleteDiagram: gateWrite(deleteDiagram),
                 updateDiagramUpdatedAt,
                 createTable,
                 addTable,
-                addTables,
+                addTables: gateWrite(addTables),
                 getTable,
                 removeTable,
-                removeTables,
-                updateTable,
-                updateTablesState,
-                updateField,
-                removeField,
+                removeTables: gateWrite(removeTables),
+                updateTable: gateWrite(updateTable),
+                updateTablesState: gateWrite(updateTablesState),
+                updateField: gateWrite(updateField),
+                removeField: gateWrite(removeField),
                 createField,
-                addField,
-                addIndex,
+                addField: gateWrite(addField),
+                addIndex: gateWrite(addIndex),
                 createIndex,
-                removeIndex,
+                removeIndex: gateWrite(removeIndex),
                 getField,
                 getIndex,
-                updateIndex,
+                updateIndex: gateWrite(updateIndex),
                 createCheckConstraint,
-                addCheckConstraint,
-                removeCheckConstraint,
-                updateCheckConstraint,
+                addCheckConstraint: gateWrite(addCheckConstraint),
+                removeCheckConstraint: gateWrite(removeCheckConstraint),
+                updateCheckConstraint: gateWrite(updateCheckConstraint),
                 addRelationship,
-                addRelationships,
+                addRelationships: gateWrite(addRelationships),
                 createRelationship,
                 getRelationship,
                 removeRelationship,
-                removeRelationships,
-                updateRelationship,
+                removeRelationships: gateWrite(removeRelationships),
+                updateRelationship: gateWrite(updateRelationship),
                 addDependency,
-                addDependencies,
+                addDependencies: gateWrite(addDependencies),
                 createDependency,
                 getDependency,
                 removeDependency,
-                removeDependencies,
-                updateDependency,
+                removeDependencies: gateWrite(removeDependencies),
+                updateDependency: gateWrite(updateDependency),
                 createArea,
                 addArea,
-                addAreas,
+                addAreas: gateWrite(addAreas),
                 getArea,
                 removeArea,
-                removeAreas,
-                updateArea,
+                removeAreas: gateWrite(removeAreas),
+                updateArea: gateWrite(updateArea),
                 customTypes,
                 createCustomType,
                 addCustomType,
-                addCustomTypes,
+                addCustomTypes: gateWrite(addCustomTypes),
                 getCustomType,
                 removeCustomType,
-                removeCustomTypes,
-                updateCustomType,
+                removeCustomTypes: gateWrite(removeCustomTypes),
+                updateCustomType: gateWrite(updateCustomType),
                 highlightCustomTypeId,
                 highlightedCustomType,
                 createNote,
                 addNote,
-                addNotes,
+                addNotes: gateWrite(addNotes),
                 getNote,
                 removeNote,
-                removeNotes,
-                updateNote,
+                removeNotes: gateWrite(removeNotes),
+                updateNote: gateWrite(updateNote),
             }}
         >
             {children}

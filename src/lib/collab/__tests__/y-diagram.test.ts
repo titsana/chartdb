@@ -332,6 +332,61 @@ describe('y-diagram concurrent merge (appendix-b:2 proof)', () => {
         const merged = yDocToDiagram(docA);
         expect(merged.tables!.map((t) => t.id).sort()).toEqual(['ta', 'tb']);
     });
+
+    it('a whole-table write that never touched a field (e.g. an index add) does not clobber a concurrent rename of that field — found by the Phase 4 end-to-end test, not this file', () => {
+        // Every provider method that mutates a table (addIndex included)
+        // reads its own current view of the WHOLE table, changes the one
+        // thing it means to, and pushes the whole thing back through
+        // upsertTable — including every field it never touched. Before
+        // setIfChanged (y-diagram.ts), upsertItem/upsertTable re-`.set()`
+        // every property unconditionally on every such write. Two real
+        // Y.Docs (this test) — not the single, strictly-sequential doc
+        // Phase 2's other tests here use — is what exposes that: Yjs
+        // resolves two concurrent `.set()`s on the same Map key by
+        // (clock, clientID), not by value, so B's unrelated re-assertion of
+        // f1's unchanged `name` could silently win over A's real rename.
+        const f1 = field({ id: 'f1', name: 'original_name' });
+        const baseDiagram = diagram({
+            tables: [table({ id: 't1', fields: [f1], indexes: [] })],
+        });
+        const baseDoc = diagramToYDoc(baseDiagram);
+
+        const docA = new Y.Doc();
+        Y.applyUpdate(docA, Y.encodeStateAsUpdate(baseDoc));
+        const docB = new Y.Doc();
+        Y.applyUpdate(docB, Y.encodeStateAsUpdate(baseDoc));
+
+        // peer A renames the field directly (same shape as updateField).
+        docA.transact(() => {
+            getFieldMap(docA, 't1', 'f1').set('name', 'renamed_by_a');
+        });
+
+        // peer B, concurrently, adds an index — same shape as addIndex:
+        // reads its OWN (unrenamed) current table, adds one index, and
+        // pushes the whole reconstructed table back through upsertTable.
+        // B's `fields` here still says 'original_name' — it never saw A's
+        // rename.
+        docB.transact(() => {
+            const currentTable = readTableItem(
+                docB.getMap<unknown>('tables'),
+                't1'
+            )!;
+            upsertTable(docB.getMap<unknown>('tables'), {
+                ...currentTable,
+                indexes: [
+                    ...currentTable.indexes,
+                    index({ id: 'i-new', fieldIds: ['f1'] }),
+                ],
+            });
+        });
+
+        sync(docA, docB);
+
+        const merged = yDocToDiagram(docA);
+        const mergedTable = merged.tables![0];
+        expect(mergedTable.fields[0].name).toBe('renamed_by_a');
+        expect(mergedTable.indexes.map((i) => i.id)).toEqual(['i-new']);
+    });
 });
 
 describe('incremental live-doc helpers (step 3 building blocks)', () => {

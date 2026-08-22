@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { RedoUndoStackProvider } from '@/context/history-context/redo-undo-stack-provider';
 import { diffContext } from '@/context/diff-context/diff-context';
@@ -33,23 +33,25 @@ vi.stubGlobal('WebSocket', NodeWebSocket);
 
 /**
  * Phase 4 (docs/design/realtime-collaboration.md §10): "wire the Phase 2
- * adapter's Y.Doc to the Phase 3 server over WebSocket." This is the
- * single-client half of that exit criterion — a real `ChartDBProvider`
- * (not a raw `@hocuspocus/provider` script, unlike Phase 3's own
- * integration test) actually reaches the real, compiled server and syncs.
- * The two-client / seed-vs-adopt scenarios are covered separately.
+ * adapter's Y.Doc to the Phase 3 server over WebSocket."
  *
- * `@/lib/env`'s `COLLAB_WS_URL` is read once at module-import time, so it
- * can't be overridden by just setting an env var after the fact — this
- * file uses `vi.doMock` + dynamic `import()` to point it at the ephemeral
- * server this test spawns, keeping the override local to this file.
+ * All tests in this file share ONE spawned server process (real, compiled,
+ * genuinely separate OS process — same reasoning as server/'s own Phase 3
+ * integration test: Nest's decorator metadata doesn't survive Vitest's
+ * transform) and ONE `vi.doMock` of `@/lib/env`'s `COLLAB_WS_URL` (read once
+ * at module-import time, so it has to be overridden before the first
+ * `import('../chartdb-provider')`). Each `it()` uses its own random
+ * `diagramId` (= room name), so tests don't interfere with each other even
+ * though they share a server and a Postgres backend.
  *
- * Runs the real, compiled server as a genuinely separate OS process, the
- * same way server/'s own Phase 3 integration test does — see that file's
- * header comment for why (Nest's decorator metadata doesn't survive
- * Vitest's transform). Needs a reachable Postgres; skips the whole suite
- * if the server never becomes healthy within the startup timeout (matches
- * this repo's established integration-test convention).
+ * Every `render*()` call below is a separate `ChartDBProvider` React tree —
+ * i.e. a separate simulated browser tab — each producing its own
+ * `HocuspocusProvider`, and by extension (confirmed by reading
+ * `HocuspocusProvider`'s constructor: it builds its own fresh
+ * `HocuspocusProviderWebsocket` whenever the caller doesn't pass one in) its
+ * own independent WebSocket connection. Two trees joining the same
+ * `diagramId` are therefore two genuine peers, not one connection shared
+ * under the hood.
  */
 
 async function freePort(): Promise<number> {
@@ -158,40 +160,49 @@ const baseTable = (overrides: Partial<DBTable>): DBTable => ({
 });
 
 let server: TestServer | null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ChartDBProvider: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let useChartDB: any;
+
+/** Renders one independent `ChartDBProvider` tree — i.e. one simulated tab. */
+function renderClient() {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <diffContext.Provider value={makeMockDiff()}>
+            <storageContext.Provider value={{ ...storageInitialValue }}>
+                <RedoUndoStackProvider>
+                    <ChartDBProvider>{children}</ChartDBProvider>
+                </RedoUndoStackProvider>
+            </storageContext.Provider>
+        </diffContext.Provider>
+    );
+    return renderHook(() => useChartDB(), { wrapper });
+}
 
 describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () => {
-    afterAll(async () => {
-        vi.doUnmock('@/lib/env');
-        await server?.stop();
-    });
-
-    it('a real ChartDBProvider syncs a table to the live server (an independent client sees it)', async () => {
+    beforeAll(async () => {
         server = await startServerProcess();
-        if (!server) {
-            // Matches this repo's established integration-test convention:
-            // skip rather than fail when the real backend isn't reachable.
-            return;
-        }
+        if (!server) return;
 
         vi.doMock('@/lib/env', async (importOriginal) => ({
             ...(await importOriginal<typeof EnvModule>()),
             COLLAB_WS_URL: `ws://localhost:${server!.port}`,
         }));
 
-        const { ChartDBProvider } = await import('../chartdb-provider');
-        const { useChartDB } = await import('@/hooks/use-chartdb');
+        ({ ChartDBProvider } = await import('../chartdb-provider'));
+        ({ useChartDB } = await import('@/hooks/use-chartdb'));
+    }, 20_000);
+
+    afterAll(async () => {
+        vi.doUnmock('@/lib/env');
+        await server?.stop();
+    });
+
+    it('a real ChartDBProvider syncs a table to the live server (an independent client sees it)', async () => {
+        if (!server) return; // matches this repo's skip-if-unreachable convention
 
         const diagramId = `test-diagram-${randomUUID()}`;
-        const wrapper = ({ children }: { children: React.ReactNode }) => (
-            <diffContext.Provider value={makeMockDiff()}>
-                <storageContext.Provider value={{ ...storageInitialValue }}>
-                    <RedoUndoStackProvider>
-                        <ChartDBProvider>{children}</ChartDBProvider>
-                    </RedoUndoStackProvider>
-                </storageContext.Provider>
-            </diffContext.Provider>
-        );
-        const { result } = renderHook(() => useChartDB(), { wrapper });
+        const { result } = renderClient();
 
         await act(async () => {
             result.current.loadDiagramFromData({
@@ -228,5 +239,249 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         } finally {
             remoteProvider.destroy();
         }
+    }, 20_000);
+
+    it('seed-vs-adopt: a tab joining a room that already has content adopts it instead of resurrecting its own stale local data', async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+
+        // Client A: first to load this diagram — room is empty, so A seeds
+        // it with table-a.
+        const clientA = renderClient();
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [baseTable({ id: 'table-a', name: 'table_a' })],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        // Confirm table-a genuinely reached the server (not just A's local
+        // React state) before B joins — otherwise this test could pass by
+        // accident if B happened to connect before A's write landed.
+        const { readTableItem } = await import('@/lib/collab/y-diagram');
+        const checkerDoc = new Y.Doc();
+        const checkerProvider = new HocuspocusProvider({
+            url: `ws://localhost:${server.port}`,
+            name: diagramId,
+            document: checkerDoc,
+        });
+        await waitFor(
+            () =>
+                expect(
+                    readTableItem(checkerDoc.getMap('tables'), 'table-a')
+                ).toBeTruthy(),
+            { timeout: 8_000 }
+        );
+        checkerProvider.destroy();
+
+        // Client B: joins the SAME room, but calls loadDiagramFromData with
+        // a different table — simulating B's own stale local Dexie copy.
+        // The room is non-empty, so B must adopt table-a and must NOT keep
+        // table-b.
+        const clientB = renderClient();
+        await act(async () => {
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [baseTable({ id: 'table-b', name: 'table_b' })],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        await waitFor(
+            () => {
+                const ids = clientB.result.current.tables.map(
+                    (t: DBTable) => t.id
+                );
+                // Both halves matter: table-b present would mean the seed
+                // wasn't skipped; table-a absent would mean the adopt-path
+                // re-derivation never fired.
+                expect(ids).toEqual(['table-a']);
+            },
+            { timeout: 8_000 }
+        );
+    }, 20_000);
+
+    it('concurrent-edit sanity: two independent clients editing different parts of the same table both converge over the real network', async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        const field = {
+            id: 'field-1',
+            name: 'old_name',
+            type: { id: 'integer', name: 'integer' },
+            primaryKey: false,
+            nullable: true,
+            unique: false,
+            createdAt: Date.now(),
+        };
+
+        const clientA = renderClient();
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [baseTable({ fields: [field] })],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        const clientB = renderClient();
+        await act(async () => {
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        // Wait for B to adopt A's room content before firing concurrent
+        // edits — otherwise B's own (empty-room-losing) load could race A's.
+        await waitFor(
+            () =>
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )
+                ).toBeTruthy(),
+            { timeout: 8_000 }
+        );
+
+        // Fire both edits "concurrently" — no await between them — one
+        // renames the field, the other adds an index. This is the same
+        // scenario the pure-function/single-doc layer already proves merges
+        // (appendix-b:2); this end-to-end version proves the real network
+        // round-trip doesn't break that merge.
+        await act(async () => {
+            await Promise.all([
+                clientA.result.current.updateField('table-1', 'field-1', {
+                    name: 'renamed',
+                }),
+                clientB.result.current.addIndex('table-1', {
+                    id: 'index-1',
+                    name: 'idx',
+                    unique: false,
+                    fieldIds: ['field-1'],
+                    createdAt: Date.now(),
+                }),
+            ]);
+        });
+
+        // Each client applies its own edit locally/synchronously — the
+        // other peer's edit still has to cross the real network before it
+        // shows up here, so a longer-than-default waitFor is warranted on
+        // its own merits. (This test also caught a real bug that had
+        // nothing to do with timing: y-diagram.ts's upsertItem/upsertTable
+        // used to `.set()` every property unconditionally on every write,
+        // including ones a peer never touched — see setIfChanged's doc
+        // comment. That made two concurrent edits to *different* parts of
+        // the same table clobber each other at the Yjs-clock level roughly
+        // half the time, depending on which client's clientID happened to
+        // win — this test was flaky before that fix, not slow.)
+        for (const client of [clientA, clientB]) {
+            await waitFor(
+                () => {
+                    const table = client.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    );
+                    expect(table?.fields?.[0]?.name).toBe('renamed');
+                    expect(table?.indexes?.[0]?.id).toBe('index-1');
+                },
+                { timeout: 8_000 }
+            );
+        }
+    }, 20_000);
+
+    it('appendix-b:3 cascade delete, across the real network: removing a table on one client removes the relationships referencing it on the other client too', async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        const relationship = {
+            id: 'rel-1',
+            name: 'rel',
+            sourceTableId: 'table-1',
+            targetTableId: 'table-2',
+            sourceFieldId: 'field-1',
+            targetFieldId: 'field-2',
+            sourceCardinality: 'one' as const,
+            targetCardinality: 'many' as const,
+            createdAt: Date.now(),
+        };
+
+        const clientA = renderClient();
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [
+                    baseTable({ id: 'table-1', name: 'table_1' }),
+                    baseTable({ id: 'table-2', name: 'table_2' }),
+                ],
+                relationships: [relationship],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        // Client B joins the same room and adopts A's tables + relationship
+        // before A deletes anything — this is what makes the assertion
+        // below prove the cascade delete propagated over the wire, not just
+        // that B never had the relationship in the first place.
+        const clientB = renderClient();
+        await act(async () => {
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+        await waitFor(
+            () =>
+                expect(
+                    clientB.result.current.relationships.find(
+                        (r: { id: string }) => r.id === 'rel-1'
+                    )
+                ).toBeTruthy(),
+            { timeout: 8_000 }
+        );
+
+        // Only A knows about the cascade at the moment it fires —
+        // removeItemsReferencing reads A's own live doc, deletes table-1
+        // AND rel-1 in one transaction. Assert both deletions reach B.
+        await act(async () => {
+            await clientA.result.current.removeTable('table-1');
+        });
+
+        await waitFor(
+            () => {
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )
+                ).toBeUndefined();
+                expect(
+                    clientB.result.current.relationships.find(
+                        (r: { id: string }) => r.id === 'rel-1'
+                    )
+                ).toBeUndefined();
+            },
+            { timeout: 8_000 }
+        );
     }, 20_000);
 });

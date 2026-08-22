@@ -966,20 +966,109 @@ server:**
   code just to accommodate the test environment.
 - `tsc -b`, lint, and the full suite (921 tests) all clean.
 
-**Not yet done** (tracked as the rest of this phase): scripted two-client
-tests reproducing the Appendix B scenarios against the real server
-(concurrent field edit vs. index add, concurrent PK assignment, concurrent
-table creation, etc. — the in-memory simulations from Phase 2 need
-re-verifying end-to-end, not just at the pure-function layer); a dedicated
-test for the seed-vs-adopt path itself (client A creates a table in a
-room, client B "joins" with different local Dexie data, assert B adopts
-A's state rather than resurrecting its own); confirming/documenting the
-corrected online-only bullet below.
-- Wire the Phase 2 adapter's `Y.Doc` to the Phase 3 server over
-  WebSocket (`@hocuspocus/provider`, per the Phase 3 switch — see §5.3).
-- Manual + scripted two-client tests reproducing the Appendix B scenarios
-  against the real server (not just the in-memory simulation from Phase 2)
-  — this is what actually proves the fixes hold end-to-end.
+**Two-client tests against the real server — and two more real bugs found
+writing them, neither catchable by Phase 2's single-doc tests:**
+
+- **The ready-gate bug.** `loadDiagramFromData` sets React state
+  synchronously, but on the collab-connect path `collabDocRef.current`'s
+  `Y.Doc` itself stays *empty* until the provider's `synced`/`disconnected`
+  event fires and `reconcileWithRoom` decides seed-vs-adopt. During that
+  window (real network round-trip time — effectively instant against a
+  local server, however long a real outage takes against a down one), a
+  write landing in the gap was actively wrong three different ways
+  depending on which method: `getLiveTable`-gated writes (`updateField` et
+  al.) silently vanished — the doc had no entry to read; `addTables` (no
+  such gate) wrote straight into the doc, which then made `roomIsEmpty`
+  look non-empty and skipped seeding the rest of the diagram entirely;
+  `removeTables` (no such gate either) no-opped the removal against the
+  still-empty doc, and the seed then resurrected the "deleted" row. Found
+  by hand (a debug probe on a failing single-client test, not the
+  concurrent-edit test itself) before it could hide behind the harder
+  concurrency bug below. **Fix, put to the project owner as a genuine UX
+  fork rather than decided unilaterally** (block edits during the window vs.
+  delay rendering the diagram until reconciled — chose **block edits, no
+  render delay**): `collabReadyRef` (`chartdb-provider.tsx`), opened false
+  the moment a new doc is built on the collab-connect path, closed true at
+  the top of `reconcileWithRoom`. Every context-value write method is
+  wrapped in `gateWrite`, which refuses the whole call (`console.warn`, no
+  side effect at all — no doc write, no Dexie write, no undo entry) while
+  the flag is false; `diffCalculatedHandler` isn't reachable through the
+  context value, so it gets the same check inline. No disconnect/loading UI
+  exists yet (that's still Phase 5) — this only logs and drops the call.
+  Unit tests were never network-isolated before this either: `COLLAB_WS_URL`
+  defaults to a real, non-empty URL (by design — "connects by default"
+  above), so every existing test that calls `loadDiagramFromData` was
+  quietly opening a real `HocuspocusProvider` connection. `src/test/setup.ts`
+  now mocks `@/lib/env` to `COLLAB_WS_URL: ''` globally so ordinary tests
+  take the synchronous, always-ready local-only branch; collab-specific test
+  files override it back with their own `vi.doMock`, which — called after
+  setup.ts already ran — wins for that one file.
+- **The blind-reassertion CRDT bug — the deeper one.** `upsertItem`/
+  `upsertTable` (`y-diagram.ts`) rebuild an item/table's *entire* property
+  set from the caller's current view and `.set()` every key
+  unconditionally, including ones the caller never meant to touch — because
+  every provider method reads the whole current table, changes one thing,
+  and pushes the whole reconstructed object back through `upsertTable`.
+  Harmless on Phase 2's single, strictly-sequential doc (the "second" call
+  always already sees the first's committed write). Fatal once two real
+  `Y.Doc` replicas merge: Yjs resolves two concurrent `.set()`s on the same
+  Map key by `(clock, clientID)`, not by value, so client B's `addIndex` —
+  which reconstructs the table with its *own* unchanged `fields`/`name`/
+  `x`/`y` — could silently clobber client A's concurrent, genuinely
+  different field rename, purely because both happened to write the same
+  key. Found by the new `concurrent-edit sanity` end-to-end test below,
+  which failed flakily (coin-flip, matching the clientID tiebreak) even
+  after the ready-gate fix. Fixed with `setIfChanged` (`y-diagram.ts`): skip
+  the `.set()` entirely when the value already matches, using **deep**
+  equality (`fast-deep-equal`, already a dependency) since these values are
+  routinely objects/arrays (`type: {id, name}`, `fieldIds: string[]`) where
+  `!==` would treat two structurally-identical values as "changed" and keep
+  writing them unconditionally — silently reintroducing the same bug for
+  every non-primitive key. Applied at all three unconditional-write sites:
+  `upsertItem`'s property loop, `upsertTable`'s scalar-props loop, and the
+  `__order` write. Verified discriminating twice: the new end-to-end test
+  failed non-deterministically (2 of 5 runs) with the fix reverted and
+  passed 8/8 with it restored; a companion pure two-`Y.Doc` unit test in
+  `y-diagram.test.ts` (`docB` does an `addIndex`-shaped `upsertTable` call
+  with its own unchanged fields while `docA` renames one) shows the same
+  pattern deterministically enough to catch a regression without needing a
+  real server.
+- **Verified end-to-end against the real, compiled server** (not a
+  simulation): `chartdb-provider.collab.integration.test.tsx` spawns
+  `server/dist/main.js` as a genuine OS process and covers, each with a real
+  second independent `ChartDBProvider`/`HocuspocusProvider` client, not a
+  simulation:
+  - single-client write, observed by an independent raw client (the
+    original Phase 4 slice);
+  - **seed-vs-adopt**: client A seeds a room, client B joins with different
+    local (Dexie-shaped) data and asserts it adopts A's state rather than
+    resurrecting its own;
+  - **concurrent-edit sanity**: the two bugs above, found while writing
+    this one test;
+  - **appendix-b:3 cascade delete, across the real network**: client A
+    creates a table + a relationship referencing it, client B adopts both,
+    client A removes the table (cascading to the relationship via
+    `removeItemsReferencing`, which only ran in A's process) — asserts both
+    deletions reach B, proving the cascade's single transaction propagates
+    as one atomic update over the wire, not just within one process's doc.
+  **Vitest gotcha found along the way**: this project's default
+  `environment: 'happy-dom'` has no global `WebSocket` at all (confirmed
+  directly) — real browsers always do — so the test stubs one in via
+  `vi.stubGlobal('WebSocket', wsPackageWebSocket)`, scoped to that file,
+  rather than special-casing the provider construction in production code
+  just to accommodate the test environment.
+- `tsc -b`, lint, and the full suite (925 tests) all clean; the collab
+  integration file specifically re-run 5x and 8x in isolation (not just as
+  part of the full suite, which can mask a real failure behind lucky
+  scheduling) to confirm the fixes made it deterministic, not just
+  usually-green.
+
+**Not yet done** (tracked as the rest of this phase): the reconnect-
+convergence half of the exit criteria below (kill a live connection, edit
+on both sides while disconnected, reconnect, assert both tabs and the
+server converge) — the two-client harness now exists, this hasn't been
+written yet; confirming/documenting the corrected online-only bullet below
+against a real kill/reconnect, not just reasoned about.
 - ~~Confirm the online-only behavior: killing the WebSocket connection
   stops local edits from silently queuing~~ — **corrected before
   implementing**: this can't be true as originally written, and isn't a
@@ -994,10 +1083,11 @@ corrected online-only bullet below.
   actually happens (edits queue locally, flush on reconnect, no
   server-side divergence once reconnected), not build the gate.
 **Exit criteria:** two tabs, same diagram, concurrent edits merge
-correctly; a reconnect after a killed connection converges to the same
-state on both tabs and the server (not: local edits are prevented while
-disconnected — see the corrected bullet above for why that's Phase 5's
-criterion, not this one's).
+correctly (✅ verified end-to-end, including a fix for a real merge bug —
+see above); a reconnect after a killed connection converges to the same
+state on both tabs and the server (not yet verified — see "Not yet done")
+(not: local edits are prevented while disconnected — see the corrected
+bullet above for why that's Phase 5's criterion, not this one's).
 
 ### Phase 5 — Presence, undo, and disconnect UX
 

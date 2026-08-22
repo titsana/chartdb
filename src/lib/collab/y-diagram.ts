@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import equal from 'fast-deep-equal';
 import type { Diagram } from '@/lib/domain/diagram';
 import type { DBTable } from '@/lib/domain/db-table';
 import type { DBField } from '@/lib/domain/db-field';
@@ -59,6 +60,40 @@ const ORDER_KEY = '__order';
 const CHECK_CONSTRAINTS_NULL_KEY = 'checkConstraintsIsNull';
 
 type PlainRecord = Record<string, unknown>;
+
+/**
+ * Writes `key` on `map` only if the new value genuinely differs from what's
+ * there — found via a real two-`Y.Doc` end-to-end test (Phase 4), not the
+ * single-doc tests Phase 2 shipped with (a single doc can't produce this
+ * bug: every write there is strictly sequential, so the "second" write
+ * always already sees the first's result via a live doc read, never a
+ * concurrent one).
+ *
+ * The bug: every table/item write goes through here rebuilding the WHOLE
+ * scalar/property set from the caller's current view, then re-`.set()`ing
+ * every key — including ones the caller never meant to touch, just because
+ * they're part of the same object. Yjs resolves two concurrent `.set()`s on
+ * the same `Y.Map` key by (clock, clientID), not by value — so a peer's
+ * unrelated edit (e.g. `addIndex`, which reconstructs the table with its
+ * *own* unchanged `fields`/`name`/`x`/`y`) can silently clobber a genuinely
+ * different concurrent edit from another peer (e.g. a field rename) purely
+ * because both happened to write the same key at close to the same time.
+ * Skipping the write when the value already matches means an unrelated
+ * write never *contends* for that key's clock in the first place — only an
+ * actually-changed value re-asserts it, restoring correct last-writer-wins
+ * for the keys that are genuinely in play.
+ *
+ * Deep equality (not `!==`), since these values are frequently objects/
+ * arrays (`type: {id, name}`, `fieldIds: string[]`) — `!==` would treat two
+ * structurally-identical objects as "changed" and keep writing them
+ * unconditionally, silently reintroducing the exact bug this exists to fix
+ * for every non-primitive key.
+ */
+function setIfChanged(map: Y.Map<unknown>, key: string, value: unknown) {
+    if (!equal(map.get(key), value)) {
+        map.set(key, value);
+    }
+}
 
 function encodeFlat<T extends PlainRecord>(item: T): PlainRecord {
     // ponytail: every collection here (relationships, dependencies, areas,
@@ -199,8 +234,8 @@ export function upsertItem<T extends { id: string }>(
     const order = existing?.get(ORDER_KEY) as number | undefined;
     const nextOrder = order ?? nextOrderFor(collectionMap);
     const encoded = encode(item);
-    Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
-    itemMap.set(ORDER_KEY, nextOrder);
+    Object.entries(encoded).forEach(([k, v]) => setIfChanged(itemMap, k, v));
+    setIfChanged(itemMap, ORDER_KEY, nextOrder);
     if (!existing) collectionMap.set(item.id, itemMap);
 }
 
@@ -325,7 +360,7 @@ export function upsertTable(tablesMap: Y.Map<unknown>, table: DBTable): void {
         tableMap = new Y.Map<unknown>();
         tablesMap.set(table.id, tableMap);
     }
-    Object.entries(scalars).forEach(([k, v]) => tableMap!.set(k, v));
+    Object.entries(scalars).forEach(([k, v]) => setIfChanged(tableMap!, k, v));
 
     reconcileCollection(getOrCreateNestedMap(tableMap, 'fields'), fields);
     reconcileCollection(getOrCreateNestedMap(tableMap, 'indexes'), indexes);
