@@ -654,10 +654,17 @@ before any network code exists.
       would silently revert on the next unrelated structural change.
       **Any future collection with its own `order` field needs this same
       check**, not just notes.
-  - **`customTypes` verified isolated** (no table method writes
-    `customTypes`, no customType method touches `tables`/`fields` — e.g.
-    `removeCustomTypes` does not clean up fields that reference a removed
-    type) — it's the next slice to migrate, same treatment as `notes`.
+  - ✅ **`customTypes` done (`b2ee533`):** same treatment as `notes`,
+    sharing the *same* `Y.Doc` (renamed `notesYDocRef` -> `collabDocRef` —
+    one doc per diagram, one top-level `Y.Map` per collection, matching
+    §5.2; two separate per-collection docs would have been the wrong
+    shape for Phase 4's one-room-per-diagram WebSocket sync). The
+    observer logic itself was extracted into a shared hook,
+    `useYCollectionSync` (`src/hooks/use-y-collection-sync.ts`), since
+    `notes` and `customTypes` needed it identically — every future
+    collection reuses this hook rather than re-deriving the
+    structural/non-structural/reorder logic again. 6 tests, same
+    discriminating-check discipline as `notes`.
   - **`{tables, relationships, dependencies, areas}` is one entangled
     cluster, not four independent slices** — `DBTable.parentAreaId`
     cross-references `areas` (and `checkParentAreas` in `canvas.tsx`
