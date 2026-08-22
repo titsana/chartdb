@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (8/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (9/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -484,7 +484,12 @@ already safe to merge, instead of trying to fix these two things at once.
   snapshot — full enforcement there is merge-time/server-side, per the
   original fix direction.
 - Add existence re-validation at relationship/dependency creation commit
-  time, not just at UI-render time (**#4**).
+  time, not just at UI-render time (**#4**). — ✅ Done (`410886b`):
+  `createRelationship`/`createDependency` now throw if their source/
+  target table or field no longer exists; all three call sites (dialog,
+  create-relationship-node, canvas.tsx's two connect branches) updated
+  to handle it with an error message/toast instead of proceeding or
+  unhandled-rejecting.
 - Turn the self-healing effects (PK-implies-not-null,
   `checkParentAreas`'s `parentAreaId` correction) into idempotent
   single-pass corrections instead of effects that re-fire off their own
