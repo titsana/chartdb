@@ -256,6 +256,18 @@ summary can't drift out of sync with it.
   `use-diagram-loader.tsx`'s not-found branch. Not scoped to any phase
   above yet — should land before Phase 5's presence/UX work, since
   presence for collaborators who can't even open the diagram is moot.
+- **Open-diagram list's "tables" column is always blank now — a direct,
+  accepted consequence of Phase 4.5, not a bug.**
+  `diagram-row-actions-menu.tsx`'s sibling list view renders
+  `diagram.tables?.length` per row; `listDiagrams`/`GET /diagrams` returns
+  metadata only (id/name/databaseType/databaseEdition/timestamps) — no
+  collection ever lived in `collab_diagrams`, and reading it would mean
+  decoding every diagram's full Y.Doc state on every list call. Upgrade
+  path if this needs fixing: maintain a `table_count` (or similar summary)
+  column on `collab_diagrams`, bumped alongside `touchDiagram` in
+  `persistence-extension.ts`'s `beforeHandleMessage` — cheap to keep
+  current since it already runs on every real content change, versus
+  decoding full document state just to count.
 
 ## Appendix A: Prior art found in `server/`
 
@@ -1160,7 +1172,7 @@ sync *protocol* is verified end-to-end); this caveat is about a gap
 outside anything Phase 4 was ever scoped to cover, not a hole in Phase 4's
 own claims.
 
-### Phase 4.5 — Remove Dexie; server becomes the sole diagram store — 📝 Planned
+### Phase 4.5 — Remove Dexie; server becomes the sole diagram store — ✅ Done (client + server)
 
 **Goal:** delete client-side Dexie/IndexedDB entirely. The collab server
 (`server/`, already built in Phases 3–4) becomes the *only* place diagram
@@ -1208,77 +1220,165 @@ for the *seed* half of the same function: `reconcileWithRoom` seeds from
 `diagram.tables ?? []` when the room is empty — with Dexie gone, a shell
 diagram's `tables` is *always* `[]`, so any diagram whose room is
 genuinely empty (never joined before, or content lost) would seed itself
-permanently blank, with nothing left to fall back on. Two fixes required,
-not yet implemented:
-- **Creation flows keep passing full content directly.**
-  `create-diagram-dialog.tsx`/`import-diagram-dialog.tsx`/
-  `clone-template-page.tsx`/`examples-page.tsx` build a full `Diagram`
-  (imported SQL, template contents, or a blank default) today and hand it
-  to `addDiagram` (Dexie write), then rely on navigation +
-  `use-diagram-loader.tsx` reading it back out of Dexie to call
-  `loadDiagramFromData`. That round-trip has to go away entirely — these
-  call sites must call `loadDiagramFromData(fullDiagram)` **directly**
-  (this is what actually seeds the room, correctly, since it has real
-  content), and separately call the new `POST /diagrams` with metadata
-  only. Import is the case with the most to lose here and the easiest to
-  miss in testing — a regression test must cover it specifically, not just
-  the blank-diagram-creation path.
-- **An existing-diagram load (`use-diagram-loader.tsx`'s normal path) must
-  never seed, only adopt.** It has no data to seed *with* once Dexie is
-  gone, so `reconcileWithRoom`'s seed branch has to become unreachable for
-  this call path specifically — needs a parameter/variant that skips
-  straight to "adopt whatever the room holds, including nothing." This
-  correctly treats "room is empty because every table was since deleted"
-  as legitimate (adopt empty) — the open risk is a *different* empty room:
-  one that was registered in the new `diagrams` table but never actually
-  got seeded (a crash/race during creation). Mitigation, not yet a full
-  solution: don't consider a diagram "created" (return success from the
-  creation flow / write its metadata row) until `loadDiagramFromData`'s
-  seed has been confirmed via `seedWhenDecided`'s existing `synced`
-  resolution — this closes the window in the common case without needing
-  a dedicated "was this ever seeded" marker, but doesn't formally rule out
-  every crash-mid-creation scenario. Flagged here rather than solved.
-- **`DELETE /diagrams/:id` must evict the live room, not just drop rows.**
-  Deleting `yjs_updates`/`yjs_snapshots` rows for that `diagram_id` in
-  Postgres is necessary but not sufficient — if Hocuspocus still has that
-  document loaded in memory (a client still connected), the next update
-  from that client re-persists the "deleted" content on its own, and the
-  diagram silently comes back. Needs an explicit eviction/close call
-  against the running `Hocuspocus` instance as part of the delete
-  endpoint, not just a Postgres `DELETE`.
-- **`config.defaultDiagramId` pointing at a now-deleted diagram** used to
-  just miss silently in Dexie (`getDiagram` returns `undefined` →
-  `use-diagram-loader.tsx` falls through to the picker). Against a server
-  API this becomes a real 404 — `use-diagram-loader.tsx`'s
-  `config.defaultDiagramId` branch needs to treat a 404 the same way it
-  already treats a Dexie miss (fall through to the picker), not surface it
-  as an error.
+permanently blank, with nothing left to fall back on.
 
-**Status of the manual two-browser test from before this phase was
-scoped**: it never finished — the collab/dev server processes I'd started
-for it were stopped, and the verification is now moot rather than pending,
-since the load path it was exercising (`use-diagram-loader.tsx` reading a
-diagram already in Dexie) is exactly what this phase replaces. Re-run it
-once this phase's client-side changes land, against the new server-backed
-load path, not the old one.
+**The original fix ("creation flows call `loadDiagramFromData` directly")
+was itself wrong, found by scoping the creation flows before touching
+them, not after.** Only 2 of 5 creation-ish call sites
+(`create-diagram-dialog.tsx`, `import-diagram-dialog.tsx`) are rendered
+inside a `ChartDBProvider` tree at all — `clone-template-page.tsx` and
+`examples-page.tsx` are standalone routes (`LocalConfigProvider` +
+`StorageProvider` + `ThemeProvider` only, confirmed by reading their
+bottom-of-file wrapper), and `diagram-row-actions-menu.tsx`'s "duplicate"
+deliberately doesn't navigate away from the diagram the user currently has
+open — calling `loadDiagramFromData` there would hijack it out from under
+them. `loadDiagramFromData` isn't reachable from 3 of the 5, and wrong to
+call from the 4th. Real fix: **`seedDiagramRoom`**
+(`src/lib/collab/seed-diagram-room.ts`) — one mechanism for all five call
+sites, independent of any `ChartDBProvider`. It opens its own short-lived
+`Y.Doc` + `HocuspocusProvider` for the diagram's room, writes the content
+if (and only if) `isRoomEmpty` (a check factored out of
+`reconcileWithRoom` into `y-diagram.ts` so the two call sites can't drift
+on what "empty" means), waits for `hasUnsyncedChanges` to clear (a real
+ack that the server applied the write — see the function's own comment
+for why this needed verifying against `@hocuspocus/provider`'s actual
+source rather than trusted at face value: this provider is constructed
+without `flushDelay`, so there's no batching window to worry about, and
+`hasUnsyncedChanges` flips false only once the server's SyncStatus ack
+comes back), then tears down. Deliberately one mechanism for all five
+sites rather than letting the two in-provider dialogs take the cheaper
+`loadDiagramFromData` shortcut — consistency over ~200ms.
 
-**Not yet implemented** (this whole phase is planning only as of this
-write-up): the `diagrams` table + REST endpoints; the eviction-on-delete
-logic; the storage-provider swap; deleting the now-redundant Dexie
-write-through calls in `chartdb-provider.tsx` (~90 call sites across the 6
-already-migrated collections — per Phase 2's own docs, these were always
-meant to be deleted outright, not replaced, once collab was trustworthy);
-moving `config`/`diagram_filters` to `localStorage`; the creation-flow and
-existing-load-path split described above; a regression test for the
-import-loses-content risk specifically.
+Every creation flow now does, in order: `POST /diagrams` (metadata only,
+via `addDiagram`) → `await seedDiagramRoom(diagram)` (pushes real content)
+→ navigate. The order matters twice over: `yjs_updates`/`yjs_snapshots`'
+FK on `collab_diagrams(id)` rejects any room write for an unregistered id
+(Hocuspocus closes the connection when that happens), so the metadata row
+must exist before `seedDiagramRoom` ever opens a provider; and
+`seedDiagramRoom`'s own `isRoomEmpty` check is what makes it safe against
+`clone-template-page.tsx`/`examples-page.tsx` re-cloning the same
+fixed-id template twice (their existing `deleteDiagram(id)`-then-recreate
+is supposed to leave the room empty first; `isRoomEmpty` is the
+belt-and-suspenders check in case that round trip's own delete raced
+something).
 
-**Exit criteria:** Dexie package fully removed from `package.json`; every
-one of the 10 `useStorage()` consumer files still compiles and works
-against the new implementation; creating a diagram (blank, imported SQL,
-or cloned template) survives a hard refresh with all content intact;
-opening a diagram by id in a browser that has never seen it before works
-(closes the §9 gap this phase exists to fix); deleting a diagram actually
-stays deleted with a client still connected.
+The existing-diagram load path (`use-diagram-loader.tsx` → `loadDiagram` →
+`storageDB.getDiagram`) needed no separate "adopt-only" variant in the
+end: the server never returns content for a `GET /diagrams/:id` (only
+`collab_diagrams`'s metadata columns), so `loadDiagramFromData` always
+receives a shell there — but by the time any diagram is genuinely
+openable this way, `seedDiagramRoom` (or the room's own prior edit
+history) has already made its room non-empty, so `reconcileWithRoom`'s
+seed branch is never actually reached for this call path. No code change
+needed beyond the storage-provider swap itself.
+
+**`DELETE /diagrams/:id` evicts the live room, not just the rows**
+(server-side, landed in the earlier commit): `collab_diagrams`' row
+delete cascades to `yjs_updates`/`yjs_snapshots` via `ON DELETE CASCADE`,
+and the FK itself (not the `hocuspocus.closeConnections(id)` best-effort
+call) is what makes a still-connected client's next write fail outright
+rather than silently resurrecting the diagram — see `db/pool.ts` and
+`diagrams.controller.ts`'s delete handler.
+
+**`config.defaultDiagramId` pointing at a deleted diagram falls through to
+the picker correctly**, without any extra code in
+`use-diagram-loader.tsx`: `storage-provider.tsx`'s `getDiagram` treats a
+404 the same as Dexie's old "row not found" (returns `undefined`, doesn't
+throw), so the existing `if (diagram) { navigate(...) }` branch already
+falls through to `listDiagrams()` → the open/create dialog, unchanged.
+
+**`updateDiagramId` (an unused method — only a test mock ever called it;
+no real UI does) now throws explicitly** rather than silently no-opping:
+renaming a diagram's id would mean renaming `collab_diagrams`' primary
+key, which the FKs above reference with `ON DELETE CASCADE` but not `ON
+UPDATE CASCADE`, and the REST API has no rename endpoint at all. A silent
+no-op that still flipped local `diagramId` state would have been worse —
+client state pointing at an id the server doesn't recognize — so it
+throws instead, with a `ponytail:` comment naming the gap and the upgrade
+path (a real rename endpoint doing the id swap and FK re-point in one
+transaction) if this is ever actually needed.
+
+**`config`/`diagram_filters` moved to `localStorage`**, matching
+`local-config-provider.tsx`'s existing convention for per-browser UI
+preferences — `storage-provider.tsx` keeps `StorageContext`'s
+Promise-returning interface (so none of the 10 `useStorage()` consumers
+needed to change their call shape) but backs `getConfig`/`updateConfig`/
+`getDiagramFilter`/`updateDiagramFilter`/`deleteDiagramFilter` with plain
+`localStorage.getItem`/`setItem` instead of Dexie. Dropped, deliberately,
+as part of this move: the old Dexie `on('ready', ...)` heuristic that
+seeded `config.defaultDiagramId` from "whichever diagram happens to be
+first in the table" on a brand-new install. `use-diagram-loader.tsx`
+already falls through to `listDiagrams()` → the open/create picker
+whenever `defaultDiagramId` is unset, so this was a first-run nicety, not
+a correctness requirement — cut rather than ported, to avoid an async
+`listDiagrams()` round trip at `StorageProvider` construction for a
+cosmetic win.
+
+**The six already-Y.Doc-backed collections' `StorageContext` methods are
+no-ops now, not deleted** — the interface is kept exactly as-is (so the
+10 consumer files don't change), but `addTable`/`getTable`/`updateTable`/
+etc. (and the five siblings for relationships/dependencies/areas/
+customTypes/notes) resolve immediately with a safe empty value. Confirmed
+safe to make unconditional no-ops by grep before touching them — but nine
+call sites in `chartdb-provider.tsx` (`updateField`, `removeField`,
+`addField`, `addIndex`, `removeIndex`, `updateIndex`,
+`addCheckConstraint`, `removeCheckConstraint`, `updateCheckConstraint`)
+had a real read-then-gate on `db.getTable`'s result — not just a
+write-through — used only to decide whether to bump `setDiagramUpdatedAt`/
+push an undo entry. Stubbing `getTable` to always return `undefined`
+would have silently dropped undo and the "last edited" timestamp on every
+single field/index/constraint edit. Fixed by gating on the table already
+read from the live Y.Doc (`getLiveTable`) moments earlier in the same
+function instead of re-fetching it from storage — same existence check,
+no round trip, and (while there) added an explicit `readonlyRef.current`
+guard at the top of all nine, matching `diffCalculatedHandler`'s existing
+pattern, since the old Dexie-stub-returns-undefined behavior had been
+doing that job by accident.
+
+Also cut: every per-write `db.updateDiagram({ id, attributes: { updatedAt }
+})` "touch" call that used to accompany a Dexie collection write. The
+server's `touchDiagram` (wired into `persistence-extension.ts`'s
+`beforeHandleMessage`) now bumps `collab_diagrams.updated_at` for free on
+every real Y.Doc update that crosses the wire — a client-side PATCH on
+every field edit would be pure network chatter duplicating that. Known
+gap this creates: if `COLLAB_WS_URL` isn't configured (local-only mode)
+or a write is a no-op after `setIfChanged`'s dedup (Phase 4's CRDT-clobber
+fix), no touch happens either way — `updated_at`/"last edited" drift from
+what actually changed, though diagram content itself is unaffected.
+Accepted rather than solved here; `updateDiagramUpdatedAt` (the menu's
+explicit "mark as saved" action, with no content write of its own to
+piggyback on) still does a real, if attribute-less, PATCH for exactly
+this reason.
+
+**Status of manual two-browser verification**: not yet re-run against this
+phase's changes. The automated coverage is real (full root test suite:
+116 files / 927 tests, stable across 4 consecutive runs, including two new
+`seedDiagramRoom` integration tests against the real server — one
+verified genuinely discriminating by temporarily removing its
+`hasUnsyncedChanges`-poll protection and confirming... **that specific
+sabotage attempt did NOT reproduce a failure**, because this provider is
+constructed without `flushDelay` and so was never subject to the batching
+window the first draft of that fix assumed; the poll itself was already
+correct on inspection of `@hocuspocus/provider`'s actual source, and the
+tests now pin the real (ack-based) behavior going forward) — but "two
+real, separate browser processes, one creates a diagram, the other opens
+it fresh" has not been physically re-done since this phase's client-side
+work landed. Should happen before this phase is treated as fully closed,
+not just automated-test-green.
+
+**Exit criteria:** Dexie package fully removed from `package.json` (✅ —
+`npm uninstall dexie`, confirmed zero remaining `from 'dexie'` imports
+first); every one of the 10 `useStorage()` consumer files still compiles
+and works against the new implementation (✅ — `tsc -b` clean, full test
+suite green); creating a diagram (blank, imported SQL, or cloned template)
+survives a hard refresh with all content intact (✅ automated, via
+`seedDiagramRoom`'s own round-trip tests — not yet manually re-verified
+in a real browser); opening a diagram by id in a browser that has never
+seen it before works, closing the §9 gap this phase exists to fix (✅
+automated — no code path left that gates room-joining on local storage —
+not yet manually re-verified with two real separate browsers); deleting a
+diagram actually stays deleted with a client still connected (✅ — landed
+and tested server-side in the earlier commit).
 
 ### Phase 5 — Presence, undo, and disconnect UX
 

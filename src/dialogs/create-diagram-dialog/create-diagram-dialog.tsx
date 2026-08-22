@@ -9,6 +9,7 @@ import { useConfig } from '@/hooks/use-config';
 import type { DatabaseMetadata } from '@/lib/data/import-metadata/metadata-types/database-metadata';
 import { loadDatabaseMetadata } from '@/lib/data/import-metadata/metadata-types/database-metadata';
 import { generateDiagramId } from '@/lib/utils';
+import { seedDiagramRoom } from '@/lib/collab/seed-diagram-room';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { useDialog } from '@/hooks/use-dialog';
 import type { DatabaseEdition } from '@/lib/domain/database-edition';
@@ -127,7 +128,15 @@ export const CreateDiagramDialog: React.FC<CreateDiagramDialogProps> = ({
                 });
             }
 
+            // addDiagram now only registers the diagram's metadata
+            // server-side (POST /diagrams) — it can't carry this diagram's
+            // real content (tables/relationships/etc), since that lives
+            // only in the collab room's Y.Doc. seedDiagramRoom pushes it
+            // in directly; must run after addDiagram resolves, since the
+            // room write's FK (yjs_updates.diagram_id -> collab_diagrams)
+            // requires the metadata row to already exist.
             await addDiagram({ diagram });
+            await seedDiagramRoom(diagram);
             await updateConfig({
                 config: { defaultDiagramId: diagram.id },
             });
@@ -162,6 +171,7 @@ export const CreateDiagramDialog: React.FC<CreateDiagramDialogProps> = ({
         };
 
         await addDiagram({ diagram });
+        await seedDiagramRoom(diagram);
         await updateConfig({ config: { defaultDiagramId: diagram.id } });
         closeCreateDiagramDialog();
         navigate(`/diagrams/${diagram.id}`);

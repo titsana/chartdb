@@ -11,6 +11,7 @@ import { Ellipsis, Layers2, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { useChartDB } from '@/hooks/use-chartdb';
 import type { Diagram } from '@/lib/domain';
 import { useStorage } from '@/hooks/use-storage';
+import { seedDiagramRoom } from '@/lib/collab/seed-diagram-room';
 import { cloneDiagram } from '@/lib/clone';
 import { useTranslation } from 'react-i18next';
 
@@ -51,7 +52,14 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
 
         diagramToAdd.name = `${diagram.name} (Copy)`;
 
-        addDiagram({ diagram: diagramToAdd });
+        // Doesn't navigate to the duplicate — the user stays on whatever
+        // diagram they currently have open — so this can't go through
+        // ChartDBProvider's loadDiagramFromData (that would hijack the
+        // current diagram out from under them). seedDiagramRoom pushes the
+        // duplicate's content into its own new room directly instead; the
+        // duplicate picks it up normally whenever it's actually opened.
+        await addDiagram({ diagram: diagramToAdd });
+        await seedDiagramRoom(diagramToAdd);
         refetch();
     }, [addDiagram, refetch, diagram]);
 

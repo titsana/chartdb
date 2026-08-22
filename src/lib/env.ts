@@ -25,3 +25,12 @@ export const COLLAB_WS_URL: string =
     window?.env?.COLLAB_WS_URL ||
     import.meta.env.VITE_COLLAB_WS_URL ||
     'ws://localhost:1234';
+
+// Phase 4.5 (docs/design/realtime-collaboration.md §10): the same Phase
+// 3/4 collab server also exposes a plain REST API (GET/POST/PATCH/DELETE
+// /diagrams — see server/src/diagrams) on the same port as the WebSocket
+// upgrade (server/src/main.ts's single Nest app listens once for both) —
+// derived from COLLAB_WS_URL by swapping the protocol rather than a second
+// env var, so there's exactly one place to configure "where's the collab
+// server" instead of two that could drift out of sync.
+export const COLLAB_API_URL: string = COLLAB_WS_URL.replace(/^ws/, 'http');

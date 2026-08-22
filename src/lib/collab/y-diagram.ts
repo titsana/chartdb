@@ -481,6 +481,26 @@ export function readTableItem(
     return readTable(id, tableMap);
 }
 
+/**
+ * Phase 4.5 (docs/design/realtime-collaboration.md §10): "does this room
+ * have any real content yet" — the same check used both by
+ * chartdb-provider.tsx's reconcileWithRoom (seed vs adopt, for a diagram
+ * this tab is opening normally) and seed-diagram-room.ts (seed vs leave
+ * alone, for a creation flow pushing a brand-new diagram's content in from
+ * outside any ChartDBProvider). Kept as one function so the two call sites
+ * can't drift on what "empty" means.
+ */
+export function isRoomEmpty(doc: Y.Doc): boolean {
+    return (
+        doc.getMap<unknown>('tables').size === 0 &&
+        doc.getMap<unknown>('relationships').size === 0 &&
+        doc.getMap<unknown>('dependencies').size === 0 &&
+        doc.getMap<unknown>('areas').size === 0 &&
+        doc.getMap<unknown>('notes').size === 0 &&
+        doc.getMap<unknown>('customTypes').size === 0
+    );
+}
+
 /** Builds a fresh `Y.Doc` from a `Diagram`. Pure — does not mutate `diagram`. */
 export function diagramToYDoc(diagram: Diagram): Y.Doc {
     const doc = new Y.Doc();

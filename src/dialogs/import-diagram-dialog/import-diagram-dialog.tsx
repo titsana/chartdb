@@ -17,6 +17,7 @@ import { FileUploader } from '@/components/file-uploader/file-uploader';
 import { useStorage } from '@/hooks/use-storage';
 import { useNavigate } from 'react-router-dom';
 import { diagramFromJSONInput } from '@/lib/export-import-utils';
+import { seedDiagramRoom } from '@/lib/collab/seed-diagram-room';
 import { Alert, AlertDescription, AlertTitle } from '@/components/alert/alert';
 import { AlertCircle } from 'lucide-react';
 
@@ -58,7 +59,11 @@ export const ImportDiagramDialog: React.FC<ImportDiagramDialogProps> = ({
             try {
                 const diagram = diagramFromJSONInput(json);
 
+                // See create-diagram-dialog.tsx's comment — addDiagram only
+                // registers metadata now, seedDiagramRoom pushes the real
+                // (imported) content into the collab room.
                 await addDiagram({ diagram });
+                await seedDiagramRoom(diagram);
 
                 closeImportDiagramDialog();
                 closeCreateDiagramDialog();

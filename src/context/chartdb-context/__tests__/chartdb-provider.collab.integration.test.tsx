@@ -119,6 +119,33 @@ async function startServerProcessOnPort(
     };
 }
 
+/**
+ * Phase 4.5 (docs/design/realtime-collaboration.md §10): yjs_updates/
+ * yjs_snapshots now FK-reference collab_diagrams(id) (see server/src/db/
+ * pool.ts's migrate()) — a diagramId this test invents and hands straight
+ * to loadDiagramFromData can't hold any Y.Doc content until it's registered
+ * server-side first. Goes through the real REST endpoint (not a raw SQL
+ * insert) since that's what production code (seedDiagramRoom / the
+ * creation dialogs) actually does — exercising the same path this test is
+ * otherwise relying on.
+ */
+async function registerTestDiagram(port: number, diagramId: string) {
+    const res = await fetch(`http://localhost:${port}/diagrams`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id: diagramId,
+            name: 'test',
+            databaseType: DatabaseType.GENERIC,
+        }),
+    });
+    if (!res.ok) {
+        throw new Error(
+            `failed to register test diagram ${diagramId}: ${res.status}`
+        );
+    }
+}
+
 function makeMockDiff(): DiffContext {
     return {
         newDiagram: null,
@@ -174,6 +201,8 @@ let server: TestServer | null;
 let ChartDBProvider: any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let useChartDB: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let seedDiagramRoom: any;
 
 /** Renders one independent `ChartDBProvider` tree — i.e. one simulated tab. */
 function renderClient() {
@@ -201,6 +230,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
 
         ({ ChartDBProvider } = await import('../chartdb-provider'));
         ({ useChartDB } = await import('@/hooks/use-chartdb'));
+        ({ seedDiagramRoom } = await import('@/lib/collab/seed-diagram-room'));
     }, 20_000);
 
     afterAll(async () => {
@@ -212,6 +242,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         if (!server) return; // matches this repo's skip-if-unreachable convention
 
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
         const { result } = renderClient();
 
         await act(async () => {
@@ -255,6 +286,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         if (!server) return;
 
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
 
         // Client A: first to load this diagram — room is empty, so A seeds
         // it with table-a.
@@ -323,6 +355,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         if (!server) return;
 
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
         const field = {
             id: 'field-1',
             name: 'old_name',
@@ -418,6 +451,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         if (!server) return;
 
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
         const relationship = {
             id: 'rel-1',
             name: 'rel',
@@ -499,6 +533,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         if (!server) return;
 
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
         const field = {
             id: 'field-1',
             name: 'original_name',
@@ -646,4 +681,115 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
             checkerProvider.destroy();
         }
     }, 30_000);
+
+    it("seedDiagramRoom: pushes a diagram's content into its room independent of any ChartDBProvider", async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
+
+        await seedDiagramRoom({
+            id: diagramId,
+            name: 'Test',
+            databaseType: DatabaseType.GENERIC,
+            tables: [baseTable({})],
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+        });
+
+        // Proof this reached the server for real, and survived
+        // seedDiagramRoom tearing its own connection down afterwards
+        // (rather than just observing "no error was thrown") — an
+        // independent client joins the same room fresh and reads the
+        // table back.
+        const { readTableItem } = await import('@/lib/collab/y-diagram');
+        const checkerDoc = new Y.Doc();
+        const checkerProvider = new HocuspocusProvider({
+            url: `ws://localhost:${server.port}`,
+            name: diagramId,
+            document: checkerDoc,
+        });
+        try {
+            await waitFor(
+                () => {
+                    expect(
+                        readTableItem(checkerDoc.getMap('tables'), 'table-1')
+                    ).toBeTruthy();
+                },
+                { timeout: 8_000 }
+            );
+        } finally {
+            checkerProvider.destroy();
+        }
+    }, 20_000);
+
+    it('seedDiagramRoom: leaves a room that already has content alone, rather than merging into it', async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
+
+        // Something else (a concurrent duplicate, or a previous clone of
+        // the same fixed-id template) already put content in this room.
+        const seederDoc = new Y.Doc();
+        const seederProvider = new HocuspocusProvider({
+            url: `ws://localhost:${server.port}`,
+            name: diagramId,
+            document: seederDoc,
+        });
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(
+                () => reject(new Error('seeder never synced')),
+                8_000
+            );
+            seederProvider.on('synced', () => {
+                clearTimeout(timer);
+                resolve();
+            });
+        });
+        seederDoc.getMap('tables').set('existing-table', { name: 'existing' });
+        seederProvider.flushPendingUpdates();
+        const deadline = Date.now() + 8_000;
+        while (seederProvider.hasUnsyncedChanges && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        seederProvider.destroy();
+
+        // seedDiagramRoom must not merge its own content into this —
+        // isRoomEmpty sees the existing table and refuses to write.
+        await seedDiagramRoom({
+            id: diagramId,
+            name: 'Test',
+            databaseType: DatabaseType.GENERIC,
+            tables: [baseTable({ id: 'new-table', name: 'new_table' })],
+            createdAt: new Date(0),
+            updatedAt: new Date(0),
+        });
+
+        const { readTableItem } = await import('@/lib/collab/y-diagram');
+        const checkerDoc = new Y.Doc();
+        const checkerProvider = new HocuspocusProvider({
+            url: `ws://localhost:${server.port}`,
+            name: diagramId,
+            document: checkerDoc,
+        });
+        try {
+            await waitFor(
+                () => {
+                    expect(
+                        checkerDoc.getMap('tables').get('existing-table')
+                    ).toBeTruthy();
+                },
+                { timeout: 8_000 }
+            );
+            // Give seedDiagramRoom's write a chance to have landed too, if
+            // it wrongly went through — then assert it didn't.
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            expect(
+                readTableItem(checkerDoc.getMap('tables'), 'new-table')
+            ).toBeUndefined();
+        } finally {
+            checkerProvider.destroy();
+        }
+    }, 20_000);
 });

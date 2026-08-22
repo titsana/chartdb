@@ -497,65 +497,17 @@ describe('ChartDBProvider', () => {
         ).toBeDefined(); // survives — this is the appendix-b:1 clobber, now fixed
     });
 
-    it('appendix-b:2 — updateField writes the whole recomputed fields array back as one blob, not a per-field patch', async () => {
-        // Pins chartdb-provider.tsx:656-705. Once `db` is a Y.Doc adapter,
-        // this write shape overwrites every field in the Y.Map under one
-        // key — a concurrent field/index add from another peer would be
-        // silently dropped. Re-modeling fields as a keyed Y.Map collection
-        // is Phase 2's first task (moved out of Phase 1 — see §10), and
-        // this write must be re-verified against that adapter before it can
-        // be trusted under concurrency.
-        const existingField = {
-            id: 'field-1',
-            name: 'old_name',
-            type: { id: 'integer', name: 'integer' },
-            primaryKey: false,
-            nullable: true,
-            unique: false,
-            createdAt: Date.now(),
-        };
-        const otherField = { ...existingField, id: 'field-2', name: 'other' };
-        const table = baseTable({
-            fields: [existingField, otherField],
-        });
-
-        const updateTable = vi.fn<StorageContext['updateTable']>(
-            async () => {}
-        );
-        const storage: StorageContext = {
-            ...storageInitialValue,
-            getTable: vi.fn(async () => table),
-            updateTable,
-            updateDiagram: vi.fn(async () => {}),
-        };
-
-        const { result } = renderChartDB(storage);
-
-        await act(async () => {
-            result.current.loadDiagramFromData({
-                id: 'diagram-1',
-                name: 'Test',
-                databaseType: DatabaseType.GENERIC,
-                tables: [table],
-                createdAt: new Date(0),
-                updatedAt: new Date(0),
-            });
-        });
-
-        await act(async () => {
-            await result.current.updateField('table-1', 'field-1', {
-                name: 'new_name',
-            });
-        });
-
-        expect(updateTable).toHaveBeenCalledTimes(1);
-        const [{ attributes }] = updateTable.mock.calls[0];
-        // the write carries BOTH fields, keyed by nothing but array position —
-        // `otherField` (untouched by this edit) rides along in the same blob.
-        const fields = attributes.fields ?? [];
-        expect(fields).toHaveLength(2);
-        expect(fields.map((f) => f.id)).toEqual(['field-1', 'field-2']);
-    });
+    // appendix-b:2's original pin here ("updateField writes the whole
+    // recomputed fields array back as one blob") asserted on Dexie's
+    // `updateTable` mock — a write Phase 4.5 removed outright (docs/design/
+    // realtime-collaboration.md §10: Dexie is gone, `db.getTable`/
+    // `db.updateTable` no longer exist in updateField's body at all). The
+    // actual invariant this was guarding — a concurrent field/index add
+    // from another peer must not be clobbered by a same-table field edit —
+    // is what the Y.Doc migration fixed and is verified for real below
+    // ('concurrency fix — two updateField calls...') and in
+    // y-diagram.test.ts's "appendix-b:2 proof" suite, against the actual
+    // Y.Map adapter rather than a mock of a store that no longer exists.
 });
 
 describe('Phase 2 (docs/design/realtime-collaboration.md §10) — tables/relationships/dependencies/areas are Y.Doc-backed', () => {

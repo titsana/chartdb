@@ -11,6 +11,7 @@ import { ThemeProvider } from '@/context/theme-context/theme-provider';
 import { Helmet } from 'react-helmet-async';
 import { useNavigate } from 'react-router-dom';
 import { useStorage } from '@/hooks/use-storage';
+import { seedDiagramRoom } from '@/lib/collab/seed-diagram-room';
 import type { Diagram } from '@/lib/domain/diagram';
 
 const ExamplesPageComponent: React.FC = () => {
@@ -27,6 +28,8 @@ const ExamplesPageComponent: React.FC = () => {
             const { diagram } = example;
             const { id } = diagram;
 
+            // Same fixed-id-clone reasoning as clone-template-page.tsx —
+            // clear out any earlier load of this same example first.
             await deleteDiagram(id);
 
             const now = new Date();
@@ -37,6 +40,7 @@ const ExamplesPageComponent: React.FC = () => {
             };
 
             await addDiagram({ diagram: diagramToAdd });
+            await seedDiagramRoom(diagramToAdd);
             navigate(`/diagrams/${id}`);
         },
         [

@@ -15,6 +15,7 @@ import {
     readItem,
     readTables,
     readTableItem,
+    isRoomEmpty,
 } from '@/lib/collab/y-diagram';
 import { useYCollectionSync } from '@/hooks/use-y-collection-sync';
 import type { DBTable } from '@/lib/domain/db-table';
@@ -103,9 +104,13 @@ export const ChartDBProvider: React.FC<
     // collection, so Phase 4's WebSocket sync has one doc per diagram to
     // sync), and is the source of truth for every collection; the React
     // state above is a projection of it, kept in sync by
-    // `useYCollectionSync` below. `db.addNote`/`addCustomType`/`putTable`/
-    // etc (still called from every mutation) are a write-through sink
-    // only — never read back except at initial diagram load.
+    // `useYCollectionSync` below. Phase 4.5 (docs/design/
+    // realtime-collaboration.md §10) removed Dexie entirely — these six
+    // collections have no client-side persistence of their own anymore;
+    // the Y.Doc above (synced over the collab WebSocket, durably stored
+    // server-side) is the only copy. `db` (useStorage()) is left with just
+    // the diagram-metadata operations (name/type/edition/existence) that
+    // still need a server-backed home — see storage-provider.tsx.
     const collabDocRef = useRef<Y.Doc | null>(null);
     // Phase 4: the live WebSocket connection for collabDocRef.current's
     // room, when one is attached (see attachCollabProvider below). Only
@@ -400,28 +405,24 @@ export const ChartDBProvider: React.FC<
         });
     }, []);
 
+    // Phase 4.5: clearing/deleting the six migrated collections used to be
+    // a Dexie write-through (deleteDiagramTables/Relationships/etc) done
+    // alongside clearCollabDoc's in-memory Y.Doc clear. Now that Dexie is
+    // gone, clearCollabDoc's transact is the only clear that matters —
+    // it's what a connected room actually broadcasts and durably persists
+    // (server-side, via beforeHandleMessage) to the other clients/Postgres.
     const clearDiagramData: ChartDBContext['clearDiagramData'] =
         useCallback(async () => {
-            const updatedAt = new Date();
             clearCollabDoc();
-            setDiagramUpdatedAt(updatedAt);
+            setDiagramUpdatedAt(new Date());
 
             resetRedoStack();
             resetUndoStack();
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.deleteDiagramTables(diagramId),
-                db.deleteDiagramRelationships(diagramId),
-                db.deleteDiagramDependencies(diagramId),
-                db.deleteDiagramAreas(diagramId),
-                db.deleteDiagramCustomTypes(diagramId),
-                db.deleteDiagramNotes(diagramId),
-            ]);
-        }, [db, diagramId, resetRedoStack, resetUndoStack, clearCollabDoc]);
+        }, [resetRedoStack, resetUndoStack, clearCollabDoc]);
 
     const deleteDiagram: ChartDBContext['deleteDiagram'] =
         useCallback(async () => {
+            const idToDelete = diagramId;
             setDiagramId('');
             setDiagramName('');
             setDatabaseType(DatabaseType.GENERIC);
@@ -430,26 +431,27 @@ export const ChartDBProvider: React.FC<
             resetRedoStack();
             resetUndoStack();
 
-            await Promise.all([
-                db.deleteDiagramTables(diagramId),
-                db.deleteDiagramRelationships(diagramId),
-                db.deleteDiagram(diagramId),
-                db.deleteDiagramDependencies(diagramId),
-                db.deleteDiagramAreas(diagramId),
-                db.deleteDiagramCustomTypes(diagramId),
-                db.deleteDiagramNotes(diagramId),
-            ]);
+            // The diagram's metadata row is the only thing left to delete
+            // server-side — deleting it cascades to yjs_updates/
+            // yjs_snapshots (see server/src/db/pool.ts's migrate()), which
+            // is the diagram's actual content. No more per-collection
+            // deletes needed alongside it.
+            await db.deleteDiagram(idToDelete);
         }, [db, diagramId, resetRedoStack, resetUndoStack, clearCollabDoc]);
 
+    // Unlike the per-collection writes below (whose `updatedAt` bump is now
+    // covered for free by the server's touchDiagram, fired whenever a real
+    // Y.Doc update crosses the wire — see persistence-extension.ts), this
+    // method has no accompanying content write to piggyback on: it's the
+    // menu's explicit "mark as saved" action. Keeping a real (if
+    // attribute-less) PATCH here is what actually bumps collab_diagrams.
+    // updated_at server-side in that case — see db/diagrams.ts's
+    // updateDiagram, which sets updated_at = now() unconditionally.
     const updateDiagramUpdatedAt: ChartDBContext['updateDiagramUpdatedAt'] =
         useCallback(async () => {
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await db.updateDiagram({
-                id: diagramId,
-                attributes: { updatedAt },
-            });
-        }, [db, diagramId, setDiagramUpdatedAt]);
+            setDiagramUpdatedAt(new Date());
+            await db.updateDiagram({ id: diagramId, attributes: {} });
+        }, [db, diagramId]);
 
     const updateDatabaseType: ChartDBContext['updateDatabaseType'] =
         useCallback(
@@ -479,13 +481,22 @@ export const ChartDBProvider: React.FC<
             [db, diagramId, setDatabaseEdition]
         );
 
+    // ponytail: renaming a diagram's id means renaming collab_diagrams'
+    // primary key, which yjs_updates/yjs_snapshots FK-reference with ON
+    // DELETE CASCADE but not ON UPDATE CASCADE (see server/src/db/pool.ts) —
+    // the REST API (PATCH /diagrams/:id) doesn't support it, and nothing in
+    // this app actually calls updateDiagramId (only history-provider's test
+    // mock does). Left as a hard, explicit refusal rather than a silent
+    // no-op that still flips local state to an id the server never
+    // recognizes — upgrade path: a real rename would need its own endpoint
+    // that does the id swap and the FK re-point in one transaction.
     const updateDiagramId: ChartDBContext['updateDiagramId'] = useCallback(
         async (id) => {
-            const prevId = diagramId;
-            setDiagramId(id);
-            await db.updateDiagram({ id: prevId, attributes: { id } });
+            throw new Error(
+                `updateDiagramId is not supported — the server has no diagram-id-rename endpoint (attempted to rename ${diagramId} to ${id})`
+            );
         },
-        [db, diagramId, setDiagramId]
+        [diagramId]
     );
 
     const updateDiagramName: ChartDBContext['updateDiagramName'] = useCallback(
@@ -528,14 +539,7 @@ export const ChartDBProvider: React.FC<
                 tablesToAdd.forEach((table) => upsertTable(tablesMap, table));
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                ...tablesToAdd.map((table) =>
-                    db.addTable({ diagramId, table })
-                ),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             events.emit({
                 action: 'add_tables',
@@ -551,7 +555,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, events]
+        [addUndoAction, resetRedoStack, events]
     );
 
     const addTable: ChartDBContext['addTable'] = useCallback(
@@ -658,10 +662,9 @@ export const ChartDBProvider: React.FC<
             // survived the old precomputed-list filter; it can't survive
             // this one, since removeItemsReferencing reads the doc's live
             // relationships/dependencies maps directly, not a snapshot.
-            // (The db.delete* calls and undo/redo data below still use the
-            // closure snapshot — full referential-integrity enforcement
-            // for those is server/merge-time work, out of scope for a
-            // client-only fix.)
+            // (The undo/redo data below still uses the closure snapshot —
+            // full referential-integrity enforcement for that is server/
+            // merge-time work, out of scope for a client-only fix.)
             const doc = collabDocRef.current!;
             doc.transact(() => {
                 ids.forEach((id) =>
@@ -681,18 +684,7 @@ export const ChartDBProvider: React.FC<
 
             events.emit({ action: 'remove_tables', data: { tableIds: ids } });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                ...relationshipsToRemove.map((relationship) =>
-                    db.deleteRelationship({ diagramId, id: relationship.id })
-                ),
-                ...dependenciesToRemove.map((dependency) =>
-                    db.deleteDependency({ diagramId, id: dependency.id })
-                ),
-                ...ids.map((id) => db.deleteTable({ diagramId, id })),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (tables.length > 0 && options?.updateHistory) {
                 addUndoAction({
@@ -710,8 +702,6 @@ export const ChartDBProvider: React.FC<
             }
         },
         [
-            db,
-            diagramId,
             addUndoAction,
             resetRedoStack,
             getTable,
@@ -766,12 +756,7 @@ export const ChartDBProvider: React.FC<
                 data: { id, table },
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({ id, attributes: table }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevTable && options.updateHistory) {
                 addUndoAction({
@@ -782,15 +767,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            addUndoAction,
-            resetRedoStack,
-            getTable,
-            getLiveTable,
-            diagramId,
-            events,
-        ]
+        [addUndoAction, resetRedoStack, getTable, getLiveTable, events]
     );
 
     const updateTablesState: ChartDBContext['updateTablesState'] = useCallback(
@@ -881,39 +858,7 @@ export const ChartDBProvider: React.FC<
                 data: { tableIds: tablesToDelete.map((t) => t.id) },
             });
 
-            const promises = [];
-            for (const updatedTable of updatedTables) {
-                promises.push(
-                    db.putTable({
-                        diagramId,
-                        table: updatedTable,
-                    })
-                );
-            }
-
-            for (const table of tablesToDelete) {
-                promises.push(db.deleteTable({ diagramId, id: table.id }));
-            }
-
-            for (const relationship of relationshipsToRemove) {
-                promises.push(
-                    db.deleteRelationship({ diagramId, id: relationship.id })
-                );
-            }
-
-            for (const dependency of dependenciesToRemove) {
-                promises.push(
-                    db.deleteDependency({ diagramId, id: dependency.id })
-                );
-            }
-
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            promises.push(
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } })
-            );
-
-            await Promise.all(promises);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -931,15 +876,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            diagramId,
-            addUndoAction,
-            resetRedoStack,
-            relationships,
-            events,
-            dependencies,
-        ]
+        [addUndoAction, resetRedoStack, relationships, events, dependencies]
     );
 
     const getField: ChartDBContext['getField'] = useCallback(
@@ -957,6 +894,16 @@ export const ChartDBProvider: React.FC<
             field: Partial<DBField>,
             options = { updateHistory: true }
         ) => {
+            // Phase 4.5: this whole method only ever mutated the live doc
+            // and bookkeeping (undo/updatedAt) — nothing here reads back
+            // through Dexie for anything but its own existence check, so
+            // there's no legitimate readonly caller (diff-preview writes
+            // straight into the doc via diffCalculatedHandler, never
+            // through this method). Gate explicitly rather than relying on
+            // storageInitialValue's stubs to no-op it, the way the
+            // pre-Phase-4.5 Dexie-backed `db` used to.
+            if (readonlyRef.current) return;
+
             const prevField = getField(tableId, fieldId);
 
             const updateTableFn = (table: DBTable) => {
@@ -990,22 +937,19 @@ export const ChartDBProvider: React.FC<
                 });
             }
 
-            const table = await db.getTable({ diagramId, id: tableId });
-            if (!table) {
+            // Phase 4.5: used to re-fetch the table from Dexie here purely
+            // to gate setDiagramUpdatedAt/addUndoAction on its existence —
+            // `currentTable` above already answers that same question off
+            // the live doc, no round trip needed (see the design doc's
+            // Phase 4.5 section for why this was a real bug, not just
+            // cleanup: a stubbed `db.getTable` returning `undefined`
+            // unconditionally would have silently dropped undo/updatedAt
+            // for every field edit).
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        ...updateTableFn(table),
-                    },
-                }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevField && options.updateHistory) {
                 addUndoAction({
@@ -1020,7 +964,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getField, getLiveTable]
+        [addUndoAction, resetRedoStack, getField, getLiveTable]
     );
 
     const removeField: ChartDBContext['removeField'] = useCallback(
@@ -1029,6 +973,8 @@ export const ChartDBProvider: React.FC<
             fieldId: string,
             options = { updateHistory: true }
         ) => {
+            if (readonlyRef.current) return;
+
             const updateTableFn = (table: DBTable) => {
                 const updatedTable: DBTable = {
                     ...table,
@@ -1063,22 +1009,11 @@ export const ChartDBProvider: React.FC<
                 },
             });
 
-            const table = await db.getTable({ diagramId, id: tableId });
-            if (!table) {
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        ...updateTableFn(table),
-                    },
-                }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevField && options.updateHistory) {
                 addUndoAction({
@@ -1090,8 +1025,6 @@ export const ChartDBProvider: React.FC<
             }
         },
         [
-            db,
-            diagramId,
             addUndoAction,
             resetRedoStack,
             getField,
@@ -1107,6 +1040,8 @@ export const ChartDBProvider: React.FC<
             field: DBField,
             options = { updateHistory: true }
         ) => {
+            if (readonlyRef.current) return;
+
             const fields = getTable(tableId)?.fields ?? [];
 
             const currentTable = getLiveTable(tableId);
@@ -1120,7 +1055,6 @@ export const ChartDBProvider: React.FC<
                 collabDocRef.current!.transact(() => {
                     upsertTable(tablesMap, updatedTable);
                 });
-                db.updateTable({ id: tableId, attributes: updatedTable });
             }
 
             events.emit({
@@ -1132,17 +1066,11 @@ export const ChartDBProvider: React.FC<
                 },
             });
 
-            const table = await db.getTable({ diagramId, id: tableId });
-
-            if (!table) {
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -1153,15 +1081,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            diagramId,
-            addUndoAction,
-            resetRedoStack,
-            events,
-            getTable,
-            getLiveTable,
-        ]
+        [addUndoAction, resetRedoStack, events, getTable, getLiveTable]
     );
 
     const createField: ChartDBContext['createField'] = useCallback(
@@ -1204,6 +1124,8 @@ export const ChartDBProvider: React.FC<
             index: DBIndex,
             options = { updateHistory: true }
         ) => {
+            if (readonlyRef.current) return;
+
             const currentTable = getLiveTable(tableId);
             if (currentTable) {
                 const updatedTable: DBTable = {
@@ -1217,23 +1139,11 @@ export const ChartDBProvider: React.FC<
                 });
             }
 
-            const dbTable = await db.getTable({ diagramId, id: tableId });
-            if (!dbTable) {
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        ...dbTable,
-                        indexes: [...dbTable.indexes, index],
-                    },
-                }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -1244,7 +1154,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getLiveTable]
+        [addUndoAction, resetRedoStack, getLiveTable]
     );
 
     const removeIndex: ChartDBContext['removeIndex'] = useCallback(
@@ -1253,6 +1163,8 @@ export const ChartDBProvider: React.FC<
             indexId: string,
             options = { updateHistory: true }
         ) => {
+            if (readonlyRef.current) return;
+
             const prevIndex = getIndex(tableId, indexId);
             const currentTable = getLiveTable(tableId);
             if (currentTable) {
@@ -1269,29 +1181,11 @@ export const ChartDBProvider: React.FC<
                 });
             }
 
-            const dbTable = await db.getTable({
-                diagramId,
-                id: tableId,
-            });
-
-            if (!dbTable) {
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        ...dbTable,
-                        indexes: dbTable.indexes.filter(
-                            (i) => i.id !== indexId
-                        ),
-                    },
-                }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevIndex && options.updateHistory) {
                 addUndoAction({
@@ -1302,7 +1196,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getIndex, getLiveTable]
+        [addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const createIndex: ChartDBContext['createIndex'] = useCallback(
@@ -1336,6 +1230,8 @@ export const ChartDBProvider: React.FC<
             index: Partial<DBIndex>,
             options = { updateHistory: true }
         ) => {
+            if (readonlyRef.current) return;
+
             const prevIndex = getIndex(tableId, indexId);
             const currentTable = getLiveTable(tableId);
             if (currentTable) {
@@ -1352,26 +1248,11 @@ export const ChartDBProvider: React.FC<
                 });
             }
 
-            const dbTable = await db.getTable({ diagramId, id: tableId });
-
-            if (!dbTable) {
+            if (!currentTable) {
                 return;
             }
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateTable({
-                    id: tableId,
-                    attributes: {
-                        ...dbTable,
-                        indexes: dbTable.indexes.map((i) =>
-                            i.id === indexId ? { ...i, ...index } : i
-                        ),
-                    },
-                }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevIndex && options.updateHistory) {
                 addUndoAction({
@@ -1382,7 +1263,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getIndex, getLiveTable]
+        [addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const addCheckConstraint: ChartDBContext['addCheckConstraint'] =
@@ -1392,6 +1273,8 @@ export const ChartDBProvider: React.FC<
                 constraint: DBCheckConstraint,
                 options = { updateHistory: true }
             ) => {
+                if (readonlyRef.current) return;
+
                 const currentTable = getLiveTable(tableId);
                 if (currentTable) {
                     const updatedTable: DBTable = {
@@ -1408,29 +1291,11 @@ export const ChartDBProvider: React.FC<
                     });
                 }
 
-                const dbTable = await db.getTable({ diagramId, id: tableId });
-                if (!dbTable) {
+                if (!currentTable) {
                     return;
                 }
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                    db.updateTable({
-                        id: tableId,
-                        attributes: {
-                            ...dbTable,
-                            checkConstraints: [
-                                ...(dbTable.checkConstraints ?? []),
-                                constraint,
-                            ],
-                        },
-                    }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (options.updateHistory) {
                     addUndoAction({
@@ -1441,7 +1306,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, addUndoAction, resetRedoStack, getLiveTable]
+            [addUndoAction, resetRedoStack, getLiveTable]
         );
 
     const createCheckConstraint: ChartDBContext['createCheckConstraint'] =
@@ -1467,6 +1332,8 @@ export const ChartDBProvider: React.FC<
                 constraintId: string,
                 options = { updateHistory: true }
             ) => {
+                if (readonlyRef.current) return;
+
                 const prevConstraint = getTable(
                     tableId
                 )?.checkConstraints?.find((c) => c.id === constraintId);
@@ -1486,28 +1353,11 @@ export const ChartDBProvider: React.FC<
                     });
                 }
 
-                const dbTable = await db.getTable({ diagramId, id: tableId });
-                if (!dbTable) {
+                if (!table) {
                     return;
                 }
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                    db.updateTable({
-                        id: tableId,
-                        attributes: {
-                            ...dbTable,
-                            checkConstraints: (
-                                dbTable.checkConstraints ?? []
-                            ).filter((c) => c.id !== constraintId),
-                        },
-                    }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (!!prevConstraint && options.updateHistory) {
                     addUndoAction({
@@ -1518,14 +1368,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [
-                db,
-                diagramId,
-                addUndoAction,
-                resetRedoStack,
-                getTable,
-                getLiveTable,
-            ]
+            [addUndoAction, resetRedoStack, getTable, getLiveTable]
         );
 
     const updateCheckConstraint: ChartDBContext['updateCheckConstraint'] =
@@ -1536,6 +1379,8 @@ export const ChartDBProvider: React.FC<
                 constraint: Partial<DBCheckConstraint>,
                 options = { updateHistory: true }
             ) => {
+                if (readonlyRef.current) return;
+
                 const prevConstraint = getTable(
                     tableId
                 )?.checkConstraints?.find((c) => c.id === constraintId);
@@ -1558,32 +1403,11 @@ export const ChartDBProvider: React.FC<
                     });
                 }
 
-                const dbTable = await db.getTable({ diagramId, id: tableId });
-                if (!dbTable) {
+                if (!table) {
                     return;
                 }
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                    db.updateTable({
-                        id: tableId,
-                        attributes: {
-                            ...dbTable,
-                            checkConstraints: (
-                                dbTable.checkConstraints ?? []
-                            ).map((c) =>
-                                c.id === constraintId
-                                    ? { ...c, ...constraint }
-                                    : c
-                            ),
-                        },
-                    }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (!!prevConstraint && options.updateHistory) {
                     addUndoAction({
@@ -1598,14 +1422,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [
-                db,
-                diagramId,
-                addUndoAction,
-                resetRedoStack,
-                getTable,
-                getLiveTable,
-            ]
+            [addUndoAction, resetRedoStack, getTable, getLiveTable]
         );
 
     const addRelationships: ChartDBContext['addRelationships'] = useCallback(
@@ -1621,15 +1438,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...relationships.map((relationship) =>
-                    db.addRelationship({ diagramId, relationship })
-                ),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -1642,7 +1451,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack]
+        [addUndoAction, resetRedoStack]
     );
 
     const addRelationship: ChartDBContext['addRelationship'] = useCallback(
@@ -1738,17 +1547,7 @@ export const ChartDBProvider: React.FC<
                     );
                 });
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    ...ids.map((id) =>
-                        db.deleteRelationship({ diagramId, id })
-                    ),
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (prevRelationships.length > 0 && options.updateHistory) {
                     addUndoAction({
@@ -1759,7 +1558,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, relationships, addUndoAction, resetRedoStack]
+            [relationships, addUndoAction, resetRedoStack]
         );
 
     const removeRelationship: ChartDBContext['removeRelationship'] =
@@ -1788,15 +1587,7 @@ export const ChartDBProvider: React.FC<
                     );
                 });
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                    db.updateRelationship({ id, attributes: relationship }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (!!prevRelationship && options.updateHistory) {
                     addUndoAction({
@@ -1810,7 +1601,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, addUndoAction, getRelationship, resetRedoStack, diagramId]
+            [addUndoAction, getRelationship, resetRedoStack]
         );
 
     const addDependencies: ChartDBContext['addDependencies'] = useCallback(
@@ -1826,15 +1617,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...dependencies.map((dependency) =>
-                    db.addDependency({ diagramId, dependency })
-                ),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -1847,7 +1630,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack]
+        [addUndoAction, resetRedoStack]
     );
 
     const addDependency: ChartDBContext['addDependency'] = useCallback(
@@ -1913,15 +1696,7 @@ export const ChartDBProvider: React.FC<
                     );
                 });
 
-                const updatedAt = new Date();
-                setDiagramUpdatedAt(updatedAt);
-                await Promise.all([
-                    ...ids.map((id) => db.deleteDependency({ diagramId, id })),
-                    db.updateDiagram({
-                        id: diagramId,
-                        attributes: { updatedAt },
-                    }),
-                ]);
+                setDiagramUpdatedAt(new Date());
 
                 if (prevDependencies.length > 0 && options.updateHistory) {
                     addUndoAction({
@@ -1932,7 +1707,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, addUndoAction, resetRedoStack, dependencies]
+            [addUndoAction, resetRedoStack, dependencies]
         );
 
     const removeDependency: ChartDBContext['removeDependency'] = useCallback(
@@ -1959,12 +1734,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateDependency({ id, attributes: dependency }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevDependency && options.updateHistory) {
                 addUndoAction({
@@ -1975,7 +1745,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getDependency]
+        [addUndoAction, resetRedoStack, getDependency]
     );
 
     // Area operations
@@ -1986,13 +1756,7 @@ export const ChartDBProvider: React.FC<
                 areas.forEach((area) => upsertItem(areasMap, area));
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...areas.map((area) => db.addArea({ diagramId, area })),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -2003,7 +1767,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack]
+        [addUndoAction, resetRedoStack]
     );
 
     const addArea: ChartDBContext['addArea'] = useCallback(
@@ -2053,13 +1817,7 @@ export const ChartDBProvider: React.FC<
                 ids.forEach((id) => removeItemFromCollection(areasMap, id));
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...ids.map((id) => db.deleteArea({ diagramId, id })),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (prevAreas.length > 0 && options.updateHistory) {
                 addUndoAction({
@@ -2070,7 +1828,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, areas, addUndoAction, resetRedoStack]
+        [areas, addUndoAction, resetRedoStack]
     );
 
     const removeArea: ChartDBContext['removeArea'] = useCallback(
@@ -2093,13 +1851,7 @@ export const ChartDBProvider: React.FC<
                 patchItem(areasMap, id, area as Record<string, unknown>);
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateArea({ id, attributes: area }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevArea && options.updateHistory) {
                 addUndoAction({
@@ -2110,7 +1862,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, getArea, addUndoAction, resetRedoStack]
+        [getArea, addUndoAction, resetRedoStack]
     );
 
     // Note operations
@@ -2125,13 +1877,7 @@ export const ChartDBProvider: React.FC<
                 notes.forEach((note) => upsertItem(notesMap, note));
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...notes.map((note) => db.addNote({ diagramId, note })),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -2142,7 +1888,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack]
+        [addUndoAction, resetRedoStack]
     );
 
     const addNote: ChartDBContext['addNote'] = useCallback(
@@ -2189,13 +1935,7 @@ export const ChartDBProvider: React.FC<
                 ids.forEach((id) => removeItemFromCollection(notesMap, id));
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                ...ids.map((id) => db.deleteNote({ diagramId, id })),
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (prevNotes.length > 0 && options.updateHistory) {
                 addUndoAction({
@@ -2206,7 +1946,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, notes, addUndoAction, resetRedoStack]
+        [notes, addUndoAction, resetRedoStack]
     );
 
     const removeNote: ChartDBContext['removeNote'] = useCallback(
@@ -2232,13 +1972,7 @@ export const ChartDBProvider: React.FC<
                 patchItem(notesMap, id, note as Record<string, unknown>);
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateNote({ id, attributes: note }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevNote && options.updateHistory) {
                 addUndoAction({
@@ -2249,7 +1983,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, getNote, addUndoAction, resetRedoStack]
+        [getNote, addUndoAction, resetRedoStack]
     );
 
     const highlightCustomTypeId = useCallback(
@@ -2329,15 +2063,7 @@ export const ChartDBProvider: React.FC<
                     const customTypesMap =
                         newDoc.getMap<unknown>('customTypes');
 
-                    const roomIsEmpty =
-                        tablesMap.size === 0 &&
-                        relationshipsMap.size === 0 &&
-                        dependenciesMap.size === 0 &&
-                        areasMap.size === 0 &&
-                        notesMap.size === 0 &&
-                        customTypesMap.size === 0;
-
-                    if (roomIsEmpty) {
+                    if (isRoomEmpty(newDoc)) {
                         newDoc.transact(() => {
                             (diagram.tables ?? []).forEach((table) =>
                                 upsertTable(tablesMap, table)
@@ -2498,15 +2224,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                ...customTypes.map((customType) =>
-                    db.addCustomType({ diagramId, customType })
-                ),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (options.updateHistory) {
                 addUndoAction({
@@ -2517,7 +2235,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack]
+        [addUndoAction, resetRedoStack]
     );
 
     const addCustomType: ChartDBContext['addCustomType'] = useCallback(
@@ -2564,13 +2282,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                ...ids.map((id) => db.deleteCustomType({ diagramId, id })),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (typesToRemove.length > 0 && options.updateHistory) {
                 addUndoAction({
@@ -2585,7 +2297,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, addUndoAction, resetRedoStack, getCustomType]
+        [addUndoAction, resetRedoStack, getCustomType]
     );
 
     const removeCustomType: ChartDBContext['removeCustomType'] = useCallback(
@@ -2615,13 +2327,7 @@ export const ChartDBProvider: React.FC<
                 );
             });
 
-            const updatedAt = new Date();
-            setDiagramUpdatedAt(updatedAt);
-
-            await Promise.all([
-                db.updateDiagram({ id: diagramId, attributes: { updatedAt } }),
-                db.updateCustomType({ id, attributes: customType }),
-            ]);
+            setDiagramUpdatedAt(new Date());
 
             if (!!prevCustomType && options.updateHistory) {
                 addUndoAction({
@@ -2632,7 +2338,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, addUndoAction, resetRedoStack, getCustomType, diagramId]
+        [addUndoAction, resetRedoStack, getCustomType]
     );
 
     return (
