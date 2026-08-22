@@ -234,6 +234,28 @@ summary can't drift out of sync with it.
   once implemented (two users creating a relationship between the same two
   tables simultaneously, two users adding an index with the same name,
   etc.).
+- **No diagram-discovery path for a genuinely new collaborator — found via
+  real manual two-browser testing after Phase 4 landed, not designed for
+  by any phase above.** `loadDiagram(diagramId)` (`chartdb-provider.tsx`)
+  reads **only** from local Dexie (`storageDB.getDiagram(...)`) — there is
+  no fallback to fetch diagram metadata from the collab server. If a
+  diagram id isn't already in a browser's own Dexie, `use-diagram-loader.tsx`
+  shows the "open diagram" picker and never calls `loadDiagramFromData`,
+  so that browser never even attempts to join the room — regardless of
+  what the collab server already holds for that id. Concretely: everything
+  Phase 4 built and verified (seed-vs-adopt, concurrent edits, reconnect
+  convergence) only actually works between multiple tabs/windows of the
+  *same* browser (same profile, same Dexie) — the same-origin
+  IndexedDB is what makes it look like "two clients," not a second real
+  user opening a shared link. A truly new collaborator, on a different
+  browser/profile/machine who has never had this diagram locally, cannot
+  open it at all today, no matter how the link or id reaches them. Needs a
+  real fix before "share this diagram with someone else" is a genuine
+  claim: at minimum, an endpoint to fetch a diagram's current state from
+  the collab server (or Postgres) when it's missing locally, wired into
+  `use-diagram-loader.tsx`'s not-found branch. Not scoped to any phase
+  above yet — should land before Phase 5's presence/UX work, since
+  presence for collaborators who can't even open the diagram is moot.
 
 ## Appendix A: Prior art found in `server/`
 
@@ -1124,6 +1146,19 @@ server itself via a fresh third client, not just the two tabs — see
 above) (not: local edits are prevented while disconnected — see the
 corrected bullet above for why that's Phase 5's criterion, not this one's).
 Both halves met — **Phase 4 done.**
+
+**Caveat found via real manual browser testing, right after "done" above
+was written — read before treating this as cross-user collaboration**:
+"two tabs" here, and everything verified above, means two tabs/windows of
+the *same* browser profile (shared Dexie/IndexedDB) — not two different
+real users. There is currently no way for a genuinely new collaborator
+(different browser/profile/machine, diagram not already in their local
+Dexie) to open a shared diagram at all — see the new §9 bullet
+("No diagram-discovery path for a genuinely new collaborator") for why and
+what it needs. Phase 4's own exit criteria are still honestly met (the
+sync *protocol* is verified end-to-end); this caveat is about a gap
+outside anything Phase 4 was ever scoped to cover, not a hole in Phase 4's
+own claims.
 
 ### Phase 5 — Presence, undo, and disconnect UX
 
