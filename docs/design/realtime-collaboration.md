@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (2/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (4/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -480,11 +480,20 @@ already safe to merge, instead of trying to fix these two things at once.
 - Turn the self-healing effects (PK-implies-not-null,
   `checkParentAreas`'s `parentAreaId` correction) into idempotent
   single-pass corrections instead of effects that re-fire off their own
-  writes (**#5**).
+  writes (**#5**). — ✅ Done (`cf265c1`), the `use-update-table-field.ts`
+  half: the PK-implies-not-null correction now passes
+  `{ updateHistory: false }` so it stops pushing its own undo entry.
+  `canvas.tsx`'s `checkParentAreas` correction already did this (verified,
+  no change needed there). The "runs once per peer, not once per shared
+  doc" half of this finding is Yjs/server-era territory, correctly
+  deferred past Phase 1.
 - Rebase debounced field writes against current value at commit time, or
   surface a conflict indicator (**#6**).
 - Recompute the primary-key/unique invariant from full current state after
-  any write, not from a pre-write local count (**#7**).
+  any write, not from a pre-write local count (**#7**). — ✅ Done
+  (`cf265c1`): removed the `unique` guess from
+  `debouncedPrimaryKeyUpdate`'s write path; added a dedicated effect that
+  recomputes it from the live, post-write `primaryKeyCount` every render.
 - Derive handle-index assignment from relationship id, not array position
   (**#8** — this is the same bug class `81dae56` already fixed once;
   fixing it properly here means it can't regress a third time).
