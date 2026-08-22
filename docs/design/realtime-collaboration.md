@@ -102,17 +102,48 @@ manual conflict UI needed.
   **no remaining role** in this design — it is retired entirely, not
   repurposed — see §8 Migration.
 
-### 5.3 Server: NestJS
+### 5.3 Server: NestJS + Hocuspocus
 
-NestJS is not a Yjs server out of the box (unlike Hocuspocus), so the sync
-protocol is implemented as a NestJS WebSocket Gateway using `y-protocols`
-(`sync` + `awareness`) directly. Trade-off: more code to write than dropping
-in Hocuspocus, but auth guards, DI, and logging integrate naturally with the
-rest of a NestJS app.
+**Revised during Phase 3** (see that section for the full trace): the
+original plan below this paragraph was a NestJS WebSocket Gateway
+implementing `y-protocols` (`sync` + `awareness`) by hand, on the reasoning
+that auth guards/DI/logging integrate more naturally with a pure NestJS
+gateway than with dropping in Hocuspocus. Revisited before writing that
+gateway: Hocuspocus's own hook system (`onLoadDocument`/`onStoreDocument`
+for persistence, `onAuthenticate` for auth) covers the same integration
+points, for much less hand-rolled protocol code — and hand-rolled
+sync-protocol code is exactly the highest-risk surface here. Hocuspocus is
+wired in as a plain NestJS **provider** (constructed inside a module,
+`OnModuleInit`/`OnModuleDestroy`-managed, receiving injected dependencies
+like the Postgres pool through its constructor) rather than run via its own
+standalone `Server` class, so it still shares Nest's DI container and one
+HTTP port instead of needing its own.
 
-- **Gateway**: one WebSocket namespace/room per `diagramId`. Incoming
-  connections join the room; the gateway relays `y-protocols` sync messages
-  and awareness updates to all other room members.
+**Consequence worth being explicit about**: Hocuspocus's wire protocol
+prefixes every message with the document name, which a plain `y-websocket`
+client never sends and has no fallback for — the two are not
+interchangeable at the wire level despite both being "a Yjs WebSocket
+server using y-protocols under the hood". The client library is
+`@hocuspocus/provider`, not `y-websocket`, from Phase 3 onward; Phase 4's
+"wire the Phase 2 adapter's `Y.Doc` to the Phase 3 server" now means
+importing `@hocuspocus/provider` into the client bundle, not `y-websocket`.
+Confirmed directly against the `@hocuspocus/server` source before committing
+to this (`ClientConnection.ts`'s message dispatch reads a `varString`
+document-name prefix unconditionally, no legacy-format branch), not assumed.
+
+- **Gateway**: one Hocuspocus instance per process; it multiplexes every
+  diagram's room internally by document name (read from each wire message,
+  not from the WebSocket URL — the URL is the same single endpoint for
+  every diagram). A NestJS provider (`WsUpgradeService`) attaches the
+  WebSocket upgrade handling directly to Nest's own HTTP server (one port,
+  matching "single instance only" below) and forwards each raw `ws`
+  connection's `message`/`close` events into the `ClientConnection` that
+  `hocuspocus.handleConnection()` returns — that forwarding isn't automatic
+  (`handleConnection` only registers the connection; it attaches no
+  listeners to the socket itself, confirmed by reading `ClientConnection.ts`
+  — there simply are no `.on(...)` calls in it), and missing it produces no
+  error on either side: the client sees a normal "connected" status, but
+  sync never completes.
 - **Redis**: pub/sub broadcast across NestJS instances (so this scales
   horizontally — a client connected to instance A gets updates from a peer
   on instance B), and a hot cache of currently-active rooms/awareness state.
@@ -226,6 +257,21 @@ This is left here as a reference in case it's useful later: the compiled
 output shows a materially larger scope than what's specified above (real
 auth, membership/invites, AI proxy) and could inform a v2 once the MVP
 described in this doc is working.
+
+**Update, found at the start of Phase 3**: "not tracked in git" turned out
+to be narrower than it read above — a local sibling branch,
+`feature/collaboration_v2`, has a substantial `server/` implementation
+that *is* in git (TypeORM entities, Hocuspocus gateway, real Entra ID auth,
+1076 commits ahead of this branch's common ancestor). This is a different
+discovery than the `dist/`-only prior art described above (that one really
+is unrecoverable; this one just wasn't looked for on other branches).
+Surfaced to the project owner before writing any Phase 3 code; the decision
+was still to build fresh per this doc, not to reuse or reference `v2` — a
+deliberate choice made with full information, not the forced one the
+original "cannot be recovered" framing implied. One thing *was* carried
+over from this discovery: this doc's WebSocket layer choice — see §5.3 —
+because `v2`'s use of Hocuspocus prompted revisiting (not adopting)
+NestJS-vs-Hocuspocus for Phase 3, on its own merits, independent of `v2`.
 
 ## Appendix B: Race Condition Audit (Editor Core)
 
@@ -747,19 +793,85 @@ review, but not an exhaustive per-method discriminating test for all
 ~25 migrated methods) — worth revisiting if a regression shows up
 there.
 
-### Phase 3 — Server scaffold (NestJS, fresh)
+### Phase 3 — Server scaffold (NestJS + Hocuspocus, fresh) — ✅ Done
 
 **Goal:** a running server with no client wired up yet.
 - New `server/` NestJS project (do not attempt to recover or reference the
-  old `dist/` — see Appendix A).
-- WebSocket Gateway using `y-protocols` (sync + awareness), one room per
-  `diagramId`.
+  old `dist/` — see Appendix A). **Before writing any of this**, a sibling
+  local branch `feature/collaboration_v2` was found (1076 commits ahead of
+  this branch's common ancestor, `server/` implemented with TypeORM +
+  Hocuspocus + real Entra ID auth + diagram groups/membership) — unlike
+  Appendix A's `dist/`-only prior art, this one *is* in git. Surfaced to the
+  project owner before writing anything; decision was to build fresh per
+  this doc and not reference `v2` — noted here since Appendix A's "cannot be
+  recovered from version control" turned out to be wrong in this narrower
+  sense (recoverable, on a branch — the decision to not use it was a fresh
+  call, not a forced one).
+- WebSocket layer, one room per `diagramId`. **Changed mid-phase from the
+  originally-planned hand-rolled `y-protocols` gateway to Hocuspocus** — see
+  §5.3 for the full trade-off and its consequence (client library is
+  `@hocuspocus/provider`, not `y-websocket`).
 - Postgres schema: append-only Yjs update log + periodic compacted
-  snapshot per diagram.
-- Single instance only — no Redis yet.
-**Exit criteria:** a server that a raw `y-websocket`-compatible client can
-connect to, sync a doc against, and see it survive a server restart via
-Postgres.
+  snapshot per diagram — `yjs_updates`/`yjs_snapshots` (prefixed `yjs_`,
+  not the more obvious `diagram_updates`/`diagram_snapshots`: this shared
+  Postgres instance already had tables under those exact names, leftover
+  from `feature/collaboration_v2`, one of them a completely different
+  `diagram_id uuid` schema — `CREATE TABLE IF NOT EXISTS` against those
+  names would have silently no-opped and every query would have hit the
+  wrong table. Found this for real, not hypothetically: it happened, broke
+  a test with a `uuid ~~ unknown` operator error, and got renamed before
+  anything shipped on it).
+- Single instance only — no Redis yet (a Redis container was already
+  running locally too, also `v2` leftover — not used).
+- No auth (§5.3's "no real auth yet"); `WEBSOCKET_ORIGIN_ALLOWLIST` is the
+  one access control this phase has. Its policy: a request with **no**
+  `Origin` header is always allowed, even against a non-empty allowlist —
+  found necessary the hard way (a Node WebSocket/`@hocuspocus/provider`
+  client sends no `Origin` at all, so a naive "no origin ⇒ reject" policy
+  locked out every non-browser client unconditionally, including this
+  phase's own integration test client). See `isOriginAllowed`'s doc comment
+  in `server/src/config.ts` for the trade-off this accepts.
+- Compaction ordering: `getMaxUpdateId` (read the log's current high-water
+  mark) must run *before* `Y.encodeStateAsUpdate` (encode the snapshot to
+  store), never after — reading it after would let a concurrently-appended
+  update be silently folded into the snapshot's content while the recorded
+  `through_update_id` still lagged behind it, and the next prune would then
+  delete that update's row even though the snapshot claims a lower
+  watermark than what it actually contains. See `getMaxUpdateId`'s doc
+  comment in `server/src/db/persistence.ts`.
+- Durable-write-before-ack: the append-log write happens in Hocuspocus's
+  `beforeHandleMessage` hook (awaited, before the update is applied and
+  acked/broadcast), not `onChange`/`onUpdate` (which fire after apply,
+  unawaited — confirmed by reading `Document.ts`: `handleUpdate` calls
+  `this.callbacks.onUpdate(...)` without awaiting it, then immediately
+  broadcasts). Using the wrong hook here would silently reopen the exact
+  failure the durable log exists to prevent: a crash between apply and
+  persist loses an update that peers already have applied locally.
+- Two bugs found and fixed via direct, reproducible testing before this
+  was considered working (not found by the test suite — found by manually
+  reproducing "client connects but never syncs", once outside Vitest
+  entirely to rule out the test harness): (1) `hocuspocus.handleConnection()`
+  registers a connection but attaches no listeners to the raw socket —
+  `ws.on('message'/'close', ...)` forwarding into the returned
+  `ClientConnection` has to be wired by the caller, and missing it produces
+  no error, just a client stuck at "connected" that never reaches "synced".
+  (2) The origin-allowlist bug above. Both are now covered by regression
+  tests (`server/src/config.test.ts`, the integration suite).
+- Vitest gotcha, not a product bug but cost real debugging time: `server/`
+  needs its **own** `vitest.config.ts` (`environment: 'node'`) — without
+  one, running `vitest run` from `server/` walks up and silently picks the
+  root client project's `environment: 'happy-dom'`, under which the
+  integration suite hung for the full test timeout instead of failing with
+  a real error.
+**Exit criteria:** a server that a `@hocuspocus/provider` client (not
+`y-websocket` — see §5.3) can connect to, sync a doc against, and see it
+survive a server restart via Postgres — verified with a genuinely separate
+OS process (`node dist/main.js` spawned fresh, not `NestFactory.create()`
+reused in-process), against the real, already-running
+`chartdb-collaboration-postgres-1` container. `server/src/collab/__tests__/collab.integration.test.ts`
+covers both halves: two concurrent clients syncing an edit, and a
+restart-recovers-from-Postgres round trip. 12 tests total in `server/`,
+`tsc -p tsconfig.json` and the build both clean.
 
 ### Phase 4 — End-to-end sync
 

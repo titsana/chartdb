@@ -25,4 +25,5 @@ dist-ssr
 
 .env
 server/.env*
+!server/.env.example
 stats/
