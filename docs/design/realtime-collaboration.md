@@ -552,6 +552,11 @@ already safe to merge, instead of trying to fix these two things at once.
   `diffCalculatedHandler` now gates on a `readonlyRef` mirrored every
   render before mutating tables/relationships/areas state. Re-verify
   against the real adapter once Phase 2 exists, per the note above.
+  **Status re: Phase 2's `notes` slice:** still pending, and correctly
+  so — `diffCalculatedHandler` only ever writes `tables`/`relationships`/
+  `areas`, never `notes`, so there is nothing to re-verify for the
+  collection actually migrated so far. This re-verification becomes real
+  once `tables` (or `relationships`/`areas`) migrates to the doc.
 - Undo/redo: stop replaying whole-array snapshots via `forceOverride`
   (**#1**) as a standalone fix, ahead of the full `Y.UndoManager` swap in
   Phase 5 — this one is worth fixing early since it's actively wrong for
@@ -634,11 +639,32 @@ before any network code exists.
     rather than touching React state directly. 7 tests, each empirically
     confirmed discriminating (bug re-injected into
     `addNotes`/`updateNote`/`loadDiagramFromData`, confirmed the relevant
-    test fails, then reverted). **Remaining collections** — tables,
-    relationships, dependencies, areas, customTypes — are not yet
-    migrated; each needs this same treatment (isolation check like the
-    `areas`/`parentAreaId` one above, then wiring), `tables` last since
-    it's the largest and everything else's foreign keys point into it.
+    test fails, then reverted). Two bugs surfaced by review after landing
+    and fixed in follow-up commits, both worth remembering for every
+    collection migrated next:
+    - `upsertItem` (`ebb38dc`) stamped a new entry's `__order` as
+      `collectionMap.size`, which collides with the last remaining
+      entry's order after a prior delete (a gap, not a shrink). Fixed to
+      one-past-the-current-max instead.
+    - `Note`/`Area`/`DBCustomType`/`DBTable` all carry their own domain
+      `order` field (the notes side panel's drag-to-reorder writes it),
+      separate from this module's internal `__order`. `bd4d11a` made the
+      domain field win the sort when present, and made the observer
+      re-sort on a non-structural `order` patch — otherwise a drag-reorder
+      would silently revert on the next unrelated structural change.
+      **Any future collection with its own `order` field needs this same
+      check**, not just notes.
+  - **`customTypes` verified isolated** (no table method writes
+    `customTypes`, no customType method touches `tables`/`fields` — e.g.
+    `removeCustomTypes` does not clean up fields that reference a removed
+    type) — it's the next slice to migrate, same treatment as `notes`.
+  - **`{tables, relationships, dependencies, areas}` is one entangled
+    cluster, not four independent slices** — `DBTable.parentAreaId`
+    cross-references `areas` (and `checkParentAreas` in `canvas.tsx`
+    continuously writes it), and the appendix-b:3 fix means
+    `removeTables`/`updateTablesState` filter `relationships` and
+    `dependencies` directly. This cluster has to be planned and migrated
+    together, not incrementally like `notes`/`customTypes`.
 - Build the adapter so `add*/update*/remove*` methods read/write through a
   local `Y.Doc` instead of raw React state.
 - No `y-indexeddb`, no WebSocket — this `Y.Doc` only ever exists in one
