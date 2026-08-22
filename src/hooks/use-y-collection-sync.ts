@@ -1,10 +1,6 @@
 import { useEffect } from 'react';
 import type * as Y from 'yjs';
-import {
-    readCollection,
-    readItem,
-    compareByDomainOrder,
-} from '@/lib/collab/y-diagram';
+import { compareByDomainOrder } from '@/lib/collab/y-diagram';
 
 /**
  * Phase 2 (docs/design/realtime-collaboration.md §10): projects one
@@ -13,13 +9,23 @@ import {
  * a remote peer's once Phase 4 wires a WebSocket provider in).
  *
  * A structural change (an entry added/removed — the event's target is the
- * collection map itself) re-derives the full array via `readCollection`.
- * A non-structural change (an existing entry's own fields changed) patches
- * only that one entry via `readItem`, so untouched entries keep their
- * object identity instead of every entry in the collection getting a new
- * reference on every edit (see the object-identity decision in the design
- * doc). If the patch touched the entry's own `order` field (e.g. a
- * drag-reorder), the array is re-sorted too — see `compareByDomainOrder`.
+ * collection map itself) re-derives the full array via `readAll`. A
+ * non-structural change (an existing entry's own data changed — this
+ * includes a change nested arbitrarily deep inside that entry, e.g. one
+ * of a table's own fields/indexes: `event.path[0]` is always that entry's
+ * top-level key regardless of how deep inside it the actual mutation
+ * happened) patches only that one entry via `readOne`, so untouched
+ * entries keep their object identity instead of every entry in the
+ * collection getting a new reference on every edit (see the
+ * object-identity decision in the design doc). If the patch touched the
+ * entry's own `order` field (e.g. a drag-reorder), the array is re-sorted
+ * too — see `compareByDomainOrder`.
+ *
+ * `readAll`/`readOne` are supplied by the caller rather than hardcoded to
+ * `readCollection`/`readItem` because a nested collection (`tables`, with
+ * their own fields/indexes/checkConstraints) needs a table-aware decode
+ * (`readTables`/`readTableItem`) instead of the flat one that works for
+ * notes/customTypes/relationships/dependencies/areas.
  *
  * `doc` is expected to be read fresh from a ref every render (e.g.
  * `collabDocRef.current`) — passing the object itself as a dependency,
@@ -31,7 +37,8 @@ export function useYCollectionSync<
 >(
     doc: Y.Doc | null,
     mapKey: string,
-    decode: (raw: Record<string, unknown>) => T,
+    readAll: (collectionMap: Y.Map<unknown>) => T[],
+    readOne: (collectionMap: Y.Map<unknown>, id: string) => T | undefined,
     setState: (updater: T[] | ((current: T[]) => T[])) => void
 ): void {
     useEffect(() => {
@@ -53,7 +60,7 @@ export function useYCollectionSync<
             });
 
             if (structural) {
-                setState(readCollection<T>(collectionMap, decode));
+                setState(readAll(collectionMap));
                 return;
             }
 
@@ -61,7 +68,7 @@ export function useYCollectionSync<
                 let next = current;
                 let orderMayHaveChanged = false;
                 changedIds.forEach((id) => {
-                    const decoded = readItem<T>(collectionMap, id, decode);
+                    const decoded = readOne(collectionMap, id);
                     const idx = next.findIndex((n) => n.id === id);
                     if (!decoded || idx === -1) return;
                     if (decoded.order !== next[idx].order) {
@@ -77,8 +84,9 @@ export function useYCollectionSync<
 
         collectionMap.observeDeep(handler);
         return () => collectionMap.unobserveDeep(handler);
-        // `decode`/`setState` are expected stable (a module-level function,
-        // and a useState setter); `doc` is the real re-subscribe trigger.
+        // `readAll`/`readOne`/`setState` are expected stable (module-level
+        // functions, and a useState setter); `doc` is the real
+        // re-subscribe trigger.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [doc, mapKey]);
 }

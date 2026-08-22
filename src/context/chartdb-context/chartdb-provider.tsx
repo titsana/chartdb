@@ -4,6 +4,14 @@ import {
     upsertItem,
     patchItem,
     removeItemFromCollection,
+    reconcileCollection,
+    upsertTable,
+    reconcileTables,
+    removeItemsReferencing,
+    readCollection,
+    readItem,
+    readTables,
+    readTableItem,
 } from '@/lib/collab/y-diagram';
 import { useYCollectionSync } from '@/hooks/use-y-collection-sync';
 import type { DBTable } from '@/lib/domain/db-table';
@@ -79,26 +87,42 @@ export const ChartDBProvider: React.FC<
     );
     const [notes, setNotes] = useState<Note[]>(diagram?.notes ?? []);
 
-    // Phase 2 (docs/design/realtime-collaboration.md §10): `notes` and
-    // `customTypes` are migrated to a Y.Doc-backed representation — see
-    // the Dexie-sink/undo/object-identity decision recorded there before
-    // `notes` landed, and the isolation check before `customTypes` did.
+    // Phase 2 (docs/design/realtime-collaboration.md §10): every top-level
+    // collection is migrated to a Y.Doc-backed representation — see the
+    // Dexie-sink/undo/object-identity decision recorded there before
+    // `notes`/`customTypes` landed, and the entangled-cluster decision
+    // before {tables, relationships, dependencies, areas} did (they can't
+    // migrate independently: DBTable.parentAreaId cross-references areas,
+    // and cascade-delete needs tables/relationships/dependencies writes in
+    // one transaction — see removeTables/updateTablesState below).
     // `collabDocRef` is ONE shared `Y.Doc` per diagram (matches §5.2 — a
     // single doc with one top-level `Y.Map` per collection, not a doc per
     // collection, so Phase 4's WebSocket sync has one doc per diagram to
-    // sync), and is the source of truth for every collection migrated so
-    // far; the React state above is a projection of it, kept in sync by
-    // `useYCollectionSync` below. `db.addNote`/`addCustomType`/etc (still
-    // called from every mutation) are a write-through sink only — never
-    // read back except at initial diagram load.
+    // sync), and is the source of truth for every collection; the React
+    // state above is a projection of it, kept in sync by
+    // `useYCollectionSync` below. `db.addNote`/`addCustomType`/`putTable`/
+    // etc (still called from every mutation) are a write-through sink
+    // only — never read back except at initial diagram load.
     const collabDocRef = useRef<Y.Doc | null>(null);
     if (!collabDocRef.current) {
         const doc = new Y.Doc();
-        const notesMap = doc.getMap<unknown>('notes');
-        (diagram?.notes ?? []).forEach((note) => upsertItem(notesMap, note));
-        const customTypesMap = doc.getMap<unknown>('customTypes');
+        (diagram?.tables ?? []).forEach((table) =>
+            upsertTable(doc.getMap<unknown>('tables'), table)
+        );
+        (diagram?.relationships ?? []).forEach((relationship) =>
+            upsertItem(doc.getMap<unknown>('relationships'), relationship)
+        );
+        (diagram?.dependencies ?? []).forEach((dependency) =>
+            upsertItem(doc.getMap<unknown>('dependencies'), dependency)
+        );
+        (diagram?.areas ?? []).forEach((area) =>
+            upsertItem(doc.getMap<unknown>('areas'), area)
+        );
         (diagram?.customTypes ?? []).forEach((customType) =>
-            upsertItem(customTypesMap, customType)
+            upsertItem(doc.getMap<unknown>('customTypes'), customType)
+        );
+        (diagram?.notes ?? []).forEach((note) =>
+            upsertItem(doc.getMap<unknown>('notes'), note)
         );
         collabDocRef.current = doc;
     }
@@ -106,13 +130,53 @@ export const ChartDBProvider: React.FC<
     const decodeNote = (r: Record<string, unknown>) => r as unknown as Note;
     const decodeCustomType = (r: Record<string, unknown>) =>
         r as unknown as DBCustomType;
+    const decodeRelationship = (r: Record<string, unknown>) =>
+        r as unknown as DBRelationship;
+    const decodeDependency = (r: Record<string, unknown>) =>
+        r as unknown as DBDependency;
+    const decodeArea = (r: Record<string, unknown>) => r as unknown as Area;
 
-    useYCollectionSync(collabDocRef.current, 'notes', decodeNote, setNotes);
+    useYCollectionSync(
+        collabDocRef.current,
+        'notes',
+        (m) => readCollection<Note>(m, decodeNote),
+        (m, id) => readItem<Note>(m, id, decodeNote),
+        setNotes
+    );
     useYCollectionSync(
         collabDocRef.current,
         'customTypes',
-        decodeCustomType,
+        (m) => readCollection<DBCustomType>(m, decodeCustomType),
+        (m, id) => readItem<DBCustomType>(m, id, decodeCustomType),
         setCustomTypes
+    );
+    useYCollectionSync(
+        collabDocRef.current,
+        'relationships',
+        (m) => readCollection<DBRelationship>(m, decodeRelationship),
+        (m, id) => readItem<DBRelationship>(m, id, decodeRelationship),
+        setRelationships
+    );
+    useYCollectionSync(
+        collabDocRef.current,
+        'dependencies',
+        (m) => readCollection<DBDependency>(m, decodeDependency),
+        (m, id) => readItem<DBDependency>(m, id, decodeDependency),
+        setDependencies
+    );
+    useYCollectionSync(
+        collabDocRef.current,
+        'areas',
+        (m) => readCollection<Area>(m, decodeArea),
+        (m, id) => readItem<Area>(m, id, decodeArea),
+        setAreas
+    );
+    useYCollectionSync(
+        collabDocRef.current,
+        'tables',
+        readTables,
+        readTableItem,
+        setTables
     );
 
     // appendix-b:9 — default name/order counters. Deriving these from
@@ -149,29 +213,42 @@ export const ChartDBProvider: React.FC<
 
     const diffCalculatedHandler = useCallback((event: DiffCalculatedEvent) => {
         // appendix-b:12 fix — never mutate live tables/relationships/areas
-        // state from a readonly diff-preview session. This gate belongs
-        // here now, ahead of the eventual Y.Doc adapter: the adapter
-        // should inherit "readonly never writes shared state" as an
-        // already-correct invariant, not something bolted on when
-        // add*/update* start writing through a shared doc instead of raw
-        // React state.
+        // state from a readonly diff-preview session. Verified against the
+        // real Y.Doc adapter now that tables/relationships/areas are
+        // migrated to it (per the note in the design doc): this gate is
+        // unconditional and runs before anything below ever touches the
+        // doc, so a readonly session can't write through it.
         if (readonlyRef.current) return;
 
         const { tablesToAdd, fieldsToAdd, relationshipsToAdd, areasToAdd } =
             event.data;
-        setTables((tables) =>
-            [...tables, ...(tablesToAdd ?? [])].map((table) => {
+
+        // Phase 2: write into the shared collab doc. This callback keeps
+        // a stable `[]` identity (so ahooks' useSubscription below never
+        // re-registers it), so it reads live state via `readTables`
+        // directly off the doc at call time instead of closing over the
+        // `tables` React-state variable, which the old setTables(tables
+        // => ...) functional-updater form used to get for free.
+        const doc = collabDocRef.current!;
+        doc.transact(() => {
+            const tablesMap = doc.getMap<unknown>('tables');
+            const currentTables = readTables(tablesMap);
+            [...currentTables, ...(tablesToAdd ?? [])].forEach((table) => {
                 const fields = fieldsToAdd.get(table.id);
-                return fields
+                const updatedTable = fields
                     ? { ...table, fields: [...table.fields, ...fields] }
                     : table;
-            })
-        );
-        setRelationships((relationships) => [
-            ...relationships,
-            ...(relationshipsToAdd ?? []),
-        ]);
-        setAreas((areas) => [...areas, ...(areasToAdd ?? [])]);
+                upsertTable(tablesMap, updatedTable);
+            });
+
+            const relationshipsMap = doc.getMap<unknown>('relationships');
+            (relationshipsToAdd ?? []).forEach((relationship) =>
+                upsertItem(relationshipsMap, relationship)
+            );
+
+            const areasMap = doc.getMap<unknown>('areas');
+            (areasToAdd ?? []).forEach((area) => upsertItem(areasMap, area));
+        });
     }, []);
 
     diffEvents.useSubscription(diffCalculatedHandler);
@@ -250,15 +327,34 @@ export const ChartDBProvider: React.FC<
         ]
     );
 
+    // Phase 2: clears every collab-doc-backed collection in place (same
+    // Y.Doc instance — this isn't a diagram switch, so there's no new doc
+    // to subscribe to, unlike loadDiagramFromData below). reconcileTables/
+    // reconcileCollection against an empty desired list removes every
+    // entry; the observer picks up each collection's structural change
+    // and projects the corresponding setXState([]) for us — this fix also
+    // closes a latent bug: clearDiagramData/deleteDiagram previously
+    // called setNotes([])/setCustomTypes([]) directly, which the doc-
+    // backed notes/customTypes migration should have updated but didn't —
+    // the next structural change to either would have silently
+    // resurrected the "cleared" data straight out of the still-populated
+    // doc.
+    const clearCollabDoc = useCallback(() => {
+        const doc = collabDocRef.current!;
+        doc.transact(() => {
+            reconcileTables(doc.getMap<unknown>('tables'), []);
+            reconcileCollection(doc.getMap<unknown>('relationships'), []);
+            reconcileCollection(doc.getMap<unknown>('dependencies'), []);
+            reconcileCollection(doc.getMap<unknown>('areas'), []);
+            reconcileCollection(doc.getMap<unknown>('customTypes'), []);
+            reconcileCollection(doc.getMap<unknown>('notes'), []);
+        });
+    }, []);
+
     const clearDiagramData: ChartDBContext['clearDiagramData'] =
         useCallback(async () => {
             const updatedAt = new Date();
-            setTables([]);
-            setRelationships([]);
-            setDependencies([]);
-            setAreas([]);
-            setCustomTypes([]);
-            setNotes([]);
+            clearCollabDoc();
             setDiagramUpdatedAt(updatedAt);
 
             resetRedoStack();
@@ -273,7 +369,7 @@ export const ChartDBProvider: React.FC<
                 db.deleteDiagramCustomTypes(diagramId),
                 db.deleteDiagramNotes(diagramId),
             ]);
-        }, [db, diagramId, resetRedoStack, resetUndoStack]);
+        }, [db, diagramId, resetRedoStack, resetUndoStack, clearCollabDoc]);
 
     const deleteDiagram: ChartDBContext['deleteDiagram'] =
         useCallback(async () => {
@@ -281,12 +377,7 @@ export const ChartDBProvider: React.FC<
             setDiagramName('');
             setDatabaseType(DatabaseType.GENERIC);
             setDatabaseEdition(undefined);
-            setTables([]);
-            setRelationships([]);
-            setDependencies([]);
-            setAreas([]);
-            setCustomTypes([]);
-            setNotes([]);
+            clearCollabDoc();
             resetRedoStack();
             resetUndoStack();
 
@@ -299,7 +390,7 @@ export const ChartDBProvider: React.FC<
                 db.deleteDiagramCustomTypes(diagramId),
                 db.deleteDiagramNotes(diagramId),
             ]);
-        }, [db, diagramId, resetRedoStack, resetUndoStack]);
+        }, [db, diagramId, resetRedoStack, resetUndoStack, clearCollabDoc]);
 
     const updateDiagramUpdatedAt: ChartDBContext['updateDiagramUpdatedAt'] =
         useCallback(async () => {
@@ -380,7 +471,14 @@ export const ChartDBProvider: React.FC<
 
     const addTables: ChartDBContext['addTables'] = useCallback(
         async (tablesToAdd: DBTable[], options = { updateHistory: true }) => {
-            setTables((currentTables) => [...currentTables, ...tablesToAdd]);
+            // Phase 2: write into the shared collab Y.Doc, not React state
+            // directly — useYCollectionSync's observer projects this into
+            // `tables` state.
+            const tablesMap = collabDocRef.current!.getMap<unknown>('tables');
+            collabDocRef.current!.transact(() => {
+                tablesToAdd.forEach((table) => upsertTable(tablesMap, table));
+            });
+
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
             await Promise.all([
@@ -404,7 +502,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setTables, addUndoAction, resetRedoStack, events]
+        [db, diagramId, addUndoAction, resetRedoStack, events]
     );
 
     const addTable: ChartDBContext['addTable'] = useCallback(
@@ -468,6 +566,24 @@ export const ChartDBProvider: React.FC<
         [tables]
     );
 
+    // Phase 2 concurrency fix: every method below that does
+    // read-current-table -> transform -> upsertTable must read the table
+    // it's about to transform from the *live doc*, not from `getTable`
+    // (React state). `tables` state only updates after the useYCollectionSync
+    // observer fires, which is async relative to two synchronous calls in
+    // the same tick (e.g. two field edits on the same table fired via
+    // Promise.all without awaiting each individually) — both would read the
+    // same stale `getTable` snapshot, and the second write would silently
+    // clobber the first (reconcileCollection overwrites every field's full
+    // value from whatever "desired" table it was handed). Reading straight
+    // off the doc here means the second call sees the first call's already-
+    // committed write, since Yjs transactions apply synchronously.
+    const getLiveTable = useCallback(
+        (id: string) =>
+            readTableItem(collabDocRef.current!.getMap<unknown>('tables'), id),
+        []
+    );
+
     const removeTables: ChartDBContext['removeTables'] = useCallback(
         async (ids, options) => {
             const tables = ids.map((id) => getTable(id)).filter((t) => !!t);
@@ -484,37 +600,35 @@ export const ChartDBProvider: React.FC<
             );
 
             // appendix-b:3 fix — filter against `ids` (this call's own
-            // stable input) directly inside the updater, instead of against
-            // relationshipsToRemove/dependenciesToRemove (computed once,
-            // above, from a closure snapshot of `relationships`/
-            // `dependencies` at call time). A relationship pointing at one
-            // of `ids` added by a concurrent write between that snapshot
-            // and this update flushing would have survived the old
-            // precomputed-list filter; it can't survive this one, since the
-            // condition is re-evaluated against whatever is live when React
-            // applies it. (The db.delete* calls and undo/redo data below
-            // still use the closure snapshot — full referential-integrity
-            // enforcement for those is server/merge-time work, out of
-            // scope for a client-only fix.)
-            setRelationships((relationships) =>
-                relationships.filter(
-                    (relationship) =>
-                        !ids.includes(relationship.sourceTableId) &&
-                        !ids.includes(relationship.targetTableId)
-                )
-            );
-
-            setDependencies((dependencies) =>
-                dependencies.filter(
-                    (dependency) =>
-                        !ids.includes(dependency.tableId) &&
-                        !ids.includes(dependency.dependentTableId)
-                )
-            );
-
-            setTables((tables) =>
-                tables.filter((table) => !ids.includes(table.id))
-            );
+            // stable input) directly inside the doc transaction, instead
+            // of against relationshipsToRemove/dependenciesToRemove
+            // (computed once, above, from a closure snapshot of
+            // `relationships`/`dependencies` at call time). A relationship
+            // pointing at one of `ids` added by a concurrent write between
+            // that snapshot and this transaction running would have
+            // survived the old precomputed-list filter; it can't survive
+            // this one, since removeItemsReferencing reads the doc's live
+            // relationships/dependencies maps directly, not a snapshot.
+            // (The db.delete* calls and undo/redo data below still use the
+            // closure snapshot — full referential-integrity enforcement
+            // for those is server/merge-time work, out of scope for a
+            // client-only fix.)
+            const doc = collabDocRef.current!;
+            doc.transact(() => {
+                ids.forEach((id) =>
+                    removeItemFromCollection(doc.getMap<unknown>('tables'), id)
+                );
+                removeItemsReferencing(
+                    doc.getMap<unknown>('relationships'),
+                    ['sourceTableId', 'targetTableId'],
+                    ids
+                );
+                removeItemsReferencing(
+                    doc.getMap<unknown>('dependencies'),
+                    ['tableId', 'dependentTableId'],
+                    ids
+                );
+            });
 
             events.emit({ action: 'remove_tables', data: { tableIds: ids } });
 
@@ -549,7 +663,6 @@ export const ChartDBProvider: React.FC<
         [
             db,
             diagramId,
-            setTables,
             addUndoAction,
             resetRedoStack,
             getTable,
@@ -573,9 +686,31 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const prevTable = getTable(id);
-            setTables((tables) =>
-                tables.map((t) => (t.id === id ? { ...t, ...table } : t))
-            );
+
+            // Phase 2: merge the patch onto the full current table and
+            // reconcile through upsertTable — `table` here is typed
+            // Partial<DBTable>, but the undo-replay path (history-
+            // provider.tsx) actually passes a FULL previous DBTable
+            // (including fields/indexes) as this "patch", so this can't
+            // assume it's scalars-only the way patchItem would.
+            //
+            // The base merged onto is read from the live doc (getLiveTable),
+            // not `prevTable` (React state) — two concurrent updateTable
+            // calls in the same tick must each build on the other's
+            // already-committed write, not both on the same stale snapshot.
+            // `prevTable` itself is still fine to keep from React state:
+            // it's only used for the undo payload / existence gate below.
+            const liveTable = getLiveTable(id);
+            if (liveTable) {
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, {
+                        ...liveTable,
+                        ...table,
+                    } as DBTable);
+                });
+            }
 
             events.emit({
                 action: 'update_table',
@@ -600,10 +735,10 @@ export const ChartDBProvider: React.FC<
         },
         [
             db,
-            setTables,
             addUndoAction,
             resetRedoStack,
             getTable,
+            getLiveTable,
             diagramId,
             events,
         ]
@@ -634,8 +769,16 @@ export const ChartDBProvider: React.FC<
                     );
             };
 
-            const prevTables = deepCopy(tables);
-            const updatedTables = updateTables(tables);
+            // Phase 2 concurrency fix: build from the live doc, not the
+            // `tables` React-state closure — two updateTablesState calls
+            // (or one of these racing a field/index edit on the same
+            // table) in the same tick must each see the other's already-
+            // committed write, the same reasoning as getLiveTable above.
+            const liveTables = readTables(
+                collabDocRef.current!.getMap<unknown>('tables')
+            );
+            const prevTables = deepCopy(liveTables);
+            const updatedTables = updateTables(liveTables);
 
             const tablesToDelete = prevTables.filter(
                 (table) => !updatedTables.some((t) => t.id === table.id)
@@ -663,26 +806,26 @@ export const ChartDBProvider: React.FC<
             // precomputed removal list computed from a closure snapshot of
             // `relationships`/`dependencies` at call time" — a relationship
             // added by a concurrent write between that snapshot and this
-            // update flushing, pointing at a table this action deletes,
+            // transaction running, pointing at a table this action deletes,
             // would have survived the old precomputed-list filter.
-            const survivingTableIds = new Set(updatedTables.map((t) => t.id));
-            setRelationships((relationships) =>
-                relationships.filter(
-                    (relationship) =>
-                        survivingTableIds.has(relationship.sourceTableId) &&
-                        survivingTableIds.has(relationship.targetTableId)
-                )
-            );
-
-            setDependencies((dependencies) =>
-                dependencies.filter(
-                    (dependency) =>
-                        survivingTableIds.has(dependency.tableId) &&
-                        survivingTableIds.has(dependency.dependentTableId)
-                )
-            );
-
-            setTables(updateTables);
+            // removeItemsReferencing reads the doc's live relationships/
+            // dependencies maps directly inside this transaction, not a
+            // snapshot — same guarantee, now against the doc.
+            const doc = collabDocRef.current!;
+            const deletedTableIds = tablesToDelete.map((t) => t.id);
+            doc.transact(() => {
+                reconcileTables(doc.getMap<unknown>('tables'), updatedTables);
+                removeItemsReferencing(
+                    doc.getMap<unknown>('relationships'),
+                    ['sourceTableId', 'targetTableId'],
+                    deletedTableIds
+                );
+                removeItemsReferencing(
+                    doc.getMap<unknown>('dependencies'),
+                    ['tableId', 'dependentTableId'],
+                    deletedTableIds
+                );
+            });
 
             events.emit({
                 action: 'remove_tables',
@@ -741,8 +884,6 @@ export const ChartDBProvider: React.FC<
         },
         [
             db,
-            tables,
-            setTables,
             diagramId,
             addUndoAction,
             resetRedoStack,
@@ -784,15 +925,21 @@ export const ChartDBProvider: React.FC<
                 return updatedTable;
             };
 
-            setTables((tables) =>
-                tables.map((table) => {
-                    if (table.id === tableId) {
-                        return updateTableFn(table);
-                    }
-
-                    return table;
-                })
-            );
+            // Phase 2: reconcile the whole updated table through
+            // upsertTable, not a whole-array setTables — this is the
+            // actual appendix-b:2 fix. upsertTable's nested reconcile only
+            // touches the one changed field's Y.Map (plus indexes, since
+            // getTableIndexesWithPrimaryKey may add/remove/adjust the PK
+            // index) — every other field on this table, and every other
+            // table, is untouched.
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updateTableFn(currentTable));
+                });
+            }
 
             const table = await db.getTable({ diagramId, id: tableId });
             if (!table) {
@@ -824,7 +971,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setTables, addUndoAction, resetRedoStack, getField]
+        [db, diagramId, addUndoAction, resetRedoStack, getField, getLiveTable]
     );
 
     const removeField: ChartDBContext['removeField'] = useCallback(
@@ -848,15 +995,15 @@ export const ChartDBProvider: React.FC<
 
             const fields = getTable(tableId)?.fields ?? [];
             const prevField = getField(tableId, fieldId);
-            setTables((tables) =>
-                tables.map((table) => {
-                    if (table.id === tableId) {
-                        return updateTableFn(table);
-                    }
 
-                    return table;
-                })
-            );
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updateTableFn(currentTable));
+                });
+            }
 
             events.emit({
                 action: 'remove_field',
@@ -896,11 +1043,11 @@ export const ChartDBProvider: React.FC<
         [
             db,
             diagramId,
-            setTables,
             addUndoAction,
             resetRedoStack,
             getField,
             getTable,
+            getLiveTable,
             events,
         ]
     );
@@ -912,23 +1059,20 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const fields = getTable(tableId)?.fields ?? [];
-            setTables((tables) => {
-                return tables.map((table) => {
-                    if (table.id === tableId) {
-                        db.updateTable({
-                            id: tableId,
-                            attributes: {
-                                ...table,
-                                fields: [...table.fields, field],
-                            },
-                        });
 
-                        return { ...table, fields: [...table.fields, field] };
-                    }
-
-                    return table;
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const updatedTable: DBTable = {
+                    ...currentTable,
+                    fields: [...currentTable.fields, field],
+                };
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updatedTable);
                 });
-            });
+                db.updateTable({ id: tableId, attributes: updatedTable });
+            }
 
             events.emit({
                 action: 'add_field',
@@ -963,11 +1107,11 @@ export const ChartDBProvider: React.FC<
         [
             db,
             diagramId,
-            setTables,
             addUndoAction,
             resetRedoStack,
             events,
             getTable,
+            getLiveTable,
         ]
     );
 
@@ -1011,13 +1155,18 @@ export const ChartDBProvider: React.FC<
             index: DBIndex,
             options = { updateHistory: true }
         ) => {
-            setTables((tables) =>
-                tables.map((table) =>
-                    table.id === tableId
-                        ? { ...table, indexes: [...table.indexes, index] }
-                        : table
-                )
-            );
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const updatedTable: DBTable = {
+                    ...currentTable,
+                    indexes: [...currentTable.indexes, index],
+                };
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updatedTable);
+                });
+            }
 
             const dbTable = await db.getTable({ diagramId, id: tableId });
             if (!dbTable) {
@@ -1046,7 +1195,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setTables, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack, getLiveTable]
     );
 
     const removeIndex: ChartDBContext['removeIndex'] = useCallback(
@@ -1056,18 +1205,20 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const prevIndex = getIndex(tableId, indexId);
-            setTables((tables) =>
-                tables.map((table) =>
-                    table.id === tableId
-                        ? {
-                              ...table,
-                              indexes: table.indexes.filter(
-                                  (i) => i.id !== indexId
-                              ),
-                          }
-                        : table
-                )
-            );
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const updatedTable: DBTable = {
+                    ...currentTable,
+                    indexes: currentTable.indexes.filter(
+                        (i) => i.id !== indexId
+                    ),
+                };
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updatedTable);
+                });
+            }
 
             const dbTable = await db.getTable({
                 diagramId,
@@ -1102,7 +1253,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setTables, addUndoAction, resetRedoStack, getIndex]
+        [db, diagramId, addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const createIndex: ChartDBContext['createIndex'] = useCallback(
@@ -1137,18 +1288,20 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const prevIndex = getIndex(tableId, indexId);
-            setTables((tables) =>
-                tables.map((table) =>
-                    table.id === tableId
-                        ? {
-                              ...table,
-                              indexes: table.indexes.map((i) =>
-                                  i.id === indexId ? { ...i, ...index } : i
-                              ),
-                          }
-                        : table
-                )
-            );
+            const currentTable = getLiveTable(tableId);
+            if (currentTable) {
+                const updatedTable: DBTable = {
+                    ...currentTable,
+                    indexes: currentTable.indexes.map((i) =>
+                        i.id === indexId ? { ...i, ...index } : i
+                    ),
+                };
+                const tablesMap =
+                    collabDocRef.current!.getMap<unknown>('tables');
+                collabDocRef.current!.transact(() => {
+                    upsertTable(tablesMap, updatedTable);
+                });
+            }
 
             const dbTable = await db.getTable({ diagramId, id: tableId });
 
@@ -1180,7 +1333,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setTables, addUndoAction, resetRedoStack, getIndex]
+        [db, diagramId, addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const addCheckConstraint: ChartDBContext['addCheckConstraint'] =
@@ -1190,19 +1343,21 @@ export const ChartDBProvider: React.FC<
                 constraint: DBCheckConstraint,
                 options = { updateHistory: true }
             ) => {
-                setTables((tables) =>
-                    tables.map((t) =>
-                        t.id === tableId
-                            ? {
-                                  ...t,
-                                  checkConstraints: [
-                                      ...(t.checkConstraints ?? []),
-                                      constraint,
-                                  ],
-                              }
-                            : t
-                    )
-                );
+                const currentTable = getLiveTable(tableId);
+                if (currentTable) {
+                    const updatedTable: DBTable = {
+                        ...currentTable,
+                        checkConstraints: [
+                            ...(currentTable.checkConstraints ?? []),
+                            constraint,
+                        ],
+                    };
+                    const tablesMap =
+                        collabDocRef.current!.getMap<unknown>('tables');
+                    collabDocRef.current!.transact(() => {
+                        upsertTable(tablesMap, updatedTable);
+                    });
+                }
 
                 const dbTable = await db.getTable({ diagramId, id: tableId });
                 if (!dbTable) {
@@ -1237,7 +1392,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, setTables, addUndoAction, resetRedoStack]
+            [db, diagramId, addUndoAction, resetRedoStack, getLiveTable]
         );
 
     const createCheckConstraint: ChartDBContext['createCheckConstraint'] =
@@ -1263,23 +1418,24 @@ export const ChartDBProvider: React.FC<
                 constraintId: string,
                 options = { updateHistory: true }
             ) => {
-                const table = getTable(tableId);
-                const prevConstraint = table?.checkConstraints?.find(
-                    (c) => c.id === constraintId
-                );
+                const prevConstraint = getTable(
+                    tableId
+                )?.checkConstraints?.find((c) => c.id === constraintId);
+                const table = getLiveTable(tableId);
 
-                setTables((tables) =>
-                    tables.map((t) =>
-                        t.id === tableId
-                            ? {
-                                  ...t,
-                                  checkConstraints: (
-                                      t.checkConstraints ?? []
-                                  ).filter((c) => c.id !== constraintId),
-                              }
-                            : t
-                    )
-                );
+                if (table) {
+                    const updatedTable: DBTable = {
+                        ...table,
+                        checkConstraints: (table.checkConstraints ?? []).filter(
+                            (c) => c.id !== constraintId
+                        ),
+                    };
+                    const tablesMap =
+                        collabDocRef.current!.getMap<unknown>('tables');
+                    collabDocRef.current!.transact(() => {
+                        upsertTable(tablesMap, updatedTable);
+                    });
+                }
 
                 const dbTable = await db.getTable({ diagramId, id: tableId });
                 if (!dbTable) {
@@ -1313,7 +1469,14 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, setTables, addUndoAction, resetRedoStack, getTable]
+            [
+                db,
+                diagramId,
+                addUndoAction,
+                resetRedoStack,
+                getTable,
+                getLiveTable,
+            ]
         );
 
     const updateCheckConstraint: ChartDBContext['updateCheckConstraint'] =
@@ -1324,27 +1487,27 @@ export const ChartDBProvider: React.FC<
                 constraint: Partial<DBCheckConstraint>,
                 options = { updateHistory: true }
             ) => {
-                const table = getTable(tableId);
-                const prevConstraint = table?.checkConstraints?.find(
-                    (c) => c.id === constraintId
-                );
+                const prevConstraint = getTable(
+                    tableId
+                )?.checkConstraints?.find((c) => c.id === constraintId);
+                const table = getLiveTable(tableId);
 
-                setTables((tables) =>
-                    tables.map((t) =>
-                        t.id === tableId
-                            ? {
-                                  ...t,
-                                  checkConstraints: (
-                                      t.checkConstraints ?? []
-                                  ).map((c) =>
-                                      c.id === constraintId
-                                          ? { ...c, ...constraint }
-                                          : c
-                                  ),
-                              }
-                            : t
-                    )
-                );
+                if (table) {
+                    const updatedTable: DBTable = {
+                        ...table,
+                        checkConstraints: (table.checkConstraints ?? []).map(
+                            (c) =>
+                                c.id === constraintId
+                                    ? { ...c, ...constraint }
+                                    : c
+                        ),
+                    };
+                    const tablesMap =
+                        collabDocRef.current!.getMap<unknown>('tables');
+                    collabDocRef.current!.transact(() => {
+                        upsertTable(tablesMap, updatedTable);
+                    });
+                }
 
                 const dbTable = await db.getTable({ diagramId, id: tableId });
                 if (!dbTable) {
@@ -1386,7 +1549,14 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [db, diagramId, setTables, addUndoAction, resetRedoStack, getTable]
+            [
+                db,
+                diagramId,
+                addUndoAction,
+                resetRedoStack,
+                getTable,
+                getLiveTable,
+            ]
         );
 
     const addRelationships: ChartDBContext['addRelationships'] = useCallback(
@@ -1394,10 +1564,13 @@ export const ChartDBProvider: React.FC<
             relationships: DBRelationship[],
             options = { updateHistory: true }
         ) => {
-            setRelationships((currentRelationships) => [
-                ...currentRelationships,
-                ...relationships,
-            ]);
+            const relationshipsMap =
+                collabDocRef.current!.getMap<unknown>('relationships');
+            collabDocRef.current!.transact(() => {
+                relationships.forEach((relationship) =>
+                    upsertItem(relationshipsMap, relationship)
+                );
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1420,7 +1593,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setRelationships, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack]
     );
 
     const addRelationship: ChartDBContext['addRelationship'] = useCallback(
@@ -1508,11 +1681,13 @@ export const ChartDBProvider: React.FC<
                     ),
                 ];
 
-                setRelationships((relationships) =>
-                    relationships.filter(
-                        (relationship) => !ids.includes(relationship.id)
-                    )
-                );
+                const relationshipsMap =
+                    collabDocRef.current!.getMap<unknown>('relationships');
+                collabDocRef.current!.transact(() => {
+                    ids.forEach((id) =>
+                        removeItemFromCollection(relationshipsMap, id)
+                    );
+                });
 
                 const updatedAt = new Date();
                 setDiagramUpdatedAt(updatedAt);
@@ -1535,14 +1710,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [
-                db,
-                diagramId,
-                setRelationships,
-                relationships,
-                addUndoAction,
-                resetRedoStack,
-            ]
+            [db, diagramId, relationships, addUndoAction, resetRedoStack]
         );
 
     const removeRelationship: ChartDBContext['removeRelationship'] =
@@ -1561,11 +1729,15 @@ export const ChartDBProvider: React.FC<
                 options = { updateHistory: true }
             ) => {
                 const prevRelationship = getRelationship(id);
-                setRelationships((relationships) =>
-                    relationships.map((r) =>
-                        r.id === id ? { ...r, ...relationship } : r
-                    )
-                );
+                const relationshipsMap =
+                    collabDocRef.current!.getMap<unknown>('relationships');
+                collabDocRef.current!.transact(() => {
+                    patchItem(
+                        relationshipsMap,
+                        id,
+                        relationship as Record<string, unknown>
+                    );
+                });
 
                 const updatedAt = new Date();
                 setDiagramUpdatedAt(updatedAt);
@@ -1589,14 +1761,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [
-                db,
-                setRelationships,
-                addUndoAction,
-                getRelationship,
-                resetRedoStack,
-                diagramId,
-            ]
+            [db, addUndoAction, getRelationship, resetRedoStack, diagramId]
         );
 
     const addDependencies: ChartDBContext['addDependencies'] = useCallback(
@@ -1604,10 +1769,13 @@ export const ChartDBProvider: React.FC<
             dependencies: DBDependency[],
             options = { updateHistory: true }
         ) => {
-            setDependencies((currentDependencies) => [
-                ...currentDependencies,
-                ...dependencies,
-            ]);
+            const dependenciesMap =
+                collabDocRef.current!.getMap<unknown>('dependencies');
+            collabDocRef.current!.transact(() => {
+                dependencies.forEach((dependency) =>
+                    upsertItem(dependenciesMap, dependency)
+                );
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1630,7 +1798,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setDependencies, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack]
     );
 
     const addDependency: ChartDBContext['addDependency'] = useCallback(
@@ -1688,11 +1856,13 @@ export const ChartDBProvider: React.FC<
                     ),
                 ];
 
-                setDependencies((dependencies) =>
-                    dependencies.filter(
-                        (dependency) => !ids.includes(dependency.id)
-                    )
-                );
+                const dependenciesMap =
+                    collabDocRef.current!.getMap<unknown>('dependencies');
+                collabDocRef.current!.transact(() => {
+                    ids.forEach((id) =>
+                        removeItemFromCollection(dependenciesMap, id)
+                    );
+                });
 
                 const updatedAt = new Date();
                 setDiagramUpdatedAt(updatedAt);
@@ -1713,14 +1883,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [
-                db,
-                diagramId,
-                setDependencies,
-                addUndoAction,
-                resetRedoStack,
-                dependencies,
-            ]
+            [db, diagramId, addUndoAction, resetRedoStack, dependencies]
         );
 
     const removeDependency: ChartDBContext['removeDependency'] = useCallback(
@@ -1737,11 +1900,15 @@ export const ChartDBProvider: React.FC<
             options = { updateHistory: true }
         ) => {
             const prevDependency = getDependency(id);
-            setDependencies((dependencies) =>
-                dependencies.map((d) =>
-                    d.id === id ? { ...d, ...dependency } : d
-                )
-            );
+            const dependenciesMap =
+                collabDocRef.current!.getMap<unknown>('dependencies');
+            collabDocRef.current!.transact(() => {
+                patchItem(
+                    dependenciesMap,
+                    id,
+                    dependency as Record<string, unknown>
+                );
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1759,20 +1926,16 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [
-            db,
-            diagramId,
-            setDependencies,
-            addUndoAction,
-            resetRedoStack,
-            getDependency,
-        ]
+        [db, diagramId, addUndoAction, resetRedoStack, getDependency]
     );
 
     // Area operations
     const addAreas: ChartDBContext['addAreas'] = useCallback(
         async (areas: Area[], options = { updateHistory: true }) => {
-            setAreas((currentAreas) => [...currentAreas, ...areas]);
+            const areasMap = collabDocRef.current!.getMap<unknown>('areas');
+            collabDocRef.current!.transact(() => {
+                areas.forEach((area) => upsertItem(areasMap, area));
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1791,7 +1954,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setAreas, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack]
     );
 
     const addArea: ChartDBContext['addArea'] = useCallback(
@@ -1836,7 +1999,10 @@ export const ChartDBProvider: React.FC<
                 ...areas.filter((area) => ids.includes(area.id)),
             ];
 
-            setAreas((areas) => areas.filter((area) => !ids.includes(area.id)));
+            const areasMap = collabDocRef.current!.getMap<unknown>('areas');
+            collabDocRef.current!.transact(() => {
+                ids.forEach((id) => removeItemFromCollection(areasMap, id));
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1855,7 +2021,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setAreas, areas, addUndoAction, resetRedoStack]
+        [db, diagramId, areas, addUndoAction, resetRedoStack]
     );
 
     const removeArea: ChartDBContext['removeArea'] = useCallback(
@@ -1873,9 +2039,10 @@ export const ChartDBProvider: React.FC<
         ) => {
             const prevArea = getArea(id);
 
-            setAreas((areas) =>
-                areas.map((a) => (a.id === id ? { ...a, ...area } : a))
-            );
+            const areasMap = collabDocRef.current!.getMap<unknown>('areas');
+            collabDocRef.current!.transact(() => {
+                patchItem(areasMap, id, area as Record<string, unknown>);
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1894,7 +2061,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setAreas, getArea, addUndoAction, resetRedoStack]
+        [db, diagramId, getArea, addUndoAction, resetRedoStack]
     );
 
     // Note operations
@@ -2073,6 +2240,24 @@ export const ChartDBProvider: React.FC<
                 // React state synchronously, so there's no visible gap.
                 collabDocRef.current?.destroy();
                 const newDoc = new Y.Doc();
+                const newTablesMap = newDoc.getMap<unknown>('tables');
+                (diagram.tables ?? []).forEach((table) =>
+                    upsertTable(newTablesMap, table)
+                );
+                const newRelationshipsMap =
+                    newDoc.getMap<unknown>('relationships');
+                (diagram.relationships ?? []).forEach((relationship) =>
+                    upsertItem(newRelationshipsMap, relationship)
+                );
+                const newDependenciesMap =
+                    newDoc.getMap<unknown>('dependencies');
+                (diagram.dependencies ?? []).forEach((dependency) =>
+                    upsertItem(newDependenciesMap, dependency)
+                );
+                const newAreasMap = newDoc.getMap<unknown>('areas');
+                (diagram.areas ?? []).forEach((area) =>
+                    upsertItem(newAreasMap, area)
+                );
                 const newNotesMap = newDoc.getMap<unknown>('notes');
                 (diagram.notes ?? []).forEach((note) =>
                     upsertItem(newNotesMap, note)

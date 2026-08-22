@@ -266,6 +266,33 @@ export function reconcileCollection<T extends { id: string }>(
     desiredItems.forEach((item) => upsertItem(collectionMap, item, encode));
 }
 
+/**
+ * Removes every item from `collectionMap` that references one of `ids`
+ * through any of `fieldNames` — e.g. a relationship whose sourceTableId
+ * or targetTableId points at a table being deleted. This is the
+ * appendix-b:3 cascade-delete (removeTables/updateTablesState), moved to
+ * the doc: it reads the live `collectionMap` directly at the point the
+ * caller's transaction runs, not a React-state closure snapshot from
+ * before the transaction started, so a relationship/dependency added by
+ * a concurrent write can't slip past it (the same guarantee the original
+ * React-state fix gave, now against the doc instead of `setState`).
+ */
+export function removeItemsReferencing(
+    collectionMap: Y.Map<unknown>,
+    fieldNames: string[],
+    ids: string[]
+): void {
+    const idsToRemove: string[] = [];
+    collectionMap.forEach((itemMapRaw, itemId) => {
+        const itemMap = itemMapRaw as Y.Map<unknown>;
+        const references = fieldNames.some((field) =>
+            ids.includes(itemMap.get(field) as string)
+        );
+        if (references) idsToRemove.push(itemId);
+    });
+    idsToRemove.forEach((id) => collectionMap.delete(id));
+}
+
 // ---- Whole-table helpers (nested fields/indexes/checkConstraints) ----
 
 function encodeTable(table: DBTable): {

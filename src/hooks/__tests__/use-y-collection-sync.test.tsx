@@ -2,7 +2,12 @@ import * as Y from 'yjs';
 import { describe, expect, it } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { upsertItem, patchItem, readCollection } from '@/lib/collab/y-diagram';
+import {
+    upsertItem,
+    patchItem,
+    readCollection,
+    readItem,
+} from '@/lib/collab/y-diagram';
 import { useYCollectionSync } from '../use-y-collection-sync';
 
 /**
@@ -31,7 +36,13 @@ function renderCollectionSync(doc: Y.Doc, mapKey: string) {
         const [items, setItems] = useState<Item[]>(() =>
             readCollection<Item>(doc.getMap<unknown>(mapKey), decode)
         );
-        useYCollectionSync(doc, mapKey, decode, setItems);
+        useYCollectionSync(
+            doc,
+            mapKey,
+            (m) => readCollection<Item>(m, decode),
+            (m, id) => readItem<Item>(m, id, decode),
+            setItems
+        );
         return items;
     });
 }

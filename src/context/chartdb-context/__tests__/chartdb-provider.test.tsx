@@ -17,6 +17,8 @@ import type { StorageContext } from '@/context/storage-context/storage-context';
 import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBTable } from '@/lib/domain/db-table';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
+import type { DBDependency } from '@/lib/domain/db-dependency';
+import type { Area } from '@/lib/domain/area';
 
 /**
  * Phase 0/1 (docs/design/realtime-collaboration.md §10) tests for
@@ -133,6 +135,25 @@ const baseRelationship = (
     sourceCardinality: 'many',
     targetCardinality: 'one',
     createdAt: Date.now(),
+    ...overrides,
+});
+
+const baseDependency = (overrides: Partial<DBDependency>): DBDependency => ({
+    id: 'dep-1',
+    tableId: 'table-a',
+    dependentTableId: 'table-b',
+    createdAt: Date.now(),
+    ...overrides,
+});
+
+const baseArea = (overrides: Partial<Area>): Area => ({
+    id: 'area-1',
+    name: 'area',
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    color: '#000000',
     ...overrides,
 });
 
@@ -534,6 +555,187 @@ describe('ChartDBProvider', () => {
         const fields = attributes.fields ?? [];
         expect(fields).toHaveLength(2);
         expect(fields.map((f) => f.id)).toEqual(['field-1', 'field-2']);
+    });
+});
+
+describe('Phase 2 (docs/design/realtime-collaboration.md §10) — tables/relationships/dependencies/areas are Y.Doc-backed', () => {
+    it('concurrency fix — two updateField calls on different fields of the same table, fired in the same tick, both land', async () => {
+        // Every migrated table-mutating method does read-current-table ->
+        // transform -> upsertTable. The first cut of this migration read
+        // the "current table" via getTable(tableId) (React state), which
+        // only updates asynchronously once the useYCollectionSync observer
+        // re-renders — so two calls issued in the same tick (via
+        // Promise.all, neither awaited individually) both read the SAME
+        // pre-update snapshot. Each computed a "whole new table" from that
+        // stale snapshot and reconciled it in; whichever transact() ran
+        // second would reconcile its fields array — including its OWN
+        // stale, unpatched copy of the field the FIRST call had just
+        // changed — silently reverting the first call's write. The fix
+        // reads the table from the live doc (getLiveTable, via
+        // readTableItem) immediately before the transact, so the second
+        // call's transact sees the first call's already-committed change.
+        const fieldA = {
+            id: 'field-a',
+            name: 'a_old',
+            type: { id: 'integer', name: 'integer' },
+            primaryKey: false,
+            nullable: true,
+            unique: false,
+            createdAt: Date.now(),
+        };
+        const fieldB = { ...fieldA, id: 'field-b', name: 'b_old' };
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(
+                baseTable({ fields: [fieldA, fieldB] })
+            );
+        });
+
+        await act(async () => {
+            const updateA = result.current.updateField(
+                'table-1',
+                'field-a',
+                { name: 'a_new' },
+                { updateHistory: false }
+            );
+            const updateB = result.current.updateField(
+                'table-1',
+                'field-b',
+                { name: 'b_new' },
+                { updateHistory: false }
+            );
+            await Promise.all([updateA, updateB]);
+        });
+
+        const table = result.current.tables.find((t) => t.id === 'table-1');
+        const byId = (id: string) => table?.fields.find((f) => f.id === id);
+        expect(byId('field-a')?.name).toBe('a_new');
+        expect(byId('field-b')?.name).toBe('b_new');
+    });
+
+    it('doc-clear fix — clearDiagramData empties the doc itself, not just React state, so a later structural change cannot resurrect cleared data', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-a' }));
+        });
+        expect(result.current.tables.map((t) => t.id)).toEqual(['table-a']);
+
+        await act(async () => {
+            await result.current.clearDiagramData();
+        });
+        expect(result.current.tables).toEqual([]);
+
+        // a later structural doc write (any add) must not resurrect
+        // table-a — it can only if clearDiagramData left it sitting in the
+        // Y.Doc while merely clearing React state via setTables([]).
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-b' }));
+        });
+        expect(result.current.tables.map((t) => t.id)).toEqual(['table-b']);
+    });
+
+    it('relationships: add, update, remove-then-undo all round-trip through the doc', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.chartdb.addRelationships([
+                baseRelationship({}),
+            ]);
+        });
+        expect(result.current.chartdb.relationships.map((r) => r.id)).toEqual([
+            'rel-1',
+        ]);
+
+        await act(async () => {
+            await result.current.chartdb.updateRelationship('rel-1', {
+                name: 'renamed',
+            });
+        });
+        expect(result.current.chartdb.relationships[0].name).toBe('renamed');
+
+        await act(async () => {
+            await result.current.chartdb.removeRelationships(['rel-1']);
+        });
+        expect(result.current.chartdb.relationships).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.relationships.map((r) => r.id)).toEqual([
+            'rel-1',
+        ]);
+        // the undone-back relationship keeps the update from before removal,
+        // not the pre-rename snapshot — proves undo restored the doc entry
+        // removeRelationships actually deleted, not a stale re-add.
+        expect(result.current.chartdb.relationships[0].name).toBe('renamed');
+    });
+
+    it('dependencies: add, update, remove-then-undo all round-trip through the doc', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.chartdb.addDependencies([baseDependency({})]);
+        });
+        expect(result.current.chartdb.dependencies.map((d) => d.id)).toEqual([
+            'dep-1',
+        ]);
+
+        await act(async () => {
+            await result.current.chartdb.updateDependency('dep-1', {
+                dependentTableId: 'table-c',
+            });
+        });
+        expect(result.current.chartdb.dependencies[0].dependentTableId).toBe(
+            'table-c'
+        );
+
+        await act(async () => {
+            await result.current.chartdb.removeDependencies(['dep-1']);
+        });
+        expect(result.current.chartdb.dependencies).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.dependencies.map((d) => d.id)).toEqual([
+            'dep-1',
+        ]);
+        expect(result.current.chartdb.dependencies[0].dependentTableId).toBe(
+            'table-c'
+        );
+    });
+
+    it('areas: add, update, remove-then-undo all round-trip through the doc', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.chartdb.addAreas([baseArea({})]);
+        });
+        expect(result.current.chartdb.areas.map((a) => a.id)).toEqual([
+            'area-1',
+        ]);
+
+        await act(async () => {
+            await result.current.chartdb.updateArea('area-1', {
+                name: 'renamed',
+            });
+        });
+        expect(result.current.chartdb.areas[0].name).toBe('renamed');
+
+        await act(async () => {
+            await result.current.chartdb.removeAreas(['area-1']);
+        });
+        expect(result.current.chartdb.areas).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.areas.map((a) => a.id)).toEqual([
+            'area-1',
+        ]);
+        expect(result.current.chartdb.areas[0].name).toBe('renamed');
     });
 });
 
