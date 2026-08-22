@@ -463,15 +463,26 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (9/10 items, only **#2** remains)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — ✅ Done (9/9 items in scope)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
 involved — so the *next* phase (the Yjs adapter) starts from state that's
 already safe to merge, instead of trying to fix these two things at once.
-- Re-model `fields`/`indexes`/`checkConstraints` as keyed collections
-  instead of opaque arrays (**Appendix B #2**) — the foundation everything
-  else in this phase sits on top of.
+> **#2 reclassified out of this phase.** Re-modeling `fields`/`indexes`/
+> `checkConstraints` as keyed collections was originally listed here, but
+> the audit's own fix direction for it is a nested `Y.Map<id, Y.Map<...>>`
+> — the "keyed collection" *is* the Yjs type. There's no Yjs in the tree
+> during Phase 1, so a client-only stand-in (e.g. `Record<string, DBField>`)
+> would buy zero behavioral change while React state is the only writer,
+> would cost every array consumer of `table.fields`/`table.indexes`
+> (sql-export, dbml import/export, `apply-ids.ts`, `db-table.ts`, the zod
+> schemas in `diagram.ts`, side panel, canvas renderers), and would force
+> reintroducing field display-order that a plain keyed map drops. It also
+> can't meet this phase's own exit criteria ("verifiable without a CRDT in
+> place"). Moved to Phase 2 as its first task instead, where the
+> two-in-memory-`Y.Doc` merge tests can verify it directly. See Phase 2
+> below.
 - Make cascade-delete of relationships/dependencies a derived
   recomputation (from current state, not a captured closure) instead of a
   one-shot list (**#3**). — ✅ Done (`1304e84`): the filter condition
@@ -499,7 +510,12 @@ already safe to merge, instead of trying to fix these two things at once.
   `canvas.tsx`'s `checkParentAreas` correction already did this (verified,
   no change needed there). The "runs once per peer, not once per shared
   doc" half of this finding is Yjs/server-era territory, correctly
-  deferred past Phase 1.
+  deferred past Phase 1. **Note:** the #7 fix below adds a second effect
+  with this exact same deferred half — every client rendering a PK field
+  independently re-fires the same `unique` correction once a shared doc
+  exists. Single-user correct and tested now, but converges via N
+  update-log entries instead of one; Phase 2 must gate *both* this effect
+  and the #7 effect under one elected writer, not just this one.
 - Rebase debounced field writes against current value at commit time, or
   surface a conflict indicator (**#6**). — ✅ Done (`eb3b4f7`): fixed the
   shared `debounce()` utility to expose a real `cancel()` — the caller
@@ -553,6 +569,16 @@ verifiable without a CRDT in place.
 
 **Goal:** prove the data-model mapping (§5.2) works, entirely in-memory,
 before any network code exists.
+- **First task, moved from Phase 1:** re-model `fields`/`indexes`/
+  `checkConstraints` as keyed `Y.Map<id, Y.Map<...>>` collections instead
+  of opaque arrays (**Appendix B #2**) — the foundation everything else in
+  this phase sits on top of. Do this as part of building the adapter
+  itself, not as a separate client-only pass, since the keyed collection
+  *is* the Yjs type.
+- While wiring the adapter, gate the #5/#7 self-healing effects
+  (PK-implies-not-null, PK-implies-unique) under one elected writer so a
+  shared doc doesn't get N redundant correction writes from N clients —
+  see the note on #5/#7 in Phase 1 above.
 - Build the adapter so `add*/update*/remove*` methods read/write through a
   local `Y.Doc` instead of raw React state.
 - No `y-indexeddb`, no WebSocket — this `Y.Doc` only ever exists in one

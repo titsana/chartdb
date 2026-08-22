@@ -480,8 +480,10 @@ describe('ChartDBProvider', () => {
         // Pins chartdb-provider.tsx:656-705. Once `db` is a Y.Doc adapter,
         // this write shape overwrites every field in the Y.Map under one
         // key — a concurrent field/index add from another peer would be
-        // silently dropped. Phase 1 must re-model fields as a keyed
-        // collection before this write can be trusted under concurrency.
+        // silently dropped. Re-modeling fields as a keyed Y.Map collection
+        // is Phase 2's first task (moved out of Phase 1 — see §10), and
+        // this write must be re-verified against that adapter before it can
+        // be trusted under concurrency.
         const existingField = {
             id: 'field-1',
             name: 'old_name',
