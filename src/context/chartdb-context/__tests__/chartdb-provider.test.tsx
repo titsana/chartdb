@@ -16,6 +16,7 @@ import {
 import type { StorageContext } from '@/context/storage-context/storage-context';
 import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBTable } from '@/lib/domain/db-table';
+import type { DBRelationship } from '@/lib/domain/db-relationship';
 
 /**
  * Phase 0/1 (docs/design/realtime-collaboration.md §10) tests for
@@ -118,6 +119,23 @@ const baseTable = (overrides: Partial<DBTable>): DBTable => ({
     ...overrides,
 });
 
+const baseRelationship = (
+    overrides: Partial<DBRelationship>
+): DBRelationship => ({
+    id: 'rel-1',
+    name: 'relationship',
+    sourceSchema: 'public',
+    sourceTableId: 'table-a',
+    sourceFieldId: 'field-1',
+    targetSchema: 'public',
+    targetTableId: 'table-b',
+    targetFieldId: 'field-2',
+    sourceCardinality: 'many',
+    targetCardinality: 'one',
+    createdAt: Date.now(),
+    ...overrides,
+});
+
 describe('ChartDBProvider', () => {
     it('addTable + removeTables round-trip: table appears then disappears', async () => {
         const { result } = renderChartDB({ ...storageInitialValue });
@@ -131,6 +149,63 @@ describe('ChartDBProvider', () => {
             await result.current.removeTables(['table-1']);
         });
         expect(result.current.tables).toEqual([]);
+    });
+
+    it('fix for appendix-b:3 — removeTables drops a relationship added to the deleted table in the same tick, not just ones in its precomputed removal list', async () => {
+        // Simulates the audit's break scenario without a second client:
+        // addRelationship and removeTables both fire in the same act(),
+        // neither awaited before the other starts, so removeTables's
+        // internal relationshipsToRemove (computed from a closure snapshot
+        // taken before either call's state updates land) can't know about
+        // the relationship addRelationship is about to add. The old code
+        // filtered by that stale precomputed list; the fix filters by
+        // `ids` directly, re-evaluated against whatever is live when React
+        // applies the update — so it catches the relationship regardless.
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-a' }));
+            await result.current.addTable(baseTable({ id: 'table-b' }));
+        });
+
+        await act(async () => {
+            const addRelPromise = result.current.addRelationship(
+                baseRelationship({}),
+                { updateHistory: false }
+            );
+            const removePromise = result.current.removeTables(['table-a']);
+            await Promise.all([addRelPromise, removePromise]);
+        });
+
+        expect(result.current.tables.map((t) => t.id)).toEqual(['table-b']);
+        // the relationship pointing at the now-deleted table-a must not
+        // survive, even though it didn't exist when removeTables captured
+        // its closure
+        expect(result.current.relationships).toEqual([]);
+    });
+
+    it('fix for appendix-b:3 — updateTablesState drops a relationship added to a table it deletes in the same tick', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-a' }));
+            await result.current.addTable(baseTable({ id: 'table-b' }));
+        });
+
+        await act(async () => {
+            const addRelPromise = result.current.addRelationship(
+                baseRelationship({}),
+                { updateHistory: false }
+            );
+            const updatePromise = result.current.updateTablesState(
+                (current) => current.filter((t) => t.id !== 'table-a'),
+                { updateHistory: false }
+            );
+            await Promise.all([addRelPromise, updatePromise]);
+        });
+
+        expect(result.current.tables.map((t) => t.id)).toEqual(['table-b']);
+        expect(result.current.relationships).toEqual([]);
     });
 
     it('appendix-b:1 (raw mechanism) — updateTablesState with forceOverride replaces the whole array verbatim, regardless of what is live', async () => {

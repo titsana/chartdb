@@ -423,21 +423,32 @@ export const ChartDBProvider: React.FC<
                     ids.includes(dependency.dependentTableId)
             );
 
+            // appendix-b:3 fix — filter against `ids` (this call's own
+            // stable input) directly inside the updater, instead of against
+            // relationshipsToRemove/dependenciesToRemove (computed once,
+            // above, from a closure snapshot of `relationships`/
+            // `dependencies` at call time). A relationship pointing at one
+            // of `ids` added by a concurrent write between that snapshot
+            // and this update flushing would have survived the old
+            // precomputed-list filter; it can't survive this one, since the
+            // condition is re-evaluated against whatever is live when React
+            // applies it. (The db.delete* calls and undo/redo data below
+            // still use the closure snapshot — full referential-integrity
+            // enforcement for those is server/merge-time work, out of
+            // scope for a client-only fix.)
             setRelationships((relationships) =>
                 relationships.filter(
                     (relationship) =>
-                        !relationshipsToRemove.some(
-                            (r) => r.id === relationship.id
-                        )
+                        !ids.includes(relationship.sourceTableId) &&
+                        !ids.includes(relationship.targetTableId)
                 )
             );
 
             setDependencies((dependencies) =>
                 dependencies.filter(
                     (dependency) =>
-                        !dependenciesToRemove.some(
-                            (d) => d.id === dependency.id
-                        )
+                        !ids.includes(dependency.tableId) &&
+                        !ids.includes(dependency.dependentTableId)
                 )
             );
 
@@ -586,21 +597,28 @@ export const ChartDBProvider: React.FC<
                 )
             );
 
+            // appendix-b:3 fix — enforce this as a referential-integrity
+            // check (does the endpoint table still exist in the tables this
+            // action produces?) instead of "is this relationship in a
+            // precomputed removal list computed from a closure snapshot of
+            // `relationships`/`dependencies` at call time" — a relationship
+            // added by a concurrent write between that snapshot and this
+            // update flushing, pointing at a table this action deletes,
+            // would have survived the old precomputed-list filter.
+            const survivingTableIds = new Set(updatedTables.map((t) => t.id));
             setRelationships((relationships) =>
                 relationships.filter(
                     (relationship) =>
-                        !relationshipsToRemove.some(
-                            (r) => r.id === relationship.id
-                        )
+                        survivingTableIds.has(relationship.sourceTableId) &&
+                        survivingTableIds.has(relationship.targetTableId)
                 )
             );
 
             setDependencies((dependencies) =>
                 dependencies.filter(
                     (dependency) =>
-                        !dependenciesToRemove.some(
-                            (d) => d.id === dependency.id
-                        )
+                        survivingTableIds.has(dependency.tableId) &&
+                        survivingTableIds.has(dependency.dependentTableId)
                 )
             );
 
