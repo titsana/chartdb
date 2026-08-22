@@ -12,6 +12,7 @@ import {
     loadMergedState,
     storeSnapshotAndPrune,
 } from '../db/persistence';
+import { touchDiagram } from '../db/diagrams';
 import { extractUpdateFromRawMessage } from './durable-log';
 
 /**
@@ -57,6 +58,13 @@ export function createPersistenceExtension(pool: Pool): Extension {
             const yUpdate = extractUpdateFromRawMessage(update);
             if (yUpdate) {
                 await appendUpdate(pool, documentName, yUpdate);
+                // Phase 4.5: touches diagrams.updated_at so listDiagrams'
+                // sort reflects real edit activity, not just metadata
+                // edits (rename/etc). Best-effort — a diagram_id with no
+                // metadata row (shouldn't happen; appendUpdate above would
+                // already have thrown on the FK) is a silent no-op, not
+                // failed durability.
+                await touchDiagram(pool, documentName);
             }
         },
 

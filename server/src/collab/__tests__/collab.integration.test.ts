@@ -131,15 +131,32 @@ function waitForSynced(
     });
 }
 
+/** Phase 4.5: yjs_updates/yjs_snapshots now FK-reference collab_diagrams(id) — a
+ * diagram_id that was never registered can't hold any durable-log rows at
+ * all (see pool.ts's migrate()). These low-level Yjs-only tests never went
+ * through the real POST /diagrams flow, so each one registers its own
+ * diagram_id directly against the DB before opening a room. */
+async function registerTestDiagram(diagramId: string): Promise<void> {
+    const pool = createPool(loadConfig().databaseUrl);
+    try {
+        await pool.query(
+            `INSERT INTO collab_diagrams (id, name, database_type)
+             VALUES ($1, 'test', 'generic')
+             ON CONFLICT (id) DO NOTHING`,
+            [diagramId]
+        );
+    } finally {
+        await pool.end();
+    }
+}
+
 describe.skipIf(!databaseReachable)('Phase 3 — Hocuspocus server', () => {
     afterAll(async () => {
         // Best-effort cleanup of this suite's own rows so a real, shared
-        // Postgres doesn't accumulate test diagrams indefinitely.
+        // Postgres doesn't accumulate test diagrams indefinitely. Deleting
+        // from `collab_diagrams` cascades to yjs_updates/yjs_snapshots.
         const pool = createPool(loadConfig().databaseUrl);
-        await pool.query('DELETE FROM yjs_updates WHERE diagram_id LIKE $1', [
-            'test-diagram-%',
-        ]);
-        await pool.query('DELETE FROM yjs_snapshots WHERE diagram_id LIKE $1', [
+        await pool.query('DELETE FROM collab_diagrams WHERE id LIKE $1', [
             'test-diagram-%',
         ]);
         await pool.end();
@@ -148,6 +165,7 @@ describe.skipIf(!databaseReachable)('Phase 3 — Hocuspocus server', () => {
     it('two clients connect to the same room and sync a concurrent edit', async () => {
         const server = await startServerProcess();
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(diagramId);
         const docA = new Y.Doc();
         const docB = new Y.Doc();
         const providerA = new HocuspocusProvider({
@@ -204,6 +222,7 @@ describe.skipIf(!databaseReachable)('Phase 3 — Hocuspocus server', () => {
 
     it('data survives a server restart, loaded back from Postgres', async () => {
         const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(diagramId);
 
         const server1 = await startServerProcess();
         const doc1 = new Y.Doc();
