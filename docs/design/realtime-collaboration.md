@@ -574,7 +574,16 @@ before any network code exists.
   of opaque arrays (**Appendix B #2**) — the foundation everything else in
   this phase sits on top of. Do this as part of building the adapter
   itself, not as a separate client-only pass, since the keyed collection
-  *is* the Yjs type.
+  *is* the Yjs type. — ✅ Done (`42a460f`): `src/lib/collab/y-diagram.ts`
+  has pure `diagramToYDoc`/`yDocToDiagram` functions, no provider wiring
+  yet. Fields/indexes/checkConstraints are nested `Y.Map`s keyed by id;
+  order is preserved via an internal `__order` ordinal stamped at encode
+  time (not `createdAt`, which can collide). 7 tests cover round-trip
+  fidelity plus the actual appendix-b:2 proof: two independent in-memory
+  `Y.Doc`s merging a concurrent field edit vs. index add, concurrent PK
+  toggles on two fields, and concurrent table creation, with nothing
+  clobbered. **Not yet done:** wiring `chartdb-provider.tsx` to actually
+  use this (next step below) — existing consumers are untouched so far.
 - While wiring the adapter, gate the #5/#7 self-healing effects
   (PK-implies-not-null, PK-implies-unique) under one elected writer so a
   shared doc doesn't get N redundant correction writes from N clients —
