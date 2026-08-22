@@ -570,7 +570,7 @@ already safe to merge, instead of trying to fix these two things at once.
 single-user with zero networking; every fix above is independently
 verifiable without a CRDT in place.
 
-### Phase 2 — `Y.Doc` ⇄ `ChartDBProvider` adapter (in-process, no server)
+### Phase 2 — `Y.Doc` ⇄ `ChartDBProvider` adapter (in-process, no server) — ✅ Done
 
 **Goal:** prove the data-model mapping (§5.2) works, entirely in-memory,
 before any network code exists.
@@ -672,6 +672,45 @@ before any network code exists.
     `removeTables`/`updateTablesState` filter `relationships` and
     `dependencies` directly. This cluster has to be planned and migrated
     together, not incrementally like `notes`/`customTypes`.
+  - ✅ **`{tables, relationships, dependencies, areas}` done (`da64472`,
+    `0cc66b2`):** foundation first (`da64472`) — `reconcileCollection`
+    (doc-equivalent of a whole-array replace: upsert every desired item,
+    remove anything undesired), `upsertTable`/`reconcileTables` (a
+    table's own scalars plus its nested `fields`/`indexes`/
+    `checkConstraints` sub-collections, reconciled without replacing
+    sibling Y.Maps in place — the literal appendix-b:2 proof at this
+    layer), `removeItemsReferencing` (the appendix-b:3 cascade-delete,
+    reading the live doc at transaction time instead of a closure
+    snapshot), `readTables`/`readTableItem`. `useYCollectionSync`
+    generalized to take `readAll`/`readOne` as parameters so `tables` can
+    use the nested-aware read path instead of the flat one every other
+    collection uses. Every `chartdb-provider.tsx` method touching these
+    four collections (~25, including `diffCalculatedHandler` and
+    `loadDiagramFromData`) now writes through `collabDocRef`.
+    `clearDiagramData`/`deleteDiagram` now clear the doc itself
+    (`clearCollabDoc`) instead of calling `setTables([])` etc. directly —
+    that was a latent bug even in the already-migrated `notes`/
+    `customTypes`: the next structural doc change would have silently
+    resurrected the "cleared" data straight out of the still-populated
+    doc.
+    - **Concurrency bug found by review before writing tests, fixed in
+      the same commit (`0cc66b2`):** every table-mutating method follows
+      read-current-table -> transform -> `upsertTable`. The first cut
+      read via `getTable(tableId)` — React state, updated only
+      asynchronously by the `useYCollectionSync` observer. Two calls in
+      the same tick (e.g. two field edits fired via `Promise.all` without
+      awaiting each individually) both read the same pre-update snapshot;
+      whichever call's `transact()` ran second reconciled a "whole new
+      table" built from that stale snapshot, silently reverting the
+      first call's write — the same bug class as appendix-b:3, on a new
+      axis. Fixed with `getLiveTable` (reads straight off the doc via
+      `readTableItem`, immediately before each write — Yjs transactions
+      apply synchronously, so the second call sees the first's
+      already-committed change); `updateTablesState`'s `tables`-closure
+      base had the identical issue, fixed by reading `readTables`
+      fresh instead. Verified discriminating (reverted `getLiveTable`
+      back to `getTable` for one call site, confirmed the new test
+      failed with the exact predicted symptom, restored).
 - Build the adapter so `add*/update*/remove*` methods read/write through a
   local `Y.Doc` instead of raw React state.
 - No `y-indexeddb`, no WebSocket — this `Y.Doc` only ever exists in one
@@ -684,7 +723,18 @@ before any network code exists.
   scenarios directly: concurrent field edit vs. index add on the same
   table, concurrent PK assignment, concurrent table creation, etc.
 **Exit criteria:** Phase 0 suite green through the adapter; the
-Yjs-merge simulation tests for every Appendix B scenario pass.
+Yjs-merge simulation tests for every Appendix B scenario pass. — ✅ All
+six collections (`notes`, `customTypes`, `tables`, `relationships`,
+`dependencies`, `areas`) are now `Y.Doc`-backed; `tsc -b` and
+`npm run lint` both clean; full suite green (914 tests). **Not yet
+covered:** a dedicated undo/redo regression test through
+`chartdb-provider.tsx`'s wiring for each of `tables`/`relationships`/
+`dependencies`/`areas` individually the way `notes`/`customTypes` each
+got (this segment added plain add/update/remove-then-undo round-trips
+for `relationships`/`dependencies`/`areas`, plus the two bugs found by
+review, but not an exhaustive per-method discriminating test for all
+~25 migrated methods) — worth revisiting if a regression shows up
+there.
 
 ### Phase 3 — Server scaffold (NestJS, fresh)
 
