@@ -894,7 +894,7 @@ covers both halves: two concurrent clients syncing an edit, and a
 restart-recovers-from-Postgres round trip. 12 tests total in `server/`,
 `tsc -p tsconfig.json` and the build both clean.
 
-### Phase 4 — End-to-end sync — 🚧 In progress
+### Phase 4 — End-to-end sync — ✅ Done
 
 **Goal:** two real browser tabs editing the same diagram live.
 
@@ -1057,18 +1057,27 @@ writing them, neither catchable by Phase 2's single-doc tests:**
   `vi.stubGlobal('WebSocket', wsPackageWebSocket)`, scoped to that file,
   rather than special-casing the provider construction in production code
   just to accommodate the test environment.
-- `tsc -b`, lint, and the full suite (925 tests) all clean; the collab
+- `tsc -b`, lint, and the full suite (926 tests) all clean; the collab
   integration file specifically re-run 5x and 8x in isolation (not just as
   part of the full suite, which can mask a real failure behind lucky
   scheduling) to confirm the fixes made it deterministic, not just
   usually-green.
 
-**Not yet done** (tracked as the rest of this phase): the reconnect-
-convergence half of the exit criteria below (kill a live connection, edit
-on both sides while disconnected, reconnect, assert both tabs and the
-server converge) — the two-client harness now exists, this hasn't been
-written yet; confirming/documenting the corrected online-only bullet below
-against a real kill/reconnect, not just reasoned about.
+**Reconnect-convergence — the other exit-criteria half, now verified:**
+`reconnect-convergence` in `chartdb-provider.collab.integration.test.tsx`
+kills the real server process (not a socket-level disconnect —
+`HocuspocusProvider.disconnect()` is a documented no-op per its own source,
+and `providerRef` isn't exposed through the context value for a test to
+reach the underlying `websocketProvider` directly), makes one edit on each
+of two already-connected clients while it's down (asserted locally,
+immediately — proving edits genuinely queue rather than throw/block, since
+the ready-gate only guards the initial load window, not an
+already-open diagram), restarts a fresh server process on the exact same
+port, and waits for both clients *and* a third, independent client that
+joins fresh after the restart (proving the server, not just the two React
+trees, holds the merged state) to converge on both edits. 5/5 in isolation.
+This directly confirms the corrected bullet below empirically rather than
+just reasoning about it.
 - ~~Confirm the online-only behavior: killing the WebSocket connection
   stops local edits from silently queuing~~ — **corrected before
   implementing**: this can't be true as originally written, and isn't a
@@ -1079,15 +1088,17 @@ against a real kill/reconnect, not just reasoned about.
   stack resilient to network blips at all. The "no offline mode" product
   decision (§3/§5.2) has to be enforced at the *UI* gate — disabling
   editing while disconnected — which Phase 5 already owns ("Disconnect/
-  reconnect UI"). Phase 4's job is narrower: confirm and document what
+  reconnect UI"). Phase 4's job was narrower: confirm and document what
   actually happens (edits queue locally, flush on reconnect, no
-  server-side divergence once reconnected), not build the gate.
+  server-side divergence once reconnected) — now done, see above.
 **Exit criteria:** two tabs, same diagram, concurrent edits merge
 correctly (✅ verified end-to-end, including a fix for a real merge bug —
 see above); a reconnect after a killed connection converges to the same
-state on both tabs and the server (not yet verified — see "Not yet done")
-(not: local edits are prevented while disconnected — see the corrected
-bullet above for why that's Phase 5's criterion, not this one's).
+state on both tabs and the server (✅ verified end-to-end, including the
+server itself via a fresh third client, not just the two tabs — see
+above) (not: local edits are prevented while disconnected — see the
+corrected bullet above for why that's Phase 5's criterion, not this one's).
+Both halves met — **Phase 4 done.**
 
 ### Phase 5 — Presence, undo, and disconnect UX
 

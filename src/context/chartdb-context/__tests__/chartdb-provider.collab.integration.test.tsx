@@ -17,6 +17,7 @@ import {
 } from '@/context/storage-context/storage-context';
 import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBTable } from '@/lib/domain/db-table';
+import type { DBField } from '@/lib/domain/db-field';
 import type * as EnvModule from '@/lib/env';
 import { WebSocket as NodeWebSocket } from 'ws';
 
@@ -86,7 +87,16 @@ interface TestServer {
 }
 
 async function startServerProcess(): Promise<TestServer | null> {
-    const port = await freePort();
+    return startServerProcessOnPort(await freePort());
+}
+
+// Reconnect-convergence needs a second server instance bound to the SAME
+// port the first one used (so the already-constructed HocuspocusProviders
+// reconnect to it without any test-side re-pointing) — a real restart, not
+// a fresh random port.
+async function startServerProcessOnPort(
+    port: number
+): Promise<TestServer | null> {
     const serverDir = join(process.cwd(), 'server');
     const child = spawn('node', [join(serverDir, 'dist/main.js')], {
         cwd: serverDir,
@@ -484,4 +494,144 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
             { timeout: 8_000 }
         );
     }, 20_000);
+
+    it('reconnect-convergence: edits made while the server is down queue locally and converge (both clients + the server) once it comes back', async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        const field = {
+            id: 'field-1',
+            name: 'original_name',
+            type: { id: 'integer', name: 'integer' },
+            primaryKey: false,
+            nullable: true,
+            unique: false,
+            createdAt: Date.now(),
+        };
+
+        const clientA = renderClient();
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [baseTable({ fields: [field] })],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        const clientB = renderClient();
+        await act(async () => {
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+        await waitFor(
+            () =>
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )
+                ).toBeTruthy(),
+            { timeout: 8_000 }
+        );
+
+        // Kill the (shared, file-level) server — this is a real process
+        // death, not a socket-level disconnect (HocuspocusProvider.disconnect()
+        // is a documented no-op per its own source; there's no handle on
+        // the underlying websocketProvider from outside chartdb-provider.tsx
+        // anyway). Reassign the module-level `server` so afterAll cleans up
+        // whichever instance is alive when this test ends, and so the next
+        // startServerProcessOnPort call below restarts on the exact same
+        // port these already-constructed HocuspocusProviders are pointed at.
+        const port = server.port;
+        await server.stop();
+        server = null;
+
+        // The doc's corrected Phase 4 bullet: Yjs always queues locally
+        // regardless of connection state — a killed connection can't stop
+        // that, only reconnecting-and-merging is different from the
+        // connected case. Assert that directly: both edits apply to their
+        // own client's local state immediately, with the server down.
+        await act(async () => {
+            await clientA.result.current.updateField('table-1', 'field-1', {
+                name: 'edited_while_offline',
+            });
+        });
+        expect(
+            clientA.result.current.tables
+                .find((t: DBTable) => t.id === 'table-1')
+                ?.fields.find((f: DBField) => f.id === 'field-1')?.name
+        ).toBe('edited_while_offline');
+
+        await act(async () => {
+            await clientB.result.current.addIndex('table-1', {
+                id: 'index-offline',
+                name: 'idx',
+                unique: false,
+                fieldIds: ['field-1'],
+                createdAt: Date.now(),
+            });
+        });
+        expect(
+            clientB.result.current.tables.find(
+                (t: DBTable) => t.id === 'table-1'
+            )?.indexes?.[0]?.id
+        ).toBe('index-offline');
+
+        // Bring the server back on the SAME port — a restart, not a fresh
+        // random one — so the existing providers' own reconnect logic (not
+        // this test) re-establishes the connection.
+        server = await startServerProcessOnPort(port);
+        if (!server) return; // couldn't restart — nothing more to assert
+
+        for (const client of [clientA, clientB]) {
+            await waitFor(
+                () => {
+                    const table = client.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    );
+                    expect(table?.fields?.[0]?.name).toBe(
+                        'edited_while_offline'
+                    );
+                    expect(table?.indexes?.[0]?.id).toBe('index-offline');
+                },
+                { timeout: 15_000 }
+            );
+        }
+
+        // Convergence on the two React trees isn't proof the *server* holds
+        // the merged state too — a third, independent client joining fresh
+        // after the restart is.
+        const { readTableItem } = await import('@/lib/collab/y-diagram');
+        const checkerDoc = new Y.Doc();
+        const checkerProvider = new HocuspocusProvider({
+            url: `ws://localhost:${server.port}`,
+            name: diagramId,
+            document: checkerDoc,
+        });
+        try {
+            await waitFor(
+                () => {
+                    const table = readTableItem(
+                        checkerDoc.getMap('tables'),
+                        'table-1'
+                    );
+                    expect(table?.fields?.[0]?.name).toBe(
+                        'edited_while_offline'
+                    );
+                    expect(table?.indexes?.[0]?.id).toBe('index-offline');
+                },
+                { timeout: 8_000 }
+            );
+        } finally {
+            checkerProvider.destroy();
+        }
+    }, 30_000);
 });
