@@ -894,20 +894,110 @@ covers both halves: two concurrent clients syncing an edit, and a
 restart-recovers-from-Postgres round trip. 12 tests total in `server/`,
 `tsc -p tsconfig.json` and the build both clean.
 
-### Phase 4 — End-to-end sync
+### Phase 4 — End-to-end sync — 🚧 In progress
 
 **Goal:** two real browser tabs editing the same diagram live.
+
+**Progress so far — single-client wiring, verified against the real
+server:**
+- Config: `COLLAB_WS_URL` added to `src/lib/env.ts` (same
+  `window.env` → `VITE_*` build-time → hardcoded-fallback precedence as
+  every other runtime-overridable setting there), `default.conf.template`/
+  `entrypoint.sh`/`Dockerfile` extended to plumb it through at deploy time,
+  matching §7's plan exactly.
+- **Connects by default, for every diagram** (a deliberate product
+  decision, not the more cautious default-off this doc's own author would
+  have picked given no auth/disconnect-UI/feature-flag exists yet —
+  explicitly confirmed with the project owner before implementing). Falls
+  back to `ws://localhost:1234` (the Phase 3 server's own default port)
+  when unconfigured, so local dev against a locally-running `server/`
+  works with no setup; a real deployment must set this explicitly.
+- `chartdb-provider.tsx`'s `loadDiagramFromData` — the diagram-(re)load
+  path every real app usage goes through (`editor-page.tsx` mounts
+  `ChartDBProvider` with no `diagram` prop and calls this after) —
+  constructs a `HocuspocusProvider` for the new doc, named by
+  `diagram.id`. **`template-page.tsx`'s readonly template-preview usage
+  (`<ChartDBProvider diagram={...} readonly>`) is deliberately excluded** —
+  gated on `readonlyProp`: a static preview has no business opening a live
+  room for whatever id a template happens to carry, and the
+  construction-time `if (!collabDocRef.current)` seeding block (which
+  serves exactly that readonly-preview case) stays local-only, unchanged.
+- **Seed-vs-adopt race, found by review before this shipped, not by a
+  test**: the pre-Phase-4 code unconditionally seeded a fresh doc from
+  whatever diagram data this tab loaded from Dexie. With a real room now
+  attached, that becomes a real corruption risk — a client joining a room
+  a collaborator already populated (or that this same diagram was already
+  synced to before, from a now-stale local Dexie copy) would inject its
+  own stale snapshot into the shared CRDT state. Fixed via
+  `src/lib/collab/seed-gate.ts`'s `seedWhenDecided`: seed only if the room
+  turns out to be genuinely empty once sync is resolved one way or the
+  other; otherwise **adopt** the room's actual content — which needed an
+  explicit re-derivation of React state from the doc (`setTables`/
+  `setNotes`/etc., mirroring what `useYCollectionSync`'s decode functions
+  already do), since that hook only reacts to *future* doc changes, not
+  content that was already there before it started observing.
+  - "Resolved one way or the other" is `synced` (room's actual state is
+    now known) **or** a `disconnected` status arriving before `synced`
+    ever did (a real connection attempt failed — presumed offline, don't
+    leave the diagram permanently unseeded). Deliberately not a wall-clock
+    timeout: confirmed against `@hocuspocus/provider` source that
+    `disconnected` is only ever emitted once per real failed/dropped
+    socket, never spuriously at construction — so this can't fire while a
+    slow-but-live server is still mid-handshake the way a fixed timer
+    would. Known remaining trade-off, accepted rather than solved: a
+    transient failure immediately followed by a successful reconnect still
+    seeds locally first, and the late-arriving server state then merges
+    with it via ordinary Yjs semantics rather than one cleanly overwriting
+    the other — same risk class as any offline-first Yjs client, not
+    specific to this decision.
+- **Verified end-to-end against the real, compiled server** (not a
+  simulation): `chartdb-provider.collab.integration.test.tsx` spawns
+  `server/dist/main.js` as a genuine OS process, renders a real
+  `ChartDBProvider` pointed at it via `vi.doMock('@/lib/env', ...)` +
+  dynamic `import()` (module-level exports can't be overridden after the
+  fact), calls `loadDiagramFromData`, and has a second, independent
+  `@hocuspocus/provider` client join the same room directly — proving the
+  table it wrote reached the server for real, not just that local state
+  looks right. **Vitest gotcha found along the way**: this project's
+  default `environment: 'happy-dom'` has no global `WebSocket` at all
+  (confirmed directly) — real browsers always do — so the test stubs one
+  in via `vi.stubGlobal('WebSocket', wsPackageWebSocket)`, scoped to that
+  file, rather than special-casing the provider construction in production
+  code just to accommodate the test environment.
+- `tsc -b`, lint, and the full suite (921 tests) all clean.
+
+**Not yet done** (tracked as the rest of this phase): scripted two-client
+tests reproducing the Appendix B scenarios against the real server
+(concurrent field edit vs. index add, concurrent PK assignment, concurrent
+table creation, etc. — the in-memory simulations from Phase 2 need
+re-verifying end-to-end, not just at the pure-function layer); a dedicated
+test for the seed-vs-adopt path itself (client A creates a table in a
+room, client B "joins" with different local Dexie data, assert B adopts
+A's state rather than resurrecting its own); confirming/documenting the
+corrected online-only bullet below.
 - Wire the Phase 2 adapter's `Y.Doc` to the Phase 3 server over
-  WebSocket.
+  WebSocket (`@hocuspocus/provider`, per the Phase 3 switch — see §5.3).
 - Manual + scripted two-client tests reproducing the Appendix B scenarios
   against the real server (not just the in-memory simulation from Phase 2)
   — this is what actually proves the fixes hold end-to-end.
-- Confirm the online-only behavior: killing the WebSocket connection stops
-  local edits from silently queuing (per the "no offline mode" decision in
-  §3/§5.2) — even if the disconnect *UI* isn't built yet (that's Phase 5).
+- ~~Confirm the online-only behavior: killing the WebSocket connection
+  stops local edits from silently queuing~~ — **corrected before
+  implementing**: this can't be true as originally written, and isn't a
+  bug to fix. Yjs always queues locally — `collabDocRef`'s transactions
+  are plain in-memory CRDT ops regardless of connection state, which is
+  the data structure, not a config knob. A killed connection can't stop
+  that; reconnecting flushes and merges, which is exactly what makes this
+  stack resilient to network blips at all. The "no offline mode" product
+  decision (§3/§5.2) has to be enforced at the *UI* gate — disabling
+  editing while disconnected — which Phase 5 already owns ("Disconnect/
+  reconnect UI"). Phase 4's job is narrower: confirm and document what
+  actually happens (edits queue locally, flush on reconnect, no
+  server-side divergence once reconnected), not build the gate.
 **Exit criteria:** two tabs, same diagram, concurrent edits merge
-correctly; a killed connection does not let one client silently drift from
-the server's state.
+correctly; a reconnect after a killed connection converges to the same
+state on both tabs and the server (not: local edits are prevented while
+disconnected — see the corrected bullet above for why that's Phase 5's
+criterion, not this one's).
 
 ### Phase 5 — Presence, undo, and disconnect UX
 

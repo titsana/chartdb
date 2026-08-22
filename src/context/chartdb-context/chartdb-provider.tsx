@@ -1,5 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
+import { HocuspocusProvider } from '@hocuspocus/provider';
+import { COLLAB_WS_URL } from '@/lib/env';
+import { seedWhenDecided } from '@/lib/collab/seed-gate';
 import {
     upsertItem,
     patchItem,
@@ -104,6 +107,14 @@ export const ChartDBProvider: React.FC<
     // etc (still called from every mutation) are a write-through sink
     // only — never read back except at initial diagram load.
     const collabDocRef = useRef<Y.Doc | null>(null);
+    // Phase 4: the live WebSocket connection for collabDocRef.current's
+    // room, when one is attached (see attachCollabProvider below). Only
+    // ever created by loadDiagramFromData — not here at construction —
+    // because this component is also used for a readonly, static preview
+    // (template-page.tsx passes a `diagram` prop directly, `readonly`),
+    // which has no business opening a live collaboration room for
+    // whatever id a template happens to carry.
+    const providerRef = useRef<HocuspocusProvider | null>(null);
     if (!collabDocRef.current) {
         const doc = new Y.Doc();
         (diagram?.tables ?? []).forEach((table) =>
@@ -2237,36 +2248,120 @@ export const ChartDBProvider: React.FC<
                 // to a new object is what makes `useYCollectionSync`'s
                 // effect re-subscribe (see its doc comment); setNotes/
                 // setCustomTypes above already set the correct initial
-                // React state synchronously, so there's no visible gap.
+                // React state synchronously, so there's no visible gap —
+                // *unless* a live room turns out to already have different
+                // content, see below.
                 collabDocRef.current?.destroy();
+                providerRef.current?.destroy();
+                providerRef.current = null;
                 const newDoc = new Y.Doc();
-                const newTablesMap = newDoc.getMap<unknown>('tables');
-                (diagram.tables ?? []).forEach((table) =>
-                    upsertTable(newTablesMap, table)
-                );
-                const newRelationshipsMap =
-                    newDoc.getMap<unknown>('relationships');
-                (diagram.relationships ?? []).forEach((relationship) =>
-                    upsertItem(newRelationshipsMap, relationship)
-                );
-                const newDependenciesMap =
-                    newDoc.getMap<unknown>('dependencies');
-                (diagram.dependencies ?? []).forEach((dependency) =>
-                    upsertItem(newDependenciesMap, dependency)
-                );
-                const newAreasMap = newDoc.getMap<unknown>('areas');
-                (diagram.areas ?? []).forEach((area) =>
-                    upsertItem(newAreasMap, area)
-                );
-                const newNotesMap = newDoc.getMap<unknown>('notes');
-                (diagram.notes ?? []).forEach((note) =>
-                    upsertItem(newNotesMap, note)
-                );
-                const newCustomTypesMap = newDoc.getMap<unknown>('customTypes');
-                (diagram.customTypes ?? []).forEach((customType) =>
-                    upsertItem(newCustomTypesMap, customType)
-                );
                 collabDocRef.current = newDoc;
+
+                // Phase 4: seeding this diagram's local (Dexie-loaded) data
+                // into the doc is only correct for a room nobody has
+                // populated yet — a room a collaborator already has open,
+                // or one this diagram was already synced to before, must
+                // win over whatever this tab happens to have loaded
+                // locally (this tab's own Dexie copy can be stale). Decided
+                // once, via seedWhenDecided (see its doc comment for why
+                // synced-or-disconnected instead of a timeout). If the room
+                // already has content, this tab's just-set React state
+                // above was seeded from the wrong source — re-derive it for
+                // real from what the doc actually holds, since
+                // useYCollectionSync only reacts to *future* changes, not
+                // whatever was already in the doc before it started
+                // observing.
+                const reconcileWithRoom = () => {
+                    const tablesMap = newDoc.getMap<unknown>('tables');
+                    const relationshipsMap =
+                        newDoc.getMap<unknown>('relationships');
+                    const dependenciesMap =
+                        newDoc.getMap<unknown>('dependencies');
+                    const areasMap = newDoc.getMap<unknown>('areas');
+                    const notesMap = newDoc.getMap<unknown>('notes');
+                    const customTypesMap =
+                        newDoc.getMap<unknown>('customTypes');
+
+                    const roomIsEmpty =
+                        tablesMap.size === 0 &&
+                        relationshipsMap.size === 0 &&
+                        dependenciesMap.size === 0 &&
+                        areasMap.size === 0 &&
+                        notesMap.size === 0 &&
+                        customTypesMap.size === 0;
+
+                    if (roomIsEmpty) {
+                        newDoc.transact(() => {
+                            (diagram.tables ?? []).forEach((table) =>
+                                upsertTable(tablesMap, table)
+                            );
+                            (diagram.relationships ?? []).forEach(
+                                (relationship) =>
+                                    upsertItem(relationshipsMap, relationship)
+                            );
+                            (diagram.dependencies ?? []).forEach((dependency) =>
+                                upsertItem(dependenciesMap, dependency)
+                            );
+                            (diagram.areas ?? []).forEach((area) =>
+                                upsertItem(areasMap, area)
+                            );
+                            (diagram.notes ?? []).forEach((note) =>
+                                upsertItem(notesMap, note)
+                            );
+                            (diagram.customTypes ?? []).forEach((customType) =>
+                                upsertItem(customTypesMap, customType)
+                            );
+                        });
+                        return;
+                    }
+
+                    // Room already had content — adopt it instead.
+                    setTables(readTables(tablesMap));
+                    setRelationships(
+                        readCollection<DBRelationship>(
+                            relationshipsMap,
+                            (r) => r as unknown as DBRelationship
+                        )
+                    );
+                    setDependencies(
+                        readCollection<DBDependency>(
+                            dependenciesMap,
+                            (r) => r as unknown as DBDependency
+                        )
+                    );
+                    setAreas(
+                        readCollection<Area>(
+                            areasMap,
+                            (r) => r as unknown as Area
+                        )
+                    );
+                    setNotes(
+                        readCollection<Note>(
+                            notesMap,
+                            (r) => r as unknown as Note
+                        )
+                    );
+                    setCustomTypes(
+                        readCollection<DBCustomType>(
+                            customTypesMap,
+                            (r) => r as unknown as DBCustomType
+                        )
+                    );
+                };
+
+                if (!readonlyProp && COLLAB_WS_URL) {
+                    const provider = new HocuspocusProvider({
+                        url: COLLAB_WS_URL,
+                        name: diagram.id,
+                        document: newDoc,
+                    });
+                    providerRef.current = provider;
+                    seedWhenDecided(provider, reconcileWithRoom);
+                } else {
+                    // Readonly (template preview) or no collab server
+                    // configured — local-only, exactly like before Phase 4.
+                    reconcileWithRoom();
+                }
 
                 // reset the appendix-b:9 default-name counters so they
                 // reseed from this diagram's actual counts on next use,
@@ -2299,6 +2394,7 @@ export const ChartDBProvider: React.FC<
                 setNotes,
                 resetRedoStack,
                 resetUndoStack,
+                readonlyProp,
             ]
         );
 

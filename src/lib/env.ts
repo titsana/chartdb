@@ -12,3 +12,16 @@ export const HIDE_CHARTDB_CLOUD: boolean =
 export const DISABLE_ANALYTICS: boolean =
     (window?.env?.DISABLE_ANALYTICS ??
         import.meta.env.VITE_DISABLE_ANALYTICS) === 'true';
+
+// Phase 4 (docs/design/realtime-collaboration.md §10): the Phase 3
+// collaboration server's WebSocket URL. Connecting is on by default (every
+// diagram) — falls back to the Phase 3 server's own default local port
+// (`server/src/config.ts`'s `port: ... ?? 1234`) so a local `npm run dev`
+// against a locally-running `server/` just works with no extra
+// configuration; a real deployment must set this explicitly (window.env,
+// via public/config.js — see default.conf.template/entrypoint.sh — or
+// VITE_COLLAB_WS_URL at build time) the same way OPENAI_API_KEY etc. do.
+export const COLLAB_WS_URL: string =
+    window?.env?.COLLAB_WS_URL ||
+    import.meta.env.VITE_COLLAB_WS_URL ||
+    'ws://localhost:1234';
