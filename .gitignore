@@ -27,3 +27,4 @@ dist-ssr
 server/.env*
 !server/.env.example
 stats/
+*.tsbuildinfo
