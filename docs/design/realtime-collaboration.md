@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (1/9 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -489,7 +489,9 @@ already safe to merge, instead of trying to fix these two things at once.
   (**#8** — this is the same bug class `81dae56` already fixed once;
   fixing it properly here means it can't regress a third time).
 - Derive default name/order from an incrementing counter, not
-  `array.length` (**#9**).
+  `array.length` (**#9**). — ✅ Done (`9ee9a52`): ref-based monotonic
+  counters in `chartdb-provider.tsx` for tables/fields/indexes/areas/
+  custom types, reset on diagram load.
 - Switch `apply-ids.ts` matching to stable-id-first, name-based only as
   fallback for external imports (**#11**).
 - Gate the diff-preview readonly path so it can't write through whatever
