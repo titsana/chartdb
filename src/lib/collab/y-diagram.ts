@@ -102,7 +102,14 @@ function writeNestedCollection<T extends { id: string }>(
     parent.set(key, collectionMap);
 }
 
-function readCollectionFromMap<T>(
+/**
+ * Decodes an entire collection Y.Map back to a sorted array. Exported —
+ * this is also how a live provider re-derives full state after a
+ * structural change (an entry added/removed), as opposed to `readItem`
+ * for a surgical single-entry update. See `y-diagram.test.ts` and the
+ * usage note on `readItem` below.
+ */
+export function readCollection<T>(
     collectionMap: Y.Map<unknown> | undefined,
     decode: (raw: PlainRecord) => T
 ): T[] {
@@ -129,10 +136,31 @@ function readNestedCollection<T>(
     key: string,
     decode: (raw: PlainRecord) => T
 ): T[] {
-    return readCollectionFromMap(
+    return readCollection(
         parent?.get(key) as Y.Map<unknown> | undefined,
         decode
     );
+}
+
+/**
+ * Decodes exactly one entry out of a collection Y.Map, without touching
+ * the rest — what an observer uses for a non-structural change (an
+ * existing entry's fields changed, nothing added/removed), so untouched
+ * sibling entries keep their object identity in React state instead of
+ * every entry getting rebuilt on every edit.
+ */
+export function readItem<T>(
+    collectionMap: Y.Map<unknown>,
+    id: string,
+    decode: (raw: PlainRecord) => T
+): T | undefined {
+    const itemMap = collectionMap.get(id) as Y.Map<unknown> | undefined;
+    if (!itemMap) return undefined;
+    const raw: PlainRecord = { id };
+    itemMap.forEach((v, k) => {
+        if (k !== ORDER_KEY) raw[k] = v;
+    });
+    return decode(raw);
 }
 
 // ---- Incremental (live-doc) helpers — step 3 (provider wiring) uses these ----
@@ -337,23 +365,23 @@ export function yDocToDiagram(doc: Y.Doc): Diagram {
             'databaseEdition'
         ) as Diagram['databaseEdition'],
         tables,
-        relationships: readCollectionFromMap<DBRelationship>(
+        relationships: readCollection<DBRelationship>(
             doc.getMap<unknown>('relationships'),
             (r) => r as unknown as DBRelationship
         ),
-        dependencies: readCollectionFromMap<DBDependency>(
+        dependencies: readCollection<DBDependency>(
             doc.getMap<unknown>('dependencies'),
             (r) => r as unknown as DBDependency
         ),
-        areas: readCollectionFromMap<Area>(
+        areas: readCollection<Area>(
             doc.getMap<unknown>('areas'),
             (r) => r as unknown as Area
         ),
-        customTypes: readCollectionFromMap<DBCustomType>(
+        customTypes: readCollection<DBCustomType>(
             doc.getMap<unknown>('customTypes'),
             (r) => r as unknown as DBCustomType
         ),
-        notes: readCollectionFromMap<Note>(
+        notes: readCollection<Note>(
             doc.getMap<unknown>('notes'),
             (r) => r as unknown as Note
         ),
