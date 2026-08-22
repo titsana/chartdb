@@ -684,4 +684,121 @@ describe('applyIds', () => {
             expect(result.tables?.[0].schema).toBe('public');
         });
     });
+
+    describe('fix for appendix-b:11 — stable-id-first matching', () => {
+        it('recognizes a renamed table via its id instead of treating it as brand new', () => {
+            // Previously: name-based matching only. A table renamed since
+            // the source snapshot was taken no longer matches by name, so
+            // it was treated as unrelated to anything in the source
+            // diagram — even though it's the exact same tracked entity
+            // (same id in both diagrams).
+            const sourceDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'shared-id',
+                        name: 'users',
+                        schema: 'public',
+                    }),
+                ],
+            });
+            const targetDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'shared-id',
+                        name: 'users_renamed', // renamed since the snapshot
+                        schema: 'public',
+                    }),
+                ],
+            });
+
+            const result = applyIds({ sourceDiagram, targetDiagram });
+
+            expect(result.tables?.[0].id).toBe('shared-id');
+            expect(result.tables?.[0].name).toBe('users_renamed'); // rename preserved, not clobbered
+        });
+
+        it('does not misattribute a renamed table to an unrelated source table with a coincidentally matching new name', () => {
+            // The scenario id-first matching actually guards against:
+            // table A (id shared-id) is renamed to "posts" — the same
+            // name an unrelated table B already has in the source
+            // diagram. Name-based matching alone would wrongly reconcile
+            // A against B's id. Id-first matching short-circuits that.
+            const sourceDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'source-table-b',
+                        name: 'posts',
+                        schema: 'public',
+                    }),
+                    createTable({
+                        id: 'shared-id',
+                        name: 'users',
+                        schema: 'public',
+                    }),
+                ],
+            });
+            const targetDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'shared-id',
+                        name: 'posts', // renamed to collide with table B's name
+                        schema: 'public',
+                    }),
+                ],
+            });
+
+            const result = applyIds({ sourceDiagram, targetDiagram });
+
+            expect(result.tables?.[0].id).toBe('shared-id'); // not 'source-table-b'
+        });
+
+        it('recognizes a renamed field/index via id the same way', () => {
+            const sourceDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'table-1',
+                        name: 'users',
+                        schema: 'public',
+                        fields: [
+                            createField({ id: 'field-shared', name: 'old' }),
+                        ],
+                        indexes: [
+                            createIndex({
+                                id: 'index-shared',
+                                name: 'old_idx',
+                            }),
+                        ],
+                    }),
+                ],
+            });
+            const targetDiagram = createBaseDiagram({
+                tables: [
+                    createTable({
+                        id: 'table-1',
+                        name: 'users',
+                        schema: 'public',
+                        fields: [
+                            createField({
+                                id: 'field-shared',
+                                name: 'new_name',
+                            }),
+                        ],
+                        indexes: [
+                            createIndex({
+                                id: 'index-shared',
+                                name: 'new_idx_name',
+                                fieldIds: ['field-shared'],
+                            }),
+                        ],
+                    }),
+                ],
+            });
+
+            const result = applyIds({ sourceDiagram, targetDiagram });
+
+            expect(result.tables?.[0].fields[0].id).toBe('field-shared');
+            expect(result.tables?.[0].fields[0].name).toBe('new_name');
+            expect(result.tables?.[0].indexes[0].id).toBe('index-shared');
+        });
+    });
 });

@@ -155,17 +155,54 @@ export const applyIds = ({
     const targetDependencyIdMapping = new Map<string, string>();
     const targetCustomTypeIdMapping = new Map<string, string>();
 
+    // appendix-b:11 fix: stable-id-first matching. If a target entity's id
+    // already exists in the source diagram, that's the same entity — even
+    // if it was renamed since the source snapshot was taken, when
+    // name-based matching (below) would otherwise treat it as brand new,
+    // or worse, wrongly reconcile it against an unrelated source entity
+    // whose name happens to collide with the target's new name. Name-based
+    // matching remains the fallback for entities with no id overlap at
+    // all — the normal case for a genuinely external import (e.g. a fresh
+    // SQL/DBML parse), where every id is freshly generated and can never
+    // coincide with the source diagram's ids.
+    const sourceTableIds = new Set(
+        sourceDiagram.tables?.map((t) => t.id) ?? []
+    );
+    const sourceFieldIds = new Set(
+        sourceDiagram.tables?.flatMap((t) => t.fields.map((f) => f.id)) ?? []
+    );
+    const sourceIndexIds = new Set(
+        sourceDiagram.tables?.flatMap((t) => t.indexes.map((i) => i.id)) ?? []
+    );
+    const sourceRelationshipIds = new Set(
+        sourceDiagram.relationships?.map((r) => r.id) ?? []
+    );
+    const sourceDependencyIds = new Set(
+        sourceDiagram.dependencies?.map((d) => d.id) ?? []
+    );
+    const sourceCustomTypeIds = new Set(
+        sourceDiagram.customTypes?.map((c) => c.id) ?? []
+    );
+
     targetDiagram?.tables?.forEach((targetTable) => {
-        const targetKey = createTableKey({
-            table: targetTable,
-            defaultSchema: targetDefaultSchema,
-        });
-        const newId = tablesIdMapping.get(targetKey);
-        if (newId) {
-            targetTableIdMapping.set(targetTable.id, newId);
+        if (sourceTableIds.has(targetTable.id)) {
+            targetTableIdMapping.set(targetTable.id, targetTable.id);
+        } else {
+            const targetKey = createTableKey({
+                table: targetTable,
+                defaultSchema: targetDefaultSchema,
+            });
+            const newId = tablesIdMapping.get(targetKey);
+            if (newId) {
+                targetTableIdMapping.set(targetTable.id, newId);
+            }
         }
 
         targetTable.fields.forEach((field) => {
+            if (sourceFieldIds.has(field.id)) {
+                targetFieldIdMapping.set(field.id, field.id);
+                return;
+            }
             const fieldKey = createFieldKey({
                 table: targetTable,
                 fieldName: field.name,
@@ -178,6 +215,10 @@ export const applyIds = ({
         });
 
         targetTable.indexes.forEach((index) => {
+            if (sourceIndexIds.has(index.id)) {
+                targetIndexIdMapping.set(index.id, index.id);
+                return;
+            }
             const indexKey = createIndexKey({
                 table: targetTable,
                 indexName: index.name,
@@ -191,6 +232,10 @@ export const applyIds = ({
     });
 
     targetDiagram.relationships?.forEach((relationship) => {
+        if (sourceRelationshipIds.has(relationship.id)) {
+            targetRelationshipIdMapping.set(relationship.id, relationship.id);
+            return;
+        }
         const relationshipKey = createRelationshipKey({
             relationshipName: relationship.name,
             defaultSchema: targetDefaultSchema,
@@ -202,6 +247,11 @@ export const applyIds = ({
     });
 
     targetDiagram.dependencies?.forEach((dependency) => {
+        if (sourceDependencyIds.has(dependency.id)) {
+            targetDependencyIdMapping.set(dependency.id, dependency.id);
+            return;
+        }
+
         const table = targetDiagram.tables?.find(
             (t) => t.id === dependency.tableId
         );
@@ -224,6 +274,10 @@ export const applyIds = ({
     });
 
     targetDiagram.customTypes?.forEach((customType) => {
+        if (sourceCustomTypeIds.has(customType.id)) {
+            targetCustomTypeIdMapping.set(customType.id, customType.id);
+            return;
+        }
         const customTypeKey = createCustomTypeKey({
             customType,
             defaultSchema: targetDefaultSchema,
