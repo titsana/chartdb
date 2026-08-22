@@ -536,3 +536,209 @@ describe('ChartDBProvider', () => {
         expect(fields.map((f) => f.id)).toEqual(['field-1', 'field-2']);
     });
 });
+
+describe('Phase 2 (docs/design/realtime-collaboration.md §10) — notes are Y.Doc-backed', () => {
+    it('createNote adds the note to state', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let created: Awaited<ReturnType<typeof result.current.createNote>>;
+        await act(async () => {
+            created = await result.current.createNote({ content: 'first' });
+        });
+
+        expect(result.current.notes.map((n) => n.id)).toEqual([created!.id]);
+        expect(result.current.notes[0].content).toBe('first');
+    });
+
+    it('fix for appendix-b:2 (notes slice) — undo after createNote removes the note from the Y.Doc itself, not just from React state', async () => {
+        // The discriminating check for "did the undo write into the doc,
+        // or did it just call setNotes()": force a SECOND, unrelated
+        // structural doc change afterward. A structural change makes the
+        // observer fully re-derive `notes` from the live doc — if the
+        // first undo had only patched React state (bug: a handler calling
+        // setNotes directly instead of writing into notesYDocRef), the
+        // undone note would still be sitting in the doc and this second
+        // create's re-derivation would silently resurrect it.
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let noteA: Awaited<
+            ReturnType<typeof result.current.chartdb.createNote>
+        >;
+        await act(async () => {
+            noteA = await result.current.chartdb.createNote({
+                content: 'A',
+            });
+        });
+        expect(result.current.chartdb.notes.map((n) => n.id)).toEqual([
+            noteA!.id,
+        ]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.notes).toEqual([]);
+
+        let noteB: Awaited<
+            ReturnType<typeof result.current.chartdb.createNote>
+        >;
+        await act(async () => {
+            noteB = await result.current.chartdb.createNote({
+                content: 'B',
+            });
+        });
+
+        expect(result.current.chartdb.notes.map((n) => n.id)).toEqual([
+            noteB!.id,
+        ]);
+    });
+
+    it('fix for appendix-b:2 (notes slice) — undo after updateNote reverts the Y.Doc entry itself, not just React state', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let noteA: Awaited<
+            ReturnType<typeof result.current.chartdb.createNote>
+        >;
+        await act(async () => {
+            noteA = await result.current.chartdb.createNote({
+                content: 'original',
+            });
+        });
+        await act(async () => {
+            await result.current.chartdb.updateNote(noteA!.id, {
+                content: 'edited',
+            });
+        });
+        expect(result.current.chartdb.notes[0].content).toBe('edited');
+
+        // the edit itself must land in the doc, not just React state —
+        // force a structural resync (a second note, unrelated) and
+        // confirm 'edited' survives it. If updateNote had written straight
+        // to React state (bug) instead of patching the doc, the doc's
+        // copy would still say 'original' and this resync would revert
+        // the visible content right back to it, before undo ever runs.
+        await act(async () => {
+            await result.current.chartdb.createNote({ content: 'spacer' });
+        });
+        expect(
+            result.current.chartdb.notes.find((n) => n.id === noteA!.id)!
+                .content
+        ).toBe('edited');
+
+        // undo the spacer creation first, so the next undo below targets
+        // the actual updateNote action.
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.notes.map((n) => n.id)).toEqual([
+            noteA!.id,
+        ]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.notes[0].content).toBe('original');
+
+        // force a second structural re-derivation and confirm the
+        // reverted content survives it too.
+        await act(async () => {
+            await result.current.chartdb.createNote({
+                content: 'forces a resync',
+            });
+        });
+        const reverted = result.current.chartdb.notes.find(
+            (n) => n.id === noteA!.id
+        )!;
+        expect(reverted.content).toBe('original');
+    });
+
+    it('editing one note does not change the object identity of an untouched sibling note', async () => {
+        // Guards the object-identity decision in the design doc: a
+        // non-structural doc change (an existing note's field edited)
+        // must only rebuild the one changed entry, not re-derive the
+        // whole notes array — otherwise every note gets a new reference
+        // on every keystroke anywhere in the diagram, and ReactFlow
+        // re-renders every node.
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let noteA: Awaited<ReturnType<typeof result.current.createNote>>;
+        let noteB: Awaited<ReturnType<typeof result.current.createNote>>;
+        await act(async () => {
+            noteA = await result.current.createNote({ content: 'A' });
+        });
+        await act(async () => {
+            noteB = await result.current.createNote({ content: 'B' });
+        });
+
+        const beforeB = result.current.notes.find((n) => n.id === noteB!.id);
+
+        await act(async () => {
+            await result.current.updateNote(noteA!.id, {
+                content: 'A-edited',
+            });
+        });
+
+        const afterB = result.current.notes.find((n) => n.id === noteB!.id);
+        expect(afterB).toBe(beforeB);
+        expect(
+            result.current.notes.find((n) => n.id === noteA!.id)!.content
+        ).toBe('A-edited');
+    });
+
+    it('removeNotes removes the note from state, and undo restores it', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        let noteA: Awaited<
+            ReturnType<typeof result.current.chartdb.createNote>
+        >;
+        await act(async () => {
+            noteA = await result.current.chartdb.createNote({
+                content: 'A',
+            });
+        });
+
+        await act(async () => {
+            await result.current.chartdb.removeNote(noteA!.id);
+        });
+        expect(result.current.chartdb.notes).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.notes.map((n) => n.id)).toEqual([
+            noteA!.id,
+        ]);
+    });
+
+    it("loading a new diagram rebuilds the notes Y.Doc instead of carrying over the previous diagram's notes", async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.createNote({ content: 'from diagram A' });
+        });
+        expect(result.current.notes).toHaveLength(1);
+
+        act(() => {
+            result.current.loadDiagramFromData({
+                id: 'diagram-2',
+                name: 'Second',
+                databaseType: DatabaseType.GENERIC,
+                notes: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+        expect(result.current.notes).toEqual([]);
+
+        // the discriminating check: force a structural resync on the new
+        // diagram's doc. If loadDiagramFromData had only called
+        // setNotes([]) without replacing notesYDocRef's doc, diagram A's
+        // note would still be sitting in the old doc and would resurface
+        // here.
+        await act(async () => {
+            await result.current.createNote({ content: 'from diagram B' });
+        });
+        expect(result.current.notes.map((n) => n.content)).toEqual([
+            'from diagram B',
+        ]);
+    });
+});

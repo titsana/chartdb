@@ -1,4 +1,18 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from 'react';
+import * as Y from 'yjs';
+import {
+    upsertItem,
+    patchItem,
+    removeItemFromCollection,
+    readCollection,
+    readItem,
+} from '@/lib/collab/y-diagram';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
 import { defaultTableColor, randomColor, viewColor } from '@/lib/colors';
@@ -71,6 +85,77 @@ export const ChartDBProvider: React.FC<
         diagram?.customTypes ?? []
     );
     const [notes, setNotes] = useState<Note[]>(diagram?.notes ?? []);
+
+    // Phase 2 (docs/design/realtime-collaboration.md §10): `notes` is the
+    // first collection migrated to a Y.Doc-backed representation — see the
+    // Dexie-sink/undo/object-identity decision recorded there before this
+    // landed. `notesYDocRef` is the source of truth for `notes` from here
+    // on; the `notes` React state above is a projection of it, kept in
+    // sync by the observer effect below. `db.addNote`/`updateNote`/
+    // `deleteNote` (still called from every mutation) are a write-through
+    // sink only — never read back except at initial diagram load.
+    const notesYDocRef = useRef<Y.Doc | null>(null);
+    if (!notesYDocRef.current) {
+        const doc = new Y.Doc();
+        const notesMap = doc.getMap<unknown>('notes');
+        (diagram?.notes ?? []).forEach((note) => upsertItem(notesMap, note));
+        notesYDocRef.current = doc;
+    }
+    // bumped whenever loadDiagramFromData replaces notesYDocRef.current
+    // with a fresh doc, so the observer effect below re-subscribes to it.
+    const [notesDocGeneration, setNotesDocGeneration] = useState(0);
+
+    // Projects notesYDocRef's `notes` Y.Map into React state on every
+    // change to it (from this tab's own writes below, or eventually a
+    // remote peer's once Phase 4 wires a WebSocket provider in). A
+    // structural change (a note added/removed — event.target is the
+    // collection map itself) re-derives the full array via
+    // `readCollection`; a non-structural change (an existing note's own
+    // fields changed) patches only that one entry via `readItem`; so
+    // notes untouched by a given edit keep their object identity instead
+    // of every note in the diagram getting a new reference on every
+    // keystroke (see the object-identity note in the design doc).
+    useEffect(() => {
+        const doc = notesYDocRef.current;
+        if (!doc) return;
+
+        const notesMap = doc.getMap<unknown>('notes');
+        const decodeNote = (r: Record<string, unknown>) => r as unknown as Note;
+
+        const handler = (events: Y.YEvent<Y.Map<unknown>>[]) => {
+            let structural = false;
+            const changedIds = new Set<string>();
+            events.forEach((event) => {
+                if (event.target === notesMap) {
+                    structural = true;
+                    event.changes.keys.forEach((_change, key) =>
+                        changedIds.add(key)
+                    );
+                } else {
+                    changedIds.add(event.path[0] as string);
+                }
+            });
+
+            if (structural) {
+                setNotes(readCollection<Note>(notesMap, decodeNote));
+                return;
+            }
+
+            setNotes((current) => {
+                let next = current;
+                changedIds.forEach((id) => {
+                    const decoded = readItem<Note>(notesMap, id, decodeNote);
+                    const idx = next.findIndex((n) => n.id === id);
+                    if (!decoded || idx === -1) return;
+                    next = next.map((n, i) => (i === idx ? decoded : n));
+                });
+                return next;
+            });
+        };
+
+        notesMap.observeDeep(handler);
+        return () => notesMap.unobserveDeep(handler);
+    }, [notesDocGeneration]);
 
     // appendix-b:9 — default name/order counters. Deriving these from
     // array.length at call time races: two create*() calls fired in the
@@ -1857,7 +1942,14 @@ export const ChartDBProvider: React.FC<
     // Note operations
     const addNotes: ChartDBContext['addNotes'] = useCallback(
         async (notes: Note[], options = { updateHistory: true }) => {
-            setNotes((currentNotes) => [...currentNotes, ...notes]);
+            // Phase 2: write into the notes Y.Doc, not React state directly
+            // — the observer effect above projects this into `notes`
+            // state. Writing straight to `setNotes` here would get
+            // silently overwritten by the next doc-driven projection.
+            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
+            notesYDocRef.current!.transact(() => {
+                notes.forEach((note) => upsertItem(notesMap, note));
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1876,7 +1968,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setNotes, addUndoAction, resetRedoStack]
+        [db, diagramId, addUndoAction, resetRedoStack]
     );
 
     const addNote: ChartDBContext['addNote'] = useCallback(
@@ -1917,7 +2009,11 @@ export const ChartDBProvider: React.FC<
                 ...notes.filter((note) => ids.includes(note.id)),
             ];
 
-            setNotes((notes) => notes.filter((note) => !ids.includes(note.id)));
+            // Phase 2: remove from the doc — see addNotes above.
+            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
+            notesYDocRef.current!.transact(() => {
+                ids.forEach((id) => removeItemFromCollection(notesMap, id));
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1936,7 +2032,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setNotes, notes, addUndoAction, resetRedoStack]
+        [db, diagramId, notes, addUndoAction, resetRedoStack]
     );
 
     const removeNote: ChartDBContext['removeNote'] = useCallback(
@@ -1954,9 +2050,13 @@ export const ChartDBProvider: React.FC<
         ) => {
             const prevNote = getNote(id);
 
-            setNotes((notes) =>
-                notes.map((n) => (n.id === id ? { ...n, ...note } : n))
-            );
+            // Phase 2: patch only the given keys on the doc's entry — see
+            // addNotes above. A no-op if `id` no longer exists (e.g. a
+            // concurrent delete raced this edit).
+            const notesMap = notesYDocRef.current!.getMap<unknown>('notes');
+            notesYDocRef.current!.transact(() => {
+                patchItem(notesMap, id, note as Record<string, unknown>);
+            });
 
             const updatedAt = new Date();
             setDiagramUpdatedAt(updatedAt);
@@ -1975,7 +2075,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [db, diagramId, setNotes, getNote, addUndoAction, resetRedoStack]
+        [db, diagramId, getNote, addUndoAction, resetRedoStack]
     );
 
     const highlightCustomTypeId = useCallback(
@@ -2006,6 +2106,21 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId(undefined);
                 setNotes(diagram.notes ?? []);
 
+                // Phase 2: rebuild the notes Y.Doc from scratch for the
+                // newly loaded diagram instead of carrying over the
+                // previous diagram's doc. Bumping notesDocGeneration makes
+                // the observer effect re-subscribe to the new doc/map
+                // instance; setNotes above already set the correct initial
+                // React state synchronously, so there's no visible gap.
+                notesYDocRef.current?.destroy();
+                const newNotesDoc = new Y.Doc();
+                const newNotesMap = newNotesDoc.getMap<unknown>('notes');
+                (diagram.notes ?? []).forEach((note) =>
+                    upsertItem(newNotesMap, note)
+                );
+                notesYDocRef.current = newNotesDoc;
+                setNotesDocGeneration((g) => g + 1);
+
                 // reset the appendix-b:9 default-name counters so they
                 // reseed from this diagram's actual counts on next use,
                 // instead of carrying over the previously loaded diagram's
@@ -2035,6 +2150,7 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId,
                 events,
                 setNotes,
+                setNotesDocGeneration,
                 resetRedoStack,
                 resetUndoStack,
             ]
