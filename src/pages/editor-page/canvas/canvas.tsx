@@ -68,6 +68,10 @@ import {
     TooltipContent,
 } from '@/components/tooltip/tooltip';
 import { MarkerDefinitions } from './marker-definitions';
+import {
+    computeRelationshipTargetHandleIndexes,
+    computeDependencyTargetHandleIndexes,
+} from '@/lib/utils/canvas-handle-index';
 import { CanvasContextMenu } from './canvas-context-menu';
 import { areFieldTypesCompatible } from '@/lib/data/data-types/data-types';
 import {
@@ -414,24 +418,15 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
         // Delay edge creation to ensure handles are registered
         const timeoutId = setTimeout(() => {
-            const targetIndexes: Record<string, number> = relationships.reduce(
-                (acc, relationship) => {
-                    acc[
-                        `${relationship.targetTableId}${relationship.targetFieldId}`
-                    ] = 0;
-                    return acc;
-                },
-                {} as Record<string, number>
-            );
-
-            const targetDepIndexes: Record<string, number> =
-                dependencies.reduce(
-                    (acc, dep) => {
-                        acc[dep.tableId] = 0;
-                        return acc;
-                    },
-                    {} as Record<string, number>
-                );
+            // appendix-b:8 fix — handle-index suffixes are derived from a
+            // stable sort of relationship/dependency ids sharing a target,
+            // not the relationships/dependencies array's iteration order
+            // (Yjs doesn't guarantee that order stays identical across
+            // replicas after a merge).
+            const targetIndexes =
+                computeRelationshipTargetHandleIndexes(relationships);
+            const targetDepIndexes =
+                computeDependencyTargetHandleIndexes(dependencies);
 
             setEdges((prevEdges) => {
                 // Create a map of previous edge states to preserve selection
@@ -453,7 +448,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                                 source: relationship.sourceTableId,
                                 target: relationship.targetTableId,
                                 sourceHandle: `${LEFT_HANDLE_ID_PREFIX}${relationship.sourceFieldId}`,
-                                targetHandle: `${TARGET_ID_PREFIX}${targetIndexes[`${relationship.targetTableId}${relationship.targetFieldId}`]++}_${relationship.targetFieldId}`,
+                                targetHandle: `${TARGET_ID_PREFIX}${targetIndexes.get(relationship.id)}_${relationship.targetFieldId}`,
                                 type: 'relationship-edge',
                                 data: { relationship },
                                 selected: prevState?.selected ?? false,
@@ -468,7 +463,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                             source: dep.dependentTableId,
                             target: dep.tableId,
                             sourceHandle: `${TOP_SOURCE_HANDLE_ID_PREFIX}${dep.dependentTableId}`,
-                            targetHandle: `${TARGET_DEP_PREFIX}${targetDepIndexes[dep.tableId]++}_${dep.tableId}`,
+                            targetHandle: `${TARGET_DEP_PREFIX}${targetDepIndexes.get(dep.id)}_${dep.tableId}`,
                             type: 'dependency-edge',
                             data: { dependency: dep },
                             hidden: !showDBViews,
