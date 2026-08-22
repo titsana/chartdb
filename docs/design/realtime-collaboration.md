@@ -92,14 +92,15 @@ manual conflict UI needed.
   persisted, so presence data never pollutes the diagram's durable state.
 - **Undo/redo**: replace `HistoryProvider`'s local stacks with Yjs's
   `UndoManager`, scoped per client/origin, so undoing your own action never
-  reverts someone else's concurrent edit. This is the **one remaining use
-  of local browser storage**: the per-user undo/redo stack lives in the
-  browser (`Y.UndoManager`'s in-memory stack, optionally mirrored to
-  `localStorage`/IndexedDB so it survives a page refresh within the same
-  session) — it is never synced to other users or to the server, and it
-  holds *only* undo/redo entries, not diagram state. `StorageProvider`/Dexie
-  is retired from its current role as diagram-data source of truth; if kept
-  at all, it's repurposed for this narrow undo-stack use — see §8 Migration.
+  reverts someone else's concurrent edit. The per-user undo/redo stack is
+  **in-memory only** (`Y.UndoManager`'s own stack) — no `localStorage`, no
+  IndexedDB, no persistence of any kind. It is never synced to other users
+  or to the server. This means a page refresh loses undo history, which is
+  the correct, unsurprising behavior for an online-only system: a refresh
+  already means reconnect + resync a fresh `Y.Doc`, so there is no session
+  for an undo stack to survive into anyway. `StorageProvider`/Dexie has
+  **no remaining role** in this design — it is retired entirely, not
+  repurposed — see §8 Migration.
 
 ### 5.3 Server: NestJS
 
@@ -140,8 +141,9 @@ NestJS Gateway  ──Redis pub/sub──▶ other instances ──▶ NestJS Ga
 Postgres (update log + periodic snapshot — the only durable copy)
 
 Browser A also keeps a separate, local-only per-user undo/redo stack
-(Y.UndoManager, optionally mirrored to localStorage) — never synced,
-never touches Postgres/Redis.
+(Y.UndoManager, in-memory only, no persistence) — never synced, never
+touches Postgres/Redis, and lost on page refresh (consistent with
+online-only: a refresh means reconnect + resync a fresh Y.Doc anyway).
 ```
 
 ## 6. Impact on existing code
@@ -150,7 +152,7 @@ never touches Postgres/Redis.
 |---|---|
 | `ChartDBProvider` | Needs an adapter layer: existing `add*/update*/remove*` methods read/write through the `Y.Doc` instead of raw React state. Public API surface stays the same where possible to limit blast radius on consumers (canvas, side panel, dialogs). |
 | `HistoryProvider` / `RedoUndoStackProvider` | Replaced by Yjs `UndoManager`, scoped per client origin. |
-| `StorageProvider` (Dexie) | Retired as diagram-data source of truth entirely (that's now Postgres, server-side). Not replaced by an offline cache — this system has no offline mode. If kept, it's narrowed to storing only the per-user undo/redo stack. |
+| `StorageProvider` (Dexie) | Retired entirely — no remaining role. Diagram data lives in Postgres server-side; the per-user undo/redo stack is in-memory only (`Y.UndoManager`), not persisted anywhere client-side. |
 | `CanvasProvider` / canvas components | New: render remote cursors, per-user selection highlight, "user is editing this table" indicator, driven by Yjs Awareness state. |
 | Relationship creation | `81dae56` already fixed a race between edge creation and handle registration in the single-user case; multi-user concurrent relationship creation needs re-validation under this new model (two users drawing overlapping relationships at once). |
 | ID generation | Table/field/relationship IDs are currently client-generated (`generateId()` in `src/lib/utils/utils.ts`). Needs re-verification that concurrent ID generation across clients can't collide (current scheme should already be collision-resistant, but confirm). |
@@ -184,13 +186,13 @@ summary can't drift out of sync with it.
   supports this via per-origin tracking, but the exact UX — e.g. what
   happens if the field you're undoing was since edited by someone else —
   needs a written spec before implementation.)
-- **Persisted undo stack, stale references**: the local-only undo/redo
-  stack (§5.2) holds entries that point at specific table/field/relationship
-  IDs. If another user deletes that table before you hit undo, what
-  happens — the entry silently no-ops, gets dropped from the stack, or
-  something else? Also needs: scope of the persisted stack (per diagram +
-  per browser tab/session, or shared across tabs on the same diagram?),
-  and a size/age limit so it doesn't grow unbounded in `localStorage`.
+- **Undo stack stale references**: the in-memory undo/redo stack (§5.2)
+  holds entries that point at specific table/field/relationship IDs. If
+  another user deletes that table before you hit undo, what happens — the
+  entry silently no-ops, gets dropped from the stack, or something else?
+  (No persistence/size-limit question here anymore: the stack is in-memory
+  only, scoped to one browser tab's session, and disappears on refresh —
+  see §5.2.)
 - **Room lifecycle**: when does a Postgres-backed room get created (on
   first collaborator join) vs. torn down (all users disconnect — do we
   keep the room "warm" for N minutes, or persist-and-close immediately)?
@@ -557,9 +559,10 @@ multiplayer, not just correctness.
   "X is editing this table" indicator, typed display name.
 - Swap `HistoryProvider` for `Y.UndoManager`, scoped per client origin —
   finishes what Phase 1's targeted `#1` fix started.
-- Local-only per-user undo/redo stack, optionally mirrored to
-  `localStorage` — resolve the open questions from §9 (stale references,
-  scope, size/age limit) as part of building this, not after.
+- Local-only per-user undo/redo stack, in-memory only, no persistence —
+  resolve the §9 open question on stale references (an undo entry
+  pointing at an entity a remote peer since deleted) as part of building
+  this, not after.
 - Disconnect/reconnect UI — resolve the §9 open question on exactly what
   the canvas does the moment the WebSocket drops.
 **Exit criteria:** a user can tell who else is present and what they're
