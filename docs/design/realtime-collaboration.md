@@ -1062,6 +1062,31 @@ writing them, neither catchable by Phase 2's single-doc tests:**
   part of the full suite, which can mask a real failure behind lucky
   scheduling) to confirm the fixes made it deterministic, not just
   usually-green.
+- **What "two tabs" actually means here — stated plainly, not overclaimed**:
+  every test above is two (or three) independent `ChartDBProvider` React
+  trees inside one Vitest/Node process, each with its own real
+  `HocuspocusProvider` connecting over a real loopback TCP socket to the
+  real compiled server — genuinely independent CRDT replicas and genuinely
+  independent network connections, not a simulation. It is **not** two
+  actual browser windows; nothing here exercises real browser networking
+  (e.g. actual `Origin` headers — see §5.3's allowlist policy — tab
+  backgrounding/throttling, a real OS-level TCP stack under contention). The
+  original bullet below asked for "**Manual** + scripted two-client tests";
+  only the scripted half was done. Manual two-browser-window verification
+  against a locally-running `server/` has not been performed and is a fair
+  gap to flag before calling multiplayer editing production-ready — it's a
+  few minutes of manual work, not a design question, so it's noted here
+  rather than blocking this phase on it.
+- **Appendix B coverage, split honestly** (same discipline as Phase 2's
+  exit-criteria correction): the concurrent field-edit-vs-index-add
+  scenario and appendix-b:3 (cascade delete) now have real two-`Y.Doc`,
+  over-the-wire coverage (both the pure-function test in `y-diagram.test.ts`
+  *and* the end-to-end test above). Concurrent primary-key assignment and
+  concurrent table creation (`y-diagram.test.ts`'s other two "appendix-b:2
+  proof" tests) are still pure-function-only — proven at the CRDT-merge
+  layer, never re-verified against the real server over a real network. A
+  later reader shouldn't assume all of Appendix B is proven end-to-end from
+  this phase; only the two named above are.
 
 **Reconnect-convergence — the other exit-criteria half, now verified:**
 `reconnect-convergence` in `chartdb-provider.collab.integration.test.tsx`

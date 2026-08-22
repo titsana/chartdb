@@ -554,6 +554,18 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         await server.stop();
         server = null;
 
+        // Prove the outage is real, not assume it. `startServerProcessOnPort`
+        // below reuses the same port and only checks /health — which can't
+        // tell "a new process bound successfully" apart from "the old one
+        // never actually died and is still answering" (child.kill() not
+        // taking, e.g.). Without this, the whole test could pass green with
+        // no outage at all. Same discipline as Phase 3's compaction check:
+        // assert the intermediate state directly instead of inferring it
+        // from the round-trip looking right.
+        await expect(
+            fetch(`http://localhost:${port}/health`)
+        ).rejects.toThrow();
+
         // The doc's corrected Phase 4 bullet: Yjs always queues locally
         // regardless of connection state — a killed connection can't stop
         // that, only reconnecting-and-merging is different from the
