@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
 import { defaultTableColor, randomColor, viewColor } from '@/lib/colors';
@@ -71,6 +71,25 @@ export const ChartDBProvider: React.FC<
         diagram?.customTypes ?? []
     );
     const [notes, setNotes] = useState<Note[]>(diagram?.notes ?? []);
+
+    // appendix-b:9 — default name/order counters. Deriving these from
+    // array.length at call time races: two create*() calls fired in the
+    // same tick both read the same stale closure and produce the same
+    // default name (e.g. two `table_1`s). These refs are monotonic
+    // in-process counters instead — seeded lazily from the current count
+    // the first time they're used, then only ever incremented, never
+    // re-derived from the array. Reset on diagram (re)load in
+    // `loadDiagramFromData` so switching diagrams doesn't carry over a
+    // stale count from the previous one.
+    const nextTableCounterRef = useRef<{
+        table: number;
+        view: number;
+        order: number;
+    } | null>(null);
+    const nextAreaCounterRef = useRef<number | null>(null);
+    const nextCustomTypeCounterRef = useRef<number | null>(null);
+    const nextFieldCounterRef = useRef<Map<string, number>>(new Map());
+    const nextIndexCounterRef = useRef<Map<string, number>>(new Map());
 
     const { events: diffEvents } = useDiff();
 
@@ -338,9 +357,16 @@ export const ChartDBProvider: React.FC<
     const createTable: ChartDBContext['createTable'] = useCallback(
         async (attributes) => {
             const isView = attributes?.isView ?? false;
-            const count = isView
-                ? tables.filter((t) => t.isView).length + 1
-                : tables.filter((t) => !t.isView).length + 1;
+            if (nextTableCounterRef.current === null) {
+                nextTableCounterRef.current = {
+                    table: tables.filter((t) => !t.isView).length,
+                    view: tables.filter((t) => t.isView).length,
+                    order: tables.length,
+                };
+            }
+            const counters = nextTableCounterRef.current;
+            const count = isView ? ++counters.view : ++counters.table;
+            const order = counters.order++;
             const table: DBTable = {
                 id: generateId(),
                 name: isView ? `view_${count}` : `table_${count}`,
@@ -361,7 +387,7 @@ export const ChartDBProvider: React.FC<
                 color: attributes?.isView ? viewColor : defaultTableColor,
                 createdAt: Date.now(),
                 isView: false,
-                order: tables.length,
+                order,
                 ...attributes,
                 schema: attributes?.schema ?? defaultSchemas[databaseType],
             };
@@ -867,9 +893,15 @@ export const ChartDBProvider: React.FC<
     const createField: ChartDBContext['createField'] = useCallback(
         async (tableId: string) => {
             const table = getTable(tableId);
+            const seedCount =
+                nextFieldCounterRef.current.get(tableId) ??
+                table?.fields?.length ??
+                0;
+            const count = seedCount + 1;
+            nextFieldCounterRef.current.set(tableId, count);
             const field: DBField = {
                 id: generateId(),
-                name: `field_${(table?.fields?.length ?? 0) + 1}`,
+                name: `field_${count}`,
                 type: getDefaultPrimaryKeyType(databaseType),
                 unique: false,
                 nullable: true,
@@ -995,9 +1027,15 @@ export const ChartDBProvider: React.FC<
     const createIndex: ChartDBContext['createIndex'] = useCallback(
         async (tableId: string) => {
             const table = getTable(tableId);
+            const seedCount =
+                nextIndexCounterRef.current.get(tableId) ??
+                table?.indexes?.length ??
+                0;
+            const count = seedCount + 1;
+            nextIndexCounterRef.current.set(tableId, count);
             const index: DBIndex = {
                 id: generateId(),
-                name: `index_${(table?.indexes?.length ?? 0) + 1}`,
+                name: `index_${count}`,
                 fieldIds: [],
                 unique: false,
                 createdAt: Date.now(),
@@ -1654,9 +1692,13 @@ export const ChartDBProvider: React.FC<
 
     const createArea: ChartDBContext['createArea'] = useCallback(
         async (attributes) => {
+            if (nextAreaCounterRef.current === null) {
+                nextAreaCounterRef.current = areas.length;
+            }
+            const count = ++nextAreaCounterRef.current;
             const area: Area = {
                 id: generateId(),
-                name: `Area ${areas.length + 1}`,
+                name: `Area ${count}`,
                 x: 0,
                 y: 0,
                 width: 300,
@@ -1896,6 +1938,15 @@ export const ChartDBProvider: React.FC<
                 setHighlightedCustomTypeId(undefined);
                 setNotes(diagram.notes ?? []);
 
+                // reset the appendix-b:9 default-name counters so they
+                // reseed from this diagram's actual counts on next use,
+                // instead of carrying over the previously loaded diagram's
+                nextTableCounterRef.current = null;
+                nextAreaCounterRef.current = null;
+                nextCustomTypeCounterRef.current = null;
+                nextFieldCounterRef.current.clear();
+                nextIndexCounterRef.current.clear();
+
                 events.emit({ action: 'load_diagram', data: { diagram } });
 
                 resetRedoStack();
@@ -1994,9 +2045,13 @@ export const ChartDBProvider: React.FC<
 
     const createCustomType: ChartDBContext['createCustomType'] = useCallback(
         async (attributes) => {
+            if (nextCustomTypeCounterRef.current === null) {
+                nextCustomTypeCounterRef.current = customTypes.length;
+            }
+            const count = ++nextCustomTypeCounterRef.current;
             const customType: DBCustomType = {
                 id: generateId(),
-                name: `type_${customTypes.length + 1}`,
+                name: `type_${count}`,
                 kind: DBCustomTypeKind.enum,
                 values: [],
                 fields: [],

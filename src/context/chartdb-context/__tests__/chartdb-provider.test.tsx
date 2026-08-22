@@ -16,13 +16,15 @@ import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBTable } from '@/lib/domain/db-table';
 
 /**
- * Phase 0 (docs/design/realtime-collaboration.md §10) regression net for
- * ChartDBProvider, ahead of Phase 1's data-model fixes. `storageContext` is
- * stubbed directly (same pattern as `use-storage.ts`'s plain useContext) —
- * no Dexie/indexedDB involved, so no fake-indexeddb dependency needed.
+ * Phase 0/1 (docs/design/realtime-collaboration.md §10) tests for
+ * ChartDBProvider. `storageContext` is stubbed directly (same pattern as
+ * `use-storage.ts`'s plain useContext) — no Dexie/indexedDB involved, so no
+ * fake-indexeddb dependency needed.
  *
- * Tests tagged `appendix-b:<n>` pin *current, known-broken* behavior a later
- * phase is expected to flip (see design doc Appendix B, finding n).
+ * Tests titled `appendix-b:<n>` (Phase 0) pin *current, known-broken*
+ * behavior Phase 1 is expected to flip. Tests titled `fix for
+ * appendix-b:<n>` (Phase 1) are regression guards for a finding that's
+ * already been fixed — see design doc Appendix B, finding n, for either.
  */
 
 function makeMockDiff(): DiffContext {
@@ -141,12 +143,13 @@ describe('ChartDBProvider', () => {
         expect(result.current.tables.map((t) => t.id)).toEqual(['table-a']);
     });
 
-    it('appendix-b:9 — concurrent createTable() calls derive the default name from the same stale closure, producing duplicates', async () => {
-        // Pins chartdb-provider.tsx:341-343: count = tables.filter(...).length + 1
-        // is read from the render-time closure. Two calls fired before either
-        // has re-rendered both see `tables.length === 0` and both name their
-        // table `table_1`. Phase 1 must derive this from a merged counter
-        // instead of array length.
+    it('fix for appendix-b:9 — concurrent createTable() calls get distinct default names, not the same stale-closure count', async () => {
+        // chartdb-provider.tsx previously derived the default name from
+        // `tables.filter(...).length` read at call time: two calls fired
+        // before either re-rendered both saw `tables.length === 0` and both
+        // named their table `table_1`. Fixed by a monotonic ref-based
+        // counter that's incremented synchronously, never re-derived from
+        // the array. This is the regression guard for that fix.
         const { result } = renderChartDB({ ...storageInitialValue });
 
         let created: DBTable[] = [];
@@ -154,11 +157,90 @@ describe('ChartDBProvider', () => {
             created = await Promise.all([
                 result.current.createTable(),
                 result.current.createTable(),
+                result.current.createTable(),
             ]);
         });
 
-        expect(created.map((t) => t.name)).toEqual(['table_1', 'table_1']);
-        expect(created[0].id).not.toEqual(created[1].id); // ids never collide
+        expect(created.map((t) => t.name).sort()).toEqual([
+            'table_1',
+            'table_2',
+            'table_3',
+        ]);
+        expect(new Set(created.map((t) => t.id)).size).toBe(3); // ids never collide
+    });
+
+    it('fix for appendix-b:9 — same counter fix applies to createField/createIndex/createArea/createCustomType', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        const table = await act(async () => result.current.createTable());
+
+        let fields: { name: string }[] = [];
+        let indexes: { name: string }[] = [];
+        await act(async () => {
+            fields = await Promise.all([
+                result.current.createField(table.id),
+                result.current.createField(table.id),
+            ]);
+            indexes = await Promise.all([
+                result.current.createIndex(table.id),
+                result.current.createIndex(table.id),
+            ]);
+        });
+        // the table already has one seed field/index (its PK column and PK
+        // index), so the first two user-created ones start at 2/3, not 1/2
+        expect(fields.map((f) => f.name).sort()).toEqual([
+            'field_2',
+            'field_3',
+        ]);
+        expect(indexes.map((i) => i.name).sort()).toEqual([
+            'index_2',
+            'index_3',
+        ]);
+
+        let areas: { name: string }[] = [];
+        let customTypes: { name: string }[] = [];
+        await act(async () => {
+            areas = await Promise.all([
+                result.current.createArea(),
+                result.current.createArea(),
+            ]);
+            customTypes = await Promise.all([
+                result.current.createCustomType(),
+                result.current.createCustomType(),
+            ]);
+        });
+        expect(areas.map((a) => a.name).sort()).toEqual(['Area 1', 'Area 2']);
+        expect(customTypes.map((c) => c.name).sort()).toEqual([
+            'type_1',
+            'type_2',
+        ]);
+    });
+
+    it("fix for appendix-b:9 — loading a new diagram resets the counters instead of carrying over the previous diagram's count", async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.createTable();
+            await result.current.createTable();
+        });
+        expect(result.current.tables.map((t) => t.name)).toEqual([
+            'table_1',
+            'table_2',
+        ]);
+
+        act(() => {
+            result.current.loadDiagramFromData({
+                id: 'diagram-2',
+                name: 'Second',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        const nextTable = await act(async () => result.current.createTable());
+        expect(nextTable.name).toBe('table_1'); // not 'table_3'
     });
 
     it('appendix-b:2 — updateField writes the whole recomputed fields array back as one blob, not a per-field patch', async () => {
