@@ -1160,6 +1160,126 @@ sync *protocol* is verified end-to-end); this caveat is about a gap
 outside anything Phase 4 was ever scoped to cover, not a hole in Phase 4's
 own claims.
 
+### Phase 4.5 — Remove Dexie; server becomes the sole diagram store — 📝 Planned
+
+**Goal:** delete client-side Dexie/IndexedDB entirely. The collab server
+(`server/`, already built in Phases 3–4) becomes the *only* place diagram
+data lives — not an optional sync layer on top of a local-first app
+anymore. Decided directly by the project owner, with the following
+consequences explicitly accepted up front (each confirmed, not assumed):
+- **No auth, deliberately** — every diagram is visible/editable by anyone
+  who has (or guesses) its id. This is an intentional product choice (a
+  fully open, no-accounts tool), not a gap to close later in this phase.
+  §9's existing "no auth" risk note already covers this.
+- **No migration path for existing local diagrams** — any diagram
+  currently sitting only in some browser's Dexie is unrecoverable the
+  moment this ships, with no attempt to auto-upload it first. Accepted
+  because no real user data exists yet on this branch.
+- **This is a bigger cut than "swap the storage backend"**: a scoping pass
+  (`grep -rn "from ['"]dexie['"]"` across `src/` — exactly one match) found
+  Dexie access is cleanly centralized behind `StorageContext`
+  (`storage-context.tsx`) / `storage-provider.tsx`, with 10 consumer files
+  going through `useStorage()` and none touching Dexie directly — a real
+  swappable seam for the 6 domain collections already migrated to the
+  Y.Doc (`tables`, `fields`/`indexes` nested within, `relationships`,
+  `dependencies`, `areas`, `customTypes`, `notes` — Phase 2). But 3 of
+  Dexie's 9 concerns have **no server-side equivalent at all today** and
+  are new server surface, not a swap:
+  - `diagrams` (metadata: name/databaseType/databaseEdition/createdAt/
+    updatedAt, plus the list-all-diagrams query) — this is exactly the §9
+    gap ("No diagram-discovery path for a genuinely new collaborator").
+    Needs a new Postgres table + REST endpoints (`GET /diagrams`,
+    `POST /diagrams`, `GET /diagrams/:id`, `PATCH /diagrams/:id`,
+    `DELETE /diagrams/:id`), following the existing `HealthController`
+    pattern in `server/src/`.
+  - `config` (`defaultDiagramId`, `exportActions`) and `diagram_filters`
+    (per-diagram schema/table visibility) are **not diagram content** —
+    they're per-browser preferences with no natural server owner once
+    there's no auth to scope them by user. Moving to `localStorage`
+    instead (matching `local-config-provider.tsx`'s existing pattern for
+    UI prefs), not to the server.
+
+**A real bug found in the plan before writing any code, not after**: the
+first draft of this phase proposed that `use-diagram-loader.tsx` fetch
+just the diagram's *metadata* from the server and pass a content-empty
+"shell" `Diagram` into `loadDiagramFromData`, relying on `reconcileWithRoom`
+'s existing adopt path to fill in tables/etc. from the room. That's wrong
+for the *seed* half of the same function: `reconcileWithRoom` seeds from
+`diagram.tables ?? []` when the room is empty — with Dexie gone, a shell
+diagram's `tables` is *always* `[]`, so any diagram whose room is
+genuinely empty (never joined before, or content lost) would seed itself
+permanently blank, with nothing left to fall back on. Two fixes required,
+not yet implemented:
+- **Creation flows keep passing full content directly.**
+  `create-diagram-dialog.tsx`/`import-diagram-dialog.tsx`/
+  `clone-template-page.tsx`/`examples-page.tsx` build a full `Diagram`
+  (imported SQL, template contents, or a blank default) today and hand it
+  to `addDiagram` (Dexie write), then rely on navigation +
+  `use-diagram-loader.tsx` reading it back out of Dexie to call
+  `loadDiagramFromData`. That round-trip has to go away entirely — these
+  call sites must call `loadDiagramFromData(fullDiagram)` **directly**
+  (this is what actually seeds the room, correctly, since it has real
+  content), and separately call the new `POST /diagrams` with metadata
+  only. Import is the case with the most to lose here and the easiest to
+  miss in testing — a regression test must cover it specifically, not just
+  the blank-diagram-creation path.
+- **An existing-diagram load (`use-diagram-loader.tsx`'s normal path) must
+  never seed, only adopt.** It has no data to seed *with* once Dexie is
+  gone, so `reconcileWithRoom`'s seed branch has to become unreachable for
+  this call path specifically — needs a parameter/variant that skips
+  straight to "adopt whatever the room holds, including nothing." This
+  correctly treats "room is empty because every table was since deleted"
+  as legitimate (adopt empty) — the open risk is a *different* empty room:
+  one that was registered in the new `diagrams` table but never actually
+  got seeded (a crash/race during creation). Mitigation, not yet a full
+  solution: don't consider a diagram "created" (return success from the
+  creation flow / write its metadata row) until `loadDiagramFromData`'s
+  seed has been confirmed via `seedWhenDecided`'s existing `synced`
+  resolution — this closes the window in the common case without needing
+  a dedicated "was this ever seeded" marker, but doesn't formally rule out
+  every crash-mid-creation scenario. Flagged here rather than solved.
+- **`DELETE /diagrams/:id` must evict the live room, not just drop rows.**
+  Deleting `yjs_updates`/`yjs_snapshots` rows for that `diagram_id` in
+  Postgres is necessary but not sufficient — if Hocuspocus still has that
+  document loaded in memory (a client still connected), the next update
+  from that client re-persists the "deleted" content on its own, and the
+  diagram silently comes back. Needs an explicit eviction/close call
+  against the running `Hocuspocus` instance as part of the delete
+  endpoint, not just a Postgres `DELETE`.
+- **`config.defaultDiagramId` pointing at a now-deleted diagram** used to
+  just miss silently in Dexie (`getDiagram` returns `undefined` →
+  `use-diagram-loader.tsx` falls through to the picker). Against a server
+  API this becomes a real 404 — `use-diagram-loader.tsx`'s
+  `config.defaultDiagramId` branch needs to treat a 404 the same way it
+  already treats a Dexie miss (fall through to the picker), not surface it
+  as an error.
+
+**Status of the manual two-browser test from before this phase was
+scoped**: it never finished — the collab/dev server processes I'd started
+for it were stopped, and the verification is now moot rather than pending,
+since the load path it was exercising (`use-diagram-loader.tsx` reading a
+diagram already in Dexie) is exactly what this phase replaces. Re-run it
+once this phase's client-side changes land, against the new server-backed
+load path, not the old one.
+
+**Not yet implemented** (this whole phase is planning only as of this
+write-up): the `diagrams` table + REST endpoints; the eviction-on-delete
+logic; the storage-provider swap; deleting the now-redundant Dexie
+write-through calls in `chartdb-provider.tsx` (~90 call sites across the 6
+already-migrated collections — per Phase 2's own docs, these were always
+meant to be deleted outright, not replaced, once collab was trustworthy);
+moving `config`/`diagram_filters` to `localStorage`; the creation-flow and
+existing-load-path split described above; a regression test for the
+import-loses-content risk specifically.
+
+**Exit criteria:** Dexie package fully removed from `package.json`; every
+one of the 10 `useStorage()` consumer files still compiles and works
+against the new implementation; creating a diagram (blank, imported SQL,
+or cloned template) survives a hard refresh with all content intact;
+opening a diagram by id in a browser that has never seen it before works
+(closes the §9 gap this phase exists to fix); deleting a diagram actually
+stays deleted with a client still connected.
+
 ### Phase 5 — Presence, undo, and disconnect UX
 
 **Goal:** the parts of the design that are about the *experience* of
