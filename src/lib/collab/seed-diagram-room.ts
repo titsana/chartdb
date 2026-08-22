@@ -109,6 +109,18 @@ export async function seedDiagramRoom(diagram: Diagram): Promise<void> {
         // "no error was thrown", matching this codebase's established
         // preference (see the reconnect-convergence integration test) for
         // a real signal over a guess.
+        //
+        // Honesty note: sabotage-testing this exact loop (deleting it,
+        // destroying right after resolve()) did NOT reproduce a failure in
+        // this file's own integration test, over loopback — the
+        // synchronous `send()` above apparently hands the bytes to the OS
+        // socket before this point runs either way, and closing the
+        // provider doesn't retract them. So this test suite doesn't prove
+        // this poll is load-bearing. Kept anyway as a real, if unproven-
+        // here, defense against a slower/lossier connection where the
+        // socket might not have flushed before a synchronous destroy() —
+        // the risk this loop guards against is real even where a fast
+        // local loopback can't be made to demonstrate it.
         const deadline = Date.now() + 8_000;
         while (provider.hasUnsyncedChanges && Date.now() < deadline) {
             await new Promise((resolve) => setTimeout(resolve, 50));

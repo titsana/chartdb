@@ -1353,15 +1353,26 @@ this reason.
 **Status of manual two-browser verification**: not yet re-run against this
 phase's changes. The automated coverage is real (full root test suite:
 116 files / 927 tests, stable across 4 consecutive runs, including two new
-`seedDiagramRoom` integration tests against the real server — one
-verified genuinely discriminating by temporarily removing its
-`hasUnsyncedChanges`-poll protection and confirming... **that specific
-sabotage attempt did NOT reproduce a failure**, because this provider is
-constructed without `flushDelay` and so was never subject to the batching
-window the first draft of that fix assumed; the poll itself was already
-correct on inspection of `@hocuspocus/provider`'s actual source, and the
-tests now pin the real (ack-based) behavior going forward) — but "two
-real, separate browser processes, one creates a diagram, the other opens
+`seedDiagramRoom` integration tests against the real server) — but honest
+about one limit: the `hasUnsyncedChanges` poll in `seedDiagramRoom` (waits
+for the server's ack before tearing the connection down) could **not** be
+shown to be load-bearing by this test suite. Two separate sabotage
+attempts — deleting the (since-removed) `flushPendingUpdates()` call, and
+separately deleting the poll loop itself so `finally` destroys the
+connection immediately after `resolve()` — both left the "pushes content"
+test passing, over this test's real localhost server. Root cause,
+confirmed by reading `@hocuspocus/provider`'s actual source
+(`dist/hocuspocus-provider.cjs`): this provider is constructed without
+`flushDelay`, so the outgoing update is handed to the OS socket
+synchronously inside `doc.transact()`, before either sabotaged version
+ever runs — destroying the provider immediately after doesn't retract
+bytes already in flight over loopback. The poll is kept anyway (a real
+defense against a slower/lossier connection where the socket might not
+have flushed before a synchronous `destroy()`), but this codebase's own
+tests don't prove it's necessary, and that shouldn't be overclaimed later
+as "verified."
+
+Separately, "two real, separate browser processes, one creates a diagram, the other opens
 it fresh" has not been physically re-done since this phase's client-side
 work landed. Should happen before this phase is treated as fully closed,
 not just automated-test-green.

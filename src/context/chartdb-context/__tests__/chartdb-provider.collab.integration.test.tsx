@@ -226,6 +226,16 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
         vi.doMock('@/lib/env', async (importOriginal) => ({
             ...(await importOriginal<typeof EnvModule>()),
             COLLAB_WS_URL: `ws://localhost:${server!.port}`,
+            // COLLAB_API_URL is derived from COLLAB_WS_URL inside env.ts
+            // itself (module-load time) — importOriginal()'s copy was
+            // already derived from the real default before this override
+            // applies, so it has to be overridden explicitly too, or any
+            // test that exercises storage-provider's REST calls would
+            // silently hit the wrong port. Nothing in this file does that
+            // today (renderClient injects storageInitialValue, not the
+            // real StorageProvider) but the next test that does shouldn't
+            // have to rediscover this.
+            COLLAB_API_URL: `http://localhost:${server!.port}`,
         }));
 
         ({ ChartDBProvider } = await import('../chartdb-provider'));
