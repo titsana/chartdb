@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (4/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (5/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -502,7 +502,10 @@ already safe to merge, instead of trying to fix these two things at once.
   counters in `chartdb-provider.tsx` for tables/fields/indexes/areas/
   custom types, reset on diagram load.
 - Switch `apply-ids.ts` matching to stable-id-first, name-based only as
-  fallback for external imports (**#11**).
+  fallback for external imports (**#11**). — ✅ Done (`893403a`): checks
+  each entity's id against the source diagram's ids first, for every
+  entity kind; only entities with no id overlap fall back to name-based
+  matching (a no-op for the common fresh-import case).
 - Gate the diff-preview readonly path so it can't write through whatever
   the eventual Y.Doc adapter is (**#12**) — verify this explicitly once
   Phase 2 exists, but the gate itself belongs here.
