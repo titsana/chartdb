@@ -12,6 +12,7 @@ import {
     removeItemFromCollection,
     readCollection,
     readItem,
+    compareByDomainOrder,
 } from '@/lib/collab/y-diagram';
 import type { DBTable } from '@/lib/domain/db-table';
 import { deepCopy, generateId } from '@/lib/utils';
@@ -143,13 +144,25 @@ export const ChartDBProvider: React.FC<
 
             setNotes((current) => {
                 let next = current;
+                let orderMayHaveChanged = false;
                 changedIds.forEach((id) => {
                     const decoded = readItem<Note>(notesMap, id, decodeNote);
                     const idx = next.findIndex((n) => n.id === id);
                     if (!decoded || idx === -1) return;
+                    if (decoded.order !== next[idx].order) {
+                        orderMayHaveChanged = true;
+                    }
                     next = next.map((n, i) => (i === idx ? decoded : n));
                 });
-                return next;
+                // the notes side panel's drag-to-reorder writes `order`
+                // via a plain updateNote patch (non-structural — no note
+                // added/removed), so it doesn't get the full
+                // readCollection re-sort above. Re-sort here too whenever
+                // `order` itself was one of the changed fields; stable
+                // sort preserves everyone else's relative position.
+                return orderMayHaveChanged
+                    ? [...next].sort(compareByDomainOrder)
+                    : next;
             });
         };
 

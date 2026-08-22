@@ -105,6 +105,40 @@ function writeNestedCollection<T extends { id: string }>(
 }
 
 /**
+ * `Note`/`Area`/`DBCustomType`/`DBTable` all carry their own optional
+ * `order` domain field, separate from this module's internal `__order`
+ * — the domain one is user-facing (e.g. the notes side panel's
+ * drag-to-reorder writes it via `updateNote`), the internal one only
+ * exists so an otherwise-orderless Y.Map round-trips array position at
+ * all. When a decoded item has an explicit domain `order`, it must win
+ * the sort — otherwise a drag-reorder appears to work (the observer
+ * patches the field) and then silently reverts on the next structural
+ * change, which re-sorts by `__order` and ignores it.
+ */
+function sortKeyFor(value: unknown, internalOrder: number): number {
+    const domainOrder = (value as { order?: unknown } | null)?.order;
+    return typeof domainOrder === 'number' ? domainOrder : internalOrder;
+}
+
+/**
+ * Stable comparator for re-sorting an already-decoded array after a
+ * non-structural (single-entry) observer update — e.g. a drag-reorder
+ * that only patched one item's `order` field. Items without an explicit
+ * `order` sort as if `+Infinity`; combined with `Array.prototype.sort`'s
+ * spec-guaranteed stability, that preserves their existing relative
+ * position (which already reflects the last correct `__order`-based
+ * sort) instead of needing the internal ordinal at this layer too.
+ */
+export function compareByDomainOrder<T extends { order?: number | null }>(
+    a: T,
+    b: T
+): number {
+    const orderA = typeof a.order === 'number' ? a.order : Infinity;
+    const orderB = typeof b.order === 'number' ? b.order : Infinity;
+    return orderA - orderB;
+}
+
+/**
  * Decodes an entire collection Y.Map back to a sorted array. Exported —
  * this is also how a live provider re-derives full state after a
  * structural change (an entry added/removed), as opposed to `readItem`
@@ -124,11 +158,13 @@ export function readCollection<T>(
         itemMap.forEach((v, k) => {
             if (k !== ORDER_KEY) raw[k] = v;
         });
-        const order = (itemMap.get(ORDER_KEY) as number | undefined) ?? 0;
-        entries.push({ order, id, value: decode(raw) });
+        const internalOrder =
+            (itemMap.get(ORDER_KEY) as number | undefined) ?? 0;
+        const value = decode(raw);
+        entries.push({ order: sortKeyFor(value, internalOrder), id, value });
     });
     // tie-break by id for a fully deterministic order across peers, even
-    // in the (should-never-happen) case of a duplicate __order.
+    // in the (should-never-happen) case of a duplicate order.
     entries.sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
     return entries.map((e) => e.value);
 }

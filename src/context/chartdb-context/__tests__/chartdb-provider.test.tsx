@@ -684,6 +684,43 @@ describe('Phase 2 (docs/design/realtime-collaboration.md §10) — notes are Y.D
         ).toBe('A-edited');
     });
 
+    it('reordering a note via updateNote({ order }) — a non-structural patch — re-sorts the array immediately, not just on the next structural change', async () => {
+        // The notes side panel's drag-to-reorder calls updateNote(id,
+        // { order: index }) — this arrives at the observer as a
+        // non-structural change (no note added/removed), which normally
+        // only patches one entry in place without resorting. `order` is
+        // the exception: it must take effect immediately, or a drag
+        // would appear to do nothing until some unrelated note gets
+        // created/removed later and forces a full resync.
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        let noteA: Awaited<ReturnType<typeof result.current.createNote>>;
+        let noteB: Awaited<ReturnType<typeof result.current.createNote>>;
+        await act(async () => {
+            noteA = await result.current.createNote({ content: 'A' });
+        });
+        await act(async () => {
+            noteB = await result.current.createNote({ content: 'B' });
+        });
+        expect(result.current.notes.map((n) => n.id)).toEqual([
+            noteA!.id,
+            noteB!.id,
+        ]);
+
+        // drag B above A
+        await act(async () => {
+            await result.current.updateNote(noteB!.id, { order: 0 });
+        });
+        await act(async () => {
+            await result.current.updateNote(noteA!.id, { order: 1 });
+        });
+
+        expect(result.current.notes.map((n) => n.id)).toEqual([
+            noteB!.id,
+            noteA!.id,
+        ]);
+    });
+
     it('removeNotes removes the note from state, and undo restores it', async () => {
         const { result } = renderChartDBWithHistory({ ...storageInitialValue });
 
