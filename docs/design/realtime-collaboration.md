@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (1/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (2/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -501,7 +501,11 @@ already safe to merge, instead of trying to fix these two things at once.
   (**#1**) as a standalone fix, ahead of the full `Y.UndoManager` swap in
   Phase 5 — this one is worth fixing early since it's actively wrong for
   single-user undo too (an in-between edit to *any* table gets clobbered
-  by an unrelated undo today).
+  by an unrelated undo today). — ✅ Done (`8d9de0d`): undo/redo's updateFn
+  now reconstructs from its live `currentTables` argument (patch touched
+  tables, restore/re-delete via a new `deletedTableIds` field) instead of
+  replaying a stale closure; `forceOverride` itself is unchanged and still
+  used, just called correctly.
 **Exit criteria:** Phase 0 suite still green; app is still 100%
 single-user with zero networking; every fix above is independently
 verifiable without a CRDT in place.
