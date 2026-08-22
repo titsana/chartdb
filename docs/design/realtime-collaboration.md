@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (5/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (6/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -496,7 +496,13 @@ already safe to merge, instead of trying to fix these two things at once.
   recomputes it from the live, post-write `primaryKeyCount` every render.
 - Derive handle-index assignment from relationship id, not array position
   (**#8** — this is the same bug class `81dae56` already fixed once;
-  fixing it properly here means it can't regress a third time).
+  fixing it properly here means it can't regress a third time). — ✅ Done
+  (`29760a7`): extracted into pure, unit-tested functions in
+  `canvas-handle-index.ts` that sort ids sharing a target instead of
+  relying on array iteration order — also closes the Phase 0 canvas.tsx
+  coverage gap for this finding. The fixed-100ms-timeout half of #8
+  (gate on a real "handles registered" signal) is left as a known,
+  separately-scoped remaining gap.
 - Derive default name/order from an incrementing counter, not
   `array.length` (**#9**). — ✅ Done (`9ee9a52`): ref-based monotonic
   counters in `chartdb-provider.tsx` for tables/fields/indexes/areas/
