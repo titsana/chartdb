@@ -208,6 +208,54 @@ describe('ChartDBProvider', () => {
         expect(result.current.relationships).toEqual([]);
     });
 
+    it('fix for appendix-b:12 — a diff-preview (readonly) session never mutates live tables/relationships/areas state', async () => {
+        // diffCalculatedHandler previously mutated tables/relationships/
+        // areas state unconditionally, regardless of `readonly` — only
+        // the storage layer was gated. The obvious way to build the
+        // eventual Y.Doc adapter (add*/update* write through the Y.Doc
+        // instead of raw state) would have broadcast one user's private
+        // diff-preview scratch state to every connected peer.
+        const diff = makeMockDiff();
+        diff.hasDiff = true; // readonly derives from hasDiff when no explicit prop
+        const { result } = renderChartDB({ ...storageInitialValue }, diff);
+
+        act(() => {
+            diff.events.emit({
+                action: 'diff_calculated',
+                data: {
+                    tablesToAdd: [baseTable({ id: 'table-from-diff' })],
+                    fieldsToAdd: new Map(),
+                    relationshipsToAdd: [],
+                    areasToAdd: [],
+                },
+            });
+        });
+
+        expect(result.current.tables).toEqual([]);
+    });
+
+    it('fix for appendix-b:12 — a non-readonly session still applies the diff-preview event (regression guard)', async () => {
+        const diff = makeMockDiff();
+        diff.hasDiff = false;
+        const { result } = renderChartDB({ ...storageInitialValue }, diff);
+
+        act(() => {
+            diff.events.emit({
+                action: 'diff_calculated',
+                data: {
+                    tablesToAdd: [baseTable({ id: 'table-from-diff' })],
+                    fieldsToAdd: new Map(),
+                    relationshipsToAdd: [],
+                    areasToAdd: [],
+                },
+            });
+        });
+
+        expect(result.current.tables.map((t) => t.id)).toEqual([
+            'table-from-diff',
+        ]);
+    });
+
     it('appendix-b:1 (raw mechanism) — updateTablesState with forceOverride replaces the whole array verbatim, regardless of what is live', async () => {
         // Pins chartdb-provider.tsx:522-524: this raw mechanism is
         // unchanged by the appendix-b:1 fix and still exists — a caller

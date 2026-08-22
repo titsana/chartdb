@@ -96,7 +96,24 @@ export const ChartDBProvider: React.FC<
     const [highlightedCustomTypeId, setHighlightedCustomTypeId] =
         useState<string>();
 
+    // appendix-b:12 fix — mirrors readonly/hasDiff every render (rather
+    // than depending on `useCallback`'s dep array + ahooks'
+    // `useSubscription` re-registering on identity change, which this
+    // handler otherwise doesn't rely on) so the gate below always reads
+    // the current value, not whatever it was on first mount.
+    const readonlyRef = useRef(false);
+    readonlyRef.current = readonlyProp ?? hasDiff ?? false;
+
     const diffCalculatedHandler = useCallback((event: DiffCalculatedEvent) => {
+        // appendix-b:12 fix — never mutate live tables/relationships/areas
+        // state from a readonly diff-preview session. This gate belongs
+        // here now, ahead of the eventual Y.Doc adapter: the adapter
+        // should inherit "readonly never writes shared state" as an
+        // already-correct invariant, not something bolted on when
+        // add*/update* start writing through a shared doc instead of raw
+        // React state.
+        if (readonlyRef.current) return;
+
         const { tablesToAdd, fieldsToAdd, relationshipsToAdd, areasToAdd } =
             event.data;
         setTables((tables) =>
