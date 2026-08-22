@@ -623,6 +623,22 @@ before any network code exists.
     every node. Project just the `notes` collection (not the whole
     diagram) and only update the entries the observer reports as
     changed.
+  - ✅ **`notes` done (`6e805be`):** `notesYDocRef` is the source of truth;
+    `addNotes`/`removeNotes`/`updateNote` write into it
+    (`upsertItem`/`removeItemFromCollection`/`patchItem`); an
+    `observeDeep` handler projects structural changes via a full
+    `readCollection` and non-structural (single-entry) changes via
+    `readItem`, preserving object identity for untouched notes.
+    `HistoryProvider` needed **zero** changes — its notes undo/redo
+    handlers already called through `addNotes`/`removeNotes`/`updateNote`
+    rather than touching React state directly. 7 tests, each empirically
+    confirmed discriminating (bug re-injected into
+    `addNotes`/`updateNote`/`loadDiagramFromData`, confirmed the relevant
+    test fails, then reverted). **Remaining collections** — tables,
+    relationships, dependencies, areas, customTypes — are not yet
+    migrated; each needs this same treatment (isolation check like the
+    `areas`/`parentAreaId` one above, then wiring), `tables` last since
+    it's the largest and everything else's foreign keys point into it.
 - Build the adapter so `add*/update*/remove*` methods read/write through a
   local `Y.Doc` instead of raw React state.
 - No `y-indexeddb`, no WebSocket — this `Y.Doc` only ever exists in one
