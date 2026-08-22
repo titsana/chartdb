@@ -432,7 +432,7 @@ existing single-user test suite than after a live sync layer is in the
 loop, and several of them (#1, #2, #3) change the shape of state that
 later phases build directly on top of.
 
-### Phase 0 — Safety net (no behavior change)
+### Phase 0 — Safety net (no behavior change) — ✅ Done (`30f7df6`)
 
 **Goal:** a regression harness that proves single-user behavior is
 unchanged before any refactor starts.
@@ -442,6 +442,24 @@ unchanged before any refactor starts.
 - No product code changes in this phase.
 **Exit criteria:** existing + new tests green; this suite is the thing
 every later phase runs against.
+
+**Result:** `history-provider.test.tsx` + `chartdb-provider.test.tsx` added
+(no product code touched). Covers undo/redo LIFO ordering, hasUndo/hasRedo
+transitions, the `removeTables` undo `Promise.all` concurrency shape, and
+three `appendix-b:<n>` pins of current, known-broken behavior Phase 1 must
+flip: **#1** (`updateTablesState({forceOverride:true})` clobbers a table
+added after the snapshot), **#2** (`updateField` writes the whole `fields`
+array back as one blob), **#9** (concurrent `createTable()` calls collide
+on the same stale-closure default name). Also fixed: `test:ci` was
+silently missing 18 suites (`ai`/`@ai-sdk/openai` absent from
+`node_modules`, no lockfile change) — full suite is now 109 files / 842
+tests green.
+**Known gap, deferred to Phase 1:** `canvas.tsx` connect/node-change
+handlers are *not* covered here — they sit behind `ReactFlowProvider` +
+DOM measurement, too expensive to harness before the handler logic is
+extractable. Appendix B's canvas-specific findings (#8 handle-index
+assignment, #10 auto-layout) still need direct test coverage once Phase 1
+makes that extraction cheap.
 
 ### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet)
 
