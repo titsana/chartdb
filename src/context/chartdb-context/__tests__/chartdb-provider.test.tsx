@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { EventEmitter } from 'ahooks/lib/useEventEmitter';
 import { ChartDBProvider } from '../chartdb-provider';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { RedoUndoStackProvider } from '@/context/history-context/redo-undo-stack-provider';
+import { HistoryProvider } from '@/context/history-context/history-provider';
+import { historyContext } from '@/context/history-context/history-context';
 import { diffContext } from '@/context/diff-context/diff-context';
 import type { DiffContext } from '@/context/diff-context/diff-context';
 import {
@@ -77,6 +79,31 @@ function renderChartDB(storage: StorageContext, diff = makeMockDiff()) {
     return renderHook(() => useChartDB(), { wrapper });
 }
 
+function renderChartDBWithHistory(
+    storage: StorageContext,
+    diff = makeMockDiff()
+) {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <diffContext.Provider value={diff}>
+            <storageContext.Provider value={storage}>
+                <RedoUndoStackProvider>
+                    <ChartDBProvider>
+                        <HistoryProvider>{children}</HistoryProvider>
+                    </ChartDBProvider>
+                </RedoUndoStackProvider>
+            </storageContext.Provider>
+        </diffContext.Provider>
+    );
+
+    return renderHook(
+        () => ({
+            chartdb: useChartDB(),
+            history: useContext(historyContext),
+        }),
+        { wrapper }
+    );
+}
+
 const baseTable = (overrides: Partial<DBTable>): DBTable => ({
     id: 'table-1',
     name: 'table_1',
@@ -106,15 +133,17 @@ describe('ChartDBProvider', () => {
         expect(result.current.tables).toEqual([]);
     });
 
-    it('appendix-b:1 — updateTablesState with forceOverride replaces the whole array, dropping a table added after the snapshot was taken', async () => {
-        // Pins chartdb-provider.tsx:522-524: when forceOverride is true, the
-        // updater's result replaces `tables` verbatim regardless of what's
-        // live at flush time. Undo replays exactly this way (see
-        // history-provider.tsx:274-285): User A's undo snapshot is taken
-        // before User B adds a table; replaying it as a full-array override
-        // silently deletes B's table. Phase 1 must close this — this
-        // assertion should flip once the merge is scoped to the fields the
-        // original action touched instead of the whole collection.
+    it('appendix-b:1 (raw mechanism) — updateTablesState with forceOverride replaces the whole array verbatim, regardless of what is live', async () => {
+        // Pins chartdb-provider.tsx:522-524: this raw mechanism is
+        // unchanged by the appendix-b:1 fix and still exists — a caller
+        // that passes an updateFn ignoring its `currentTables` argument
+        // (like `() => snapshotBeforeConcurrentAdd` below) still clobbers
+        // concurrent state. The fix is entirely on the caller side: see
+        // history-provider.tsx's undo/redo handlers (exercised in
+        // history-provider.test.tsx and this file's "(end-to-end)" test
+        // below), which now construct their updateFn FROM `currentTables`
+        // instead of ignoring it. This test documents that using
+        // forceOverride naively is still a footgun for any future caller.
         const { result } = renderChartDB({ ...storageInitialValue });
 
         await act(async () => {
@@ -241,6 +270,49 @@ describe('ChartDBProvider', () => {
 
         const nextTable = await act(async () => result.current.createTable());
         expect(nextTable.name).toBe('table_1'); // not 'table_3'
+    });
+
+    it('fix for appendix-b:1 (end-to-end) — undoing an updateTablesState edit does not drop a table a concurrent peer added afterward', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        const tableA = await act(async () =>
+            result.current.chartdb.createTable()
+        );
+
+        await act(async () => {
+            await result.current.chartdb.updateTablesState(
+                (current) =>
+                    current.map((t) =>
+                        t.id === tableA.id ? { ...t, name: 'renamed' } : t
+                    ),
+                { updateHistory: true }
+            );
+        });
+        expect(
+            result.current.chartdb.tables.find((t) => t.id === tableA.id)?.name
+        ).toBe('renamed');
+
+        // a concurrent peer's table arrives (updateHistory: false — like a
+        // remote-synced change, it never enters the local undo stack; a
+        // second local createTable() would instead become the *next* undo
+        // entry and this test would just undo that action instead)
+        const tableB = baseTable({ id: 'table-from-peer' });
+        await act(async () => {
+            await result.current.chartdb.addTable(tableB, {
+                updateHistory: false,
+            });
+        });
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+
+        expect(
+            result.current.chartdb.tables.find((t) => t.id === tableA.id)?.name
+        ).toBe(tableA.name); // reverted
+        expect(
+            result.current.chartdb.tables.find((t) => t.id === tableB.id)
+        ).toBeDefined(); // survives — this is the appendix-b:1 clobber, now fixed
     });
 
     it('appendix-b:2 — updateField writes the whole recomputed fields array back as one blob, not a per-field patch', async () => {

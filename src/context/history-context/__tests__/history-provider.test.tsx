@@ -259,15 +259,20 @@ describe('HistoryProvider', () => {
         expect(order).toContain('addTables');
     });
 
-    it('undo of updateTablesState calls the handler with forceOverride: true (call-shape pin, not the clobber itself)', async () => {
-        // Pins history-provider.tsx:274-285's call shape only. The actual
-        // whole-array-replay bug lives in chartdb-provider.tsx:522-524, where
-        // `forceOverride: true` bypasses the per-id merge — that's exercised
-        // against the real provider in chartdb-provider.test.tsx
-        // (appendix-b:1), not here: this file stubs `updateTablesState` as a
-        // spy, so it can only prove HistoryProvider *asks* for forceOverride
-        // replay, not that the replay clobbers concurrent state.
-        const snapshotTables = [{ id: 't1', name: 'orig' }];
+    it('fix for appendix-b:1 — undo of updateTablesState patches modified tables, restores deleted ones, and leaves a concurrently-added table alone', async () => {
+        // history-provider.tsx used to replay the pre-action snapshot
+        // verbatim (`() => tables` ignoring its `currentTables` argument),
+        // via forceOverride — silently dropping any table added after the
+        // snapshot was captured. The fix constructs the updateFn FROM its
+        // `currentTables` argument, so it's exercised here by capturing that
+        // closure and invoking it directly with a fake live state — this is
+        // the actual defect (chartdb-provider.test.tsx's appendix-b:1 test
+        // covers the raw forceOverride mechanism the fix still relies on;
+        // this test covers whether the fix's caller uses it correctly).
+        const undoSnapshot = [
+            { id: 'table-a', name: 'orig-a' }, // modified by the original action
+            { id: 'table-c', name: 'deleted-c' }, // deleted by the original action
+        ];
         mockChartDB.updateTablesState = vi.fn();
         mockChartDB.addRelationships = vi.fn();
         mockChartDB.addDependencies = vi.fn();
@@ -277,9 +282,9 @@ describe('HistoryProvider', () => {
         act(() => {
             result.current.stack.addUndoAction({
                 action: 'updateTablesState',
-                redoData: { tables: [] },
+                redoData: { tables: [], deletedTableIds: [] },
                 undoData: {
-                    tables: snapshotTables,
+                    tables: undoSnapshot,
                     relationships: [],
                     dependencies: [],
                 },
@@ -291,12 +296,71 @@ describe('HistoryProvider', () => {
         });
 
         expect(mockChartDB.updateTablesState).toHaveBeenCalledTimes(1);
-        const [, options] = (
+        const [updateFn, options] = (
             mockChartDB.updateTablesState as ReturnType<typeof vi.fn>
         ).mock.calls[0];
-        expect(options).toEqual({
-            updateHistory: false,
-            forceOverride: true,
+        expect(options).toEqual({ updateHistory: false, forceOverride: true });
+
+        // simulate live state: table-a modified since the snapshot, table-b
+        // added by a concurrent peer, table-c already deleted (absent)
+        const liveTables = [
+            { id: 'table-a', name: 'edited-since-undo-was-queued' },
+            { id: 'table-b', name: 'added-by-another-peer' },
+        ];
+        const result_ = updateFn(liveTables);
+
+        expect(result_.find((t: { id: string }) => t.id === 'table-a')).toEqual(
+            { id: 'table-a', name: 'orig-a' }
+        ); // patched back to its pre-action value
+        expect(result_.find((t: { id: string }) => t.id === 'table-b')).toEqual(
+            { id: 'table-b', name: 'added-by-another-peer' }
+        ); // untouched — this is the appendix-b:1 clobber, now fixed
+        expect(result_.find((t: { id: string }) => t.id === 'table-c')).toEqual(
+            { id: 'table-c', name: 'deleted-c' }
+        ); // restored
+    });
+
+    it('fix for appendix-b:1 — redo of updateTablesState re-applies modified/deleted tables and leaves everything else alone', async () => {
+        const redoSnapshot = [{ id: 'table-a', name: 'redone-a' }];
+        mockChartDB.updateTablesState = vi.fn();
+
+        const { result } = renderHistory(mockChartDB);
+
+        act(() => {
+            result.current.stack.addRedoAction({
+                action: 'updateTablesState',
+                redoData: {
+                    tables: redoSnapshot,
+                    deletedTableIds: ['table-c'],
+                },
+                undoData: { tables: [], relationships: [], dependencies: [] },
+            } as unknown as RedoUndoAction);
         });
+
+        await act(async () => {
+            await result.current.history.redo();
+        });
+
+        const [updateFn, options] = (
+            mockChartDB.updateTablesState as ReturnType<typeof vi.fn>
+        ).mock.calls[0];
+        expect(options).toEqual({ updateHistory: false, forceOverride: true });
+
+        const liveTables = [
+            { id: 'table-a', name: 'undone-a' },
+            { id: 'table-b', name: 'added-by-another-peer' },
+            { id: 'table-c', name: 'was-deleted-then-undone-back-in' },
+        ];
+        const result_ = updateFn(liveTables);
+
+        expect(result_.find((t: { id: string }) => t.id === 'table-a')).toEqual(
+            { id: 'table-a', name: 'redone-a' }
+        ); // re-patched to its post-action value
+        expect(result_.find((t: { id: string }) => t.id === 'table-b')).toEqual(
+            { id: 'table-b', name: 'added-by-another-peer' }
+        ); // untouched
+        expect(
+            result_.find((t: { id: string }) => t.id === 'table-c')
+        ).toBeUndefined(); // re-deleted
     });
 });

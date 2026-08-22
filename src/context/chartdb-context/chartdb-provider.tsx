@@ -648,7 +648,10 @@ export const ChartDBProvider: React.FC<
             if (options.updateHistory) {
                 addUndoAction({
                     action: 'updateTablesState',
-                    redoData: { tables: updatedTables },
+                    redoData: {
+                        tables: updatedTables,
+                        deletedTableIds: tablesToDelete.map((t) => t.id),
+                    },
                     undoData: {
                         tables: prevTables,
                         relationships: relationshipsToRemove,

@@ -47,7 +47,7 @@ type RedoUndoActionRemoveTables = RedoUndoActionBase<
 
 type RedoUndoActionUpdateTablesState = RedoUndoActionBase<
     'updateTablesState',
-    { tables: DBTable[] },
+    { tables: DBTable[]; deletedTableIds: string[] },
     {
         tables: DBTable[];
         relationships: DBRelationship[];

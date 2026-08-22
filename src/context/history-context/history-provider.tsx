@@ -61,11 +61,26 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
             updateTable: ({ redoData: { tableId, table } }) => {
                 return updateTable(tableId, table, { updateHistory: false });
             },
-            updateTablesState: ({ redoData: { tables } }) => {
-                return updateTablesState(() => tables, {
-                    updateHistory: false,
-                    forceOverride: true,
-                });
+            updateTablesState: ({ redoData: { tables, deletedTableIds } }) => {
+                // fix for appendix-b:1 — reconstruct the next state FROM the
+                // live `currentTables` argument (concurrent edits/additions
+                // pass through untouched) instead of returning the captured
+                // snapshot verbatim regardless of what's live. forceOverride
+                // is still needed here (the merge branch can only patch/drop
+                // existing entries, never add — irrelevant on redo since we
+                // only ever remove/patch, but kept symmetric with undo below).
+                return updateTablesState(
+                    (currentTables) =>
+                        currentTables
+                            .filter((t) => !deletedTableIds.includes(t.id))
+                            .map((t) => {
+                                const redone = tables.find(
+                                    (rt) => rt.id === t.id
+                                );
+                                return redone ? { ...t, ...redone } : t;
+                            }),
+                    { updateHistory: false, forceOverride: true }
+                );
             },
             addField: ({ redoData: { tableId, field } }) => {
                 return addField(tableId, field, { updateHistory: false });
@@ -274,11 +289,35 @@ export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
             updateTablesState: async ({
                 undoData: { tables, relationships, dependencies },
             }) => {
+                // fix for appendix-b:1 — reconstruct FROM the live
+                // `currentTables` argument: patch tables this action
+                // modified back to their pre-action values, re-add tables
+                // this action deleted (present in the snapshot but missing
+                // from currentTables), and leave every other live table —
+                // including one a concurrent peer added since — untouched.
+                // Previously this replayed `tables` (the full pre-action
+                // snapshot) verbatim via forceOverride, ignoring
+                // `currentTables` entirely and silently dropping any table
+                // added after the snapshot was captured.
                 await Promise.all([
-                    updateTablesState(() => tables, {
-                        updateHistory: false,
-                        forceOverride: true,
-                    }),
+                    updateTablesState(
+                        (currentTables) => {
+                            const liveIds = new Set(
+                                currentTables.map((t) => t.id)
+                            );
+                            const patched = currentTables.map((t) => {
+                                const prior = tables.find(
+                                    (pt) => pt.id === t.id
+                                );
+                                return prior ? { ...t, ...prior } : t;
+                            });
+                            const restored = tables.filter(
+                                (pt) => !liveIds.has(pt.id)
+                            );
+                            return [...patched, ...restored];
+                        },
+                        { updateHistory: false, forceOverride: true }
+                    ),
                     addRelationships(relationships, { updateHistory: false }),
                     addDependencies(dependencies, { updateHistory: false }),
                 ]);
