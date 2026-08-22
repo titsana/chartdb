@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (9/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (9/10 items, only **#2** remains)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -501,7 +501,12 @@ already safe to merge, instead of trying to fix these two things at once.
   doc" half of this finding is Yjs/server-era territory, correctly
   deferred past Phase 1.
 - Rebase debounced field writes against current value at commit time, or
-  surface a conflict indicator (**#6**).
+  surface a conflict indicator (**#6**). — ✅ Done (`eb3b4f7`): fixed the
+  shared `debounce()` utility to expose a real `cancel()` — the caller
+  already asked for it, it was a silent no-op. Closes the silent-overwrite
+  case (a stale pending write no longer fires); doesn't make the user's
+  own pending edit survive a same-field remote change non-destructively —
+  that's Yjs/Y.Map's per-field merge, Phase 2+.
 - Recompute the primary-key/unique invariant from full current state after
   any write, not from a pre-write local count (**#7**). — ✅ Done
   (`cf265c1`): removed the `unique` guess from
