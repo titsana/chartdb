@@ -463,7 +463,7 @@ extractable. Appendix B's canvas-specific findings (#8 handle-index
 assignment, #10 auto-layout) still need direct test coverage once Phase 1
 makes that extraction cheap.
 
-### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (7/10 items)
+### Phase 1 — Data-model + invariant fixes (client-only, still single-user, no Yjs yet) — 🚧 In progress (8/10 items)
 
 **Goal:** close every Appendix B finding that's a property of the data
 model or invariant logic itself, independent of whether a CRDT is
@@ -522,7 +522,10 @@ already safe to merge, instead of trying to fix these two things at once.
   matching (a no-op for the common fresh-import case).
 - Gate the diff-preview readonly path so it can't write through whatever
   the eventual Y.Doc adapter is (**#12**) — verify this explicitly once
-  Phase 2 exists, but the gate itself belongs here.
+  Phase 2 exists, but the gate itself belongs here. — ✅ Done (`4ebdb30`):
+  `diffCalculatedHandler` now gates on a `readonlyRef` mirrored every
+  render before mutating tables/relationships/areas state. Re-verify
+  against the real adapter once Phase 2 exists, per the note above.
 - Undo/redo: stop replaying whole-array snapshots via `forceOverride`
   (**#1**) as a standalone fix, ahead of the full `Y.UndoManager` swap in
   Phase 5 — this one is worth fixing early since it's actively wrong for
