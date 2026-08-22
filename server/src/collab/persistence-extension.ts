@@ -43,6 +43,13 @@ export function createPersistenceExtension(pool: Pool): Extension {
         // not in `onChange` (which fires after apply, unawaited, with the
         // ack/broadcast already gone out), is what actually prevents an
         // update from being lost if the server crashes right after.
+        //
+        // Deliberately unguarded: extractUpdateFromRawMessage throws (not
+        // returns null) on a message it can't actually parse — see its own
+        // doc comment for why treating that as "nothing to log" would be
+        // exactly the durability gap this hook exists to close. Letting
+        // that throw propagate here makes Hocuspocus close the connection
+        // instead of applying the unparseable message.
         async beforeHandleMessage({
             documentName,
             update,

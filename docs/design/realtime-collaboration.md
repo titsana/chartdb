@@ -846,7 +846,28 @@ there.
   `this.callbacks.onUpdate(...)` without awaiting it, then immediately
   broadcasts). Using the wrong hook here would silently reopen the exact
   failure the durable log exists to prevent: a crash between apply and
-  persist loses an update that peers already have applied locally.
+  persist loses an update that peers already have applied locally. A
+  narrower version of the same failure mode was caught by review one level
+  down: `extractUpdateFromRawMessage` (the wire-message decoder that finds
+  the update bytes to log) originally swallowed every decode error into a
+  "nothing to log" `null` — indistinguishable from a message that
+  legitimately carries no update. A message this couldn't actually parse
+  would then get applied and broadcast by Hocuspocus with nothing logged.
+  Fixed to throw on a genuine parse failure instead (propagating out of
+  `beforeHandleMessage` makes Hocuspocus close the connection before
+  `receiver.apply()` runs, per `Connection.ts`'s `processMessages`), while
+  still returning `null` for messages that decode cleanly and simply carry
+  no update (sync step1, awareness, auth, ...).
+- Compaction was verified as actually executing, not just inferred from
+  the restart test passing: `loadMergedState` reads snapshot-plus-log, so a
+  restart round-trip can "work" purely off unpruned log rows even if
+  `onStoreDocument` never fires and the prune never runs. Checked directly
+  (both manually against a real Postgres and as a permanent assertion in
+  the restart test): after the first server's last connection closes,
+  `yjs_snapshots.through_update_id` is non-zero and `yjs_updates` has zero
+  remaining rows for that diagram — the ordering property and the prune
+  both genuinely ran, not just the code path that would have made a broken
+  version of either look fine.
 - Two bugs found and fixed via direct, reproducible testing before this
   was considered working (not found by the test suite — found by manually
   reproducing "client connects but never syncs", once outside Vitest

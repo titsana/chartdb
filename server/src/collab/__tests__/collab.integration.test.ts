@@ -229,6 +229,31 @@ describe.skipIf(!databaseReachable)('Phase 3 — Hocuspocus server', () => {
             await server1.stop();
         }
 
+        // Confirm compaction actually ran, not just that data survives —
+        // loadMergedState reads snapshot-plus-log, so a restart could look
+        // like it "works" purely off unpruned log rows even if
+        // onStoreDocument, the getMaxUpdateId-before-encode ordering, and
+        // the prune itself never fired. A non-zero watermark with zero
+        // remaining log rows is the actual evidence compaction ran.
+        const pool = createPool(loadConfig().databaseUrl);
+        try {
+            const snapshot = await pool.query(
+                'SELECT through_update_id FROM yjs_snapshots WHERE diagram_id = $1',
+                [diagramId]
+            );
+            expect(snapshot.rows).toHaveLength(1);
+            expect(Number(snapshot.rows[0].through_update_id)).toBeGreaterThan(
+                0
+            );
+            const remaining = await pool.query(
+                'SELECT count(*) FROM yjs_updates WHERE diagram_id = $1',
+                [diagramId]
+            );
+            expect(Number(remaining.rows[0].count)).toBe(0);
+        } finally {
+            await pool.end();
+        }
+
         // A genuinely separate OS process — nothing in memory carries over,
         // only what's in Postgres.
         const server2 = await startServerProcess();

@@ -81,9 +81,28 @@ describe('extractUpdateFromRawMessage', () => {
         expect(extractUpdateFromRawMessage(message)).toBeNull();
     });
 
-    it('never throws on garbage input', () => {
-        expect(extractUpdateFromRawMessage(new Uint8Array([255, 255, 255]))).toBeNull();
-        expect(extractUpdateFromRawMessage(new Uint8Array([]))).toBeNull();
+    it('throws (does not silently return null) on genuinely unparseable input', () => {
+        // Deliberate: returning null here would mean "nothing to log, safe
+        // to let it through" for a message that was never actually
+        // understood — see the function's own doc comment for why that's
+        // the exact durability gap this hook exists to close. The caller
+        // (persistence-extension.ts) relies on this throwing so Hocuspocus
+        // closes the connection instead of applying an unlogged update.
+        expect(() =>
+            extractUpdateFromRawMessage(new Uint8Array([255, 255, 255]))
+        ).toThrow();
+        expect(() => extractUpdateFromRawMessage(new Uint8Array([]))).toThrow();
+    });
+
+    it('returns null, without throwing, for a recognized non-sync message type', () => {
+        // Contrast with the throwing case above: this outer type (auth, 2)
+        // decodes cleanly and is legitimately "nothing to log" — not a
+        // parse failure.
+        const message = buildMessage('room-1', 2, (enc) => {
+            encoding.writeVarUint(enc, 0);
+            encoding.writeVarString(enc, 'sometoken');
+        });
+        expect(extractUpdateFromRawMessage(message)).toBeNull();
     });
 
     it('sanity check on the constant used for messageYjsUpdate', () => {
