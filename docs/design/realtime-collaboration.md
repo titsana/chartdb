@@ -570,7 +570,7 @@ already safe to merge, instead of trying to fix these two things at once.
 single-user with zero networking; every fix above is independently
 verifiable without a CRDT in place.
 
-### Phase 2 — `Y.Doc` ⇄ `ChartDBProvider` adapter (in-process, no server) — ✅ Done
+### Phase 2 — `Y.Doc` ⇄ `ChartDBProvider` adapter (in-process, no server) — ✅ Migration done, exit criteria partially verified (see below)
 
 **Goal:** prove the data-model mapping (§5.2) works, entirely in-memory,
 before any network code exists.
@@ -723,10 +723,21 @@ before any network code exists.
   scenarios directly: concurrent field edit vs. index add on the same
   table, concurrent PK assignment, concurrent table creation, etc.
 **Exit criteria:** Phase 0 suite green through the adapter; the
-Yjs-merge simulation tests for every Appendix B scenario pass. — ✅ All
+Yjs-merge simulation tests for every Appendix B scenario pass. — All
 six collections (`notes`, `customTypes`, `tables`, `relationships`,
 `dependencies`, `areas`) are now `Y.Doc`-backed; `tsc -b` and
-`npm run lint` both clean; full suite green (914 tests). **Not yet
+`npm run lint` both clean; full suite green (915 tests). **Read the
+"every" above precisely:** true two-independent-`Y.Doc`-merge-simulation
+tests (`y-diagram.test.ts`, no provider involved) exist for three
+scenarios — concurrent field edit vs. index add, concurrent PK
+assignment, concurrent table creation. The rest of Appendix B (the
+readonly gate #12, referential integrity #3, the PK-implies-not-null/
+unique self-heal #5/#7, the counter races #9, etc.) is covered by
+single-doc provider-level regression tests, not genuine two-peer merge
+simulations — those would need Phase 4's real WebSocket sync (or a
+second in-memory doc wired the same way `y-diagram.test.ts` does it) to
+verify at that level; worth doing before calling this exit criterion
+fully met. **Not yet
 covered:** a dedicated undo/redo regression test through
 `chartdb-provider.tsx`'s wiring for each of `tables`/`relationships`/
 `dependencies`/`areas` individually the way `notes`/`customTypes` each
