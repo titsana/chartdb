@@ -150,4 +150,54 @@ describe('useUpdateTableField', () => {
             )
         ).toBe(false);
     });
+
+    it('fix for appendix-b:6 — a remote rename landing mid-debounce cancels the pending stale-overwrite instead of firing it later', () => {
+        // Previously: debouncedNameUpdate's underlying debounce().cancel()
+        // was a no-op, so when field.name changed underneath a pending
+        // debounced write (recreating the callback via its dep array), the
+        // OLD pending timeout still fired later — comparing against and
+        // unconditionally overwriting whatever field.name had *become* by
+        // then, discarding a concurrent rename with no signal at all.
+        vi.useFakeTimers();
+        try {
+            const updateField = vi.fn();
+            const mockChartDB = {
+                databaseType: DatabaseType.GENERIC,
+                customTypes: [],
+                updateField,
+                removeField: vi.fn(),
+            } as unknown as ChartDBContext;
+
+            const wrapper = ({ children }: { children: React.ReactNode }) => (
+                <chartDBContext.Provider value={mockChartDB}>
+                    {children}
+                </chartDBContext.Provider>
+            );
+
+            const table = baseTable([baseField({ name: 'original' })]);
+            const { result, rerender } = renderHook(
+                ({ field }) => useUpdateTableField(table, field),
+                {
+                    wrapper,
+                    initialProps: { field: baseField({ name: 'original' }) },
+                }
+            );
+
+            act(() => {
+                result.current.handleNameChange('typed-by-this-user');
+            });
+
+            // a remote peer's rename lands before the 300ms debounce fires
+            rerender({ field: baseField({ name: 'renamed-by-peer' }) });
+
+            act(() => {
+                vi.advanceTimersByTime(300);
+            });
+
+            // the stale local edit never overwrote the peer's rename
+            expect(updateField).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

@@ -44,15 +44,25 @@ export const getOperatingSystem = (): 'mac' | 'windows' | 'unknown' => {
 
 export const deepCopy = <T>(obj: T): T => JSON.parse(JSON.stringify(obj));
 
+// appendix-b:6 fix — `.cancel()` actually clears the pending timeout now.
+// `use-debounce-v2.ts` already called `debouncedFnRef.current?.cancel?.()`
+// on every dependency change (including a prop like `field.name` changing
+// underneath a pending debounced write), but since this function never
+// exposed a real `cancel`, that call was a silent no-op: a stale pending
+// timeout kept firing later against whatever it closed over when it was
+// created, applying an update no longer aware of a value that had since
+// changed elsewhere. Every `useDebounce` consumer gets this fix for free.
 export const debounce = <T extends (...args: Parameters<T>) => ReturnType<T>>(
     func: T,
     waitFor: number
-) => {
+): ((...args: Parameters<T>) => void) & { cancel: () => void } => {
     let timeout: NodeJS.Timeout;
-    return (...args: Parameters<T>): void => {
+    const debounced = (...args: Parameters<T>): void => {
         clearTimeout(timeout);
         timeout = setTimeout(() => func(...args), waitFor);
     };
+    debounced.cancel = () => clearTimeout(timeout);
+    return debounced;
 };
 
 export const removeDups = <T>(array: T[]): T[] => {
