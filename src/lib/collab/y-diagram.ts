@@ -16,7 +16,9 @@ import type { Note } from '@/lib/domain/note';
  * step 1 of Phase 2, verified by round-trip and concurrent-merge tests
  * before anything touches `chartdb-provider.tsx`.
  *
- * Shape (one level deeper than §5.2's diagram, for Appendix B #2):
+ * Shape (one level deeper than §5.2's diagram, for Appendix B #2). Every
+ * name below is a genuine top-level `doc.getMap(name)` — matches §5.2,
+ * code and doc agree:
  *
  *   doc.getMap('diagram')       -> scalar diagram props
  *   doc.getMap('tables')        -> Y.Map<tableId, Y.Map<...>>
@@ -37,10 +39,18 @@ import type { Note } from '@/lib/domain/note';
  *
  * Field order: `fields`/`indexes`/`checkConstraints` (and every top-level
  * collection) are Y.Maps, which have no order. We stamp an internal
- * `__order` ordinal (the item's index in the source array) onto each
- * entry's Y.Map at write time and sort by it on read, so array order
- * round-trips exactly regardless of `createdAt` collisions. `__order` is
- * never exposed on the decoded domain object.
+ * `__order` ordinal onto each entry's Y.Map and sort by it on read, so
+ * array order round-trips exactly regardless of `createdAt` collisions.
+ * `__order` is never exposed on the decoded domain object.
+ *
+ * `__order` ceiling (ponytail: known, not yet a problem): it's an absolute
+ * index, not a fractional/rebalanced key. `upsertItem` appends new items
+ * at `size`, so a create is always correct; but `removeItemFromCollection`
+ * leaves a gap (removing the 2nd of 3 leaves orders 0, 2), and nothing
+ * currently closes gaps or lets a caller reorder existing items. Both are
+ * fine for `updateField`-shaped patches (order never changes) but must be
+ * addressed — a full re-stamp of every sibling's `__order`, or a switch to
+ * fractional indexing — before wiring `removeField`/reordering UI.
  */
 
 const ORDER_KEY = '__order';
@@ -57,34 +67,49 @@ function encodeFlat<T extends PlainRecord>(item: T): PlainRecord {
     return { ...item };
 }
 
-function writeCollection<T extends { id: string }>(
+/** Populates an existing (already-attached) collection Y.Map from scratch. Build-only — see writeNestedCollection. */
+function populateCollection<T extends { id: string }>(
+    collectionMap: Y.Map<unknown>,
+    items: T[],
+    encode: (item: T) => PlainRecord
+): void {
+    items.forEach((item, index) => {
+        const itemMap = new Y.Map<unknown>();
+        const encoded = encode(item);
+        Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
+        itemMap.set(ORDER_KEY, index);
+        collectionMap.set(item.id, itemMap);
+    });
+}
+
+/**
+ * Creates a *new* nested Y.Map under `key` on `parent` and populates it.
+ * Build-only: calling this on a parent that already has `key` set REPLACES
+ * the whole nested map (same whole-blob hazard appendix-b:2 is about, one
+ * level down). Only reachable from the fresh-doc build path below — for
+ * incremental writes against a live doc, get the existing map via
+ * `parent.get(key)` and call `upsertItem`/`patchItem` on it directly.
+ */
+function writeNestedCollection<T extends { id: string }>(
     parent: Y.Map<unknown>,
     key: string,
     items: T[] | undefined,
     encode: (item: T) => PlainRecord = encodeFlat
 ): void {
     if (!items) return;
-    const yMap = new Y.Map<unknown>();
-    items.forEach((item, index) => {
-        const itemMap = new Y.Map<unknown>();
-        const encoded = encode(item);
-        Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
-        itemMap.set(ORDER_KEY, index);
-        yMap.set(item.id, itemMap);
-    });
-    parent.set(key, yMap);
+    const collectionMap = new Y.Map<unknown>();
+    populateCollection(collectionMap, items, encode);
+    parent.set(key, collectionMap);
 }
 
-function readCollection<T>(
-    parent: Y.Map<unknown> | undefined,
-    key: string,
+function readCollectionFromMap<T>(
+    collectionMap: Y.Map<unknown> | undefined,
     decode: (raw: PlainRecord) => T
 ): T[] {
-    const yMap = parent?.get(key) as Y.Map<unknown> | undefined;
-    if (!yMap) return [];
+    if (!collectionMap) return [];
 
     const entries: Array<{ order: number; id: string; value: T }> = [];
-    yMap.forEach((itemMapRaw, id) => {
+    collectionMap.forEach((itemMapRaw, id) => {
         const itemMap = itemMapRaw as Y.Map<unknown>;
         const raw: PlainRecord = { id };
         itemMap.forEach((v, k) => {
@@ -98,6 +123,79 @@ function readCollection<T>(
     entries.sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
     return entries.map((e) => e.value);
 }
+
+function readNestedCollection<T>(
+    parent: Y.Map<unknown> | undefined,
+    key: string,
+    decode: (raw: PlainRecord) => T
+): T[] {
+    return readCollectionFromMap(
+        parent?.get(key) as Y.Map<unknown> | undefined,
+        decode
+    );
+}
+
+// ---- Incremental (live-doc) helpers — step 3 (provider wiring) uses these ----
+
+/** Gets `key` on `parent` as a Y.Map, creating an empty one in place if absent. Never replaces an existing map. */
+export function getOrCreateNestedMap(
+    parent: Y.Map<unknown>,
+    key: string
+): Y.Map<unknown> {
+    const existing = parent.get(key) as Y.Map<unknown> | undefined;
+    if (existing) return existing;
+    const created = new Y.Map<unknown>();
+    parent.set(key, created);
+    return created;
+}
+
+/**
+ * Creates or fully replaces one item's entry in `collectionMap`. A create
+ * (no existing entry for `item.id`) appends at the end (`__order = size`);
+ * an update to an existing entry preserves its current `__order`. Safe for
+ * concurrent use across different item ids — only ever touches the one
+ * entry keyed by `item.id`, never the collection map itself.
+ */
+export function upsertItem<T extends { id: string }>(
+    collectionMap: Y.Map<unknown>,
+    item: T,
+    encode: (item: T) => PlainRecord = encodeFlat
+): void {
+    const existing = collectionMap.get(item.id) as Y.Map<unknown> | undefined;
+    const itemMap = existing ?? new Y.Map<unknown>();
+    const order =
+        (existing?.get(ORDER_KEY) as number | undefined) ?? collectionMap.size;
+    const encoded = encode(item);
+    Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
+    itemMap.set(ORDER_KEY, order);
+    if (!existing) collectionMap.set(item.id, itemMap);
+}
+
+/**
+ * Patches only the given keys on an existing item — the real per-field
+ * write `updateField` needs, as opposed to `upsertItem`'s whole-object
+ * replace. No-ops (does not throw) if `id` isn't in the collection, since
+ * a concurrent delete racing a patch is a legitimate outcome to just drop.
+ */
+export function patchItem(
+    collectionMap: Y.Map<unknown>,
+    id: string,
+    patch: PlainRecord
+): void {
+    const itemMap = collectionMap.get(id) as Y.Map<unknown> | undefined;
+    if (!itemMap) return;
+    Object.entries(patch).forEach(([k, v]) => itemMap.set(k, v));
+}
+
+/** Removes one item from a collection. See the `__order` ceiling note above — this leaves a gap, doesn't renumber. */
+export function removeItemFromCollection(
+    collectionMap: Y.Map<unknown>,
+    id: string
+): void {
+    collectionMap.delete(id);
+}
+
+// ---- Whole-table helpers (nested fields/indexes/checkConstraints) ----
 
 function encodeTable(table: DBTable): {
     scalars: PlainRecord;
@@ -115,13 +213,13 @@ function writeTable(tablesMap: Y.Map<unknown>, table: DBTable): void {
     const tableMap = new Y.Map<unknown>();
     Object.entries(scalars).forEach(([k, v]) => tableMap.set(k, v));
 
-    writeCollection(tableMap, 'fields', fields);
-    writeCollection(tableMap, 'indexes', indexes);
+    writeNestedCollection(tableMap, 'fields', fields);
+    writeNestedCollection(tableMap, 'indexes', indexes);
 
     if (checkConstraints === null) {
         tableMap.set(CHECK_CONSTRAINTS_NULL_KEY, true);
     } else if (checkConstraints !== undefined) {
-        writeCollection(tableMap, 'checkConstraints', checkConstraints);
+        writeNestedCollection(tableMap, 'checkConstraints', checkConstraints);
     }
     // else: absent entirely — neither key nor nested map is written, and
     // readTable below reproduces "absent" for that case.
@@ -143,12 +241,12 @@ function readTable(id: string, tableMap: Y.Map<unknown>): DBTable {
         scalars[k] = v;
     });
 
-    const fields = readCollection<DBField>(
+    const fields = readNestedCollection<DBField>(
         tableMap,
         'fields',
         (r) => r as unknown as DBField
     );
-    const indexes = readCollection<DBIndex>(
+    const indexes = readNestedCollection<DBIndex>(
         tableMap,
         'indexes',
         (r) => r as unknown as DBIndex
@@ -157,7 +255,7 @@ function readTable(id: string, tableMap: Y.Map<unknown>): DBTable {
     const table = { ...scalars, fields, indexes } as DBTable;
 
     if (tableMap.has('checkConstraints')) {
-        table.checkConstraints = readCollection<DBCheckConstraint>(
+        table.checkConstraints = readNestedCollection<DBCheckConstraint>(
             tableMap,
             'checkConstraints',
             (r) => r as unknown as DBCheckConstraint
@@ -187,23 +285,31 @@ export function diagramToYDoc(diagram: Diagram): Y.Doc {
     const tablesMap = doc.getMap<unknown>('tables');
     (diagram.tables ?? []).forEach((table) => writeTable(tablesMap, table));
 
-    writeCollection(
-        doc.getMap<unknown>('root'),
-        'relationships',
-        diagram.relationships
+    populateCollection(
+        doc.getMap<unknown>('relationships'),
+        diagram.relationships ?? [],
+        encodeFlat
     );
-    writeCollection(
-        doc.getMap<unknown>('root'),
-        'dependencies',
-        diagram.dependencies
+    populateCollection(
+        doc.getMap<unknown>('dependencies'),
+        diagram.dependencies ?? [],
+        encodeFlat
     );
-    writeCollection(doc.getMap<unknown>('root'), 'areas', diagram.areas);
-    writeCollection(
-        doc.getMap<unknown>('root'),
-        'customTypes',
-        diagram.customTypes
+    populateCollection(
+        doc.getMap<unknown>('areas'),
+        diagram.areas ?? [],
+        encodeFlat
     );
-    writeCollection(doc.getMap<unknown>('root'), 'notes', diagram.notes);
+    populateCollection(
+        doc.getMap<unknown>('customTypes'),
+        diagram.customTypes ?? [],
+        encodeFlat
+    );
+    populateCollection(
+        doc.getMap<unknown>('notes'),
+        diagram.notes ?? [],
+        encodeFlat
+    );
 
     return doc;
 }
@@ -211,7 +317,6 @@ export function diagramToYDoc(diagram: Diagram): Y.Doc {
 /** Projects a `Y.Doc` (built by `diagramToYDoc`, or merged from several) back to a `Diagram`. */
 export function yDocToDiagram(doc: Y.Doc): Diagram {
     const diagramMap = doc.getMap<unknown>('diagram');
-    const root = doc.getMap<unknown>('root');
     const tablesMap = doc.getMap<unknown>('tables');
 
     const tables: DBTable[] = [];
@@ -232,23 +337,26 @@ export function yDocToDiagram(doc: Y.Doc): Diagram {
             'databaseEdition'
         ) as Diagram['databaseEdition'],
         tables,
-        relationships: readCollection<DBRelationship>(
-            root,
-            'relationships',
+        relationships: readCollectionFromMap<DBRelationship>(
+            doc.getMap<unknown>('relationships'),
             (r) => r as unknown as DBRelationship
         ),
-        dependencies: readCollection<DBDependency>(
-            root,
-            'dependencies',
+        dependencies: readCollectionFromMap<DBDependency>(
+            doc.getMap<unknown>('dependencies'),
             (r) => r as unknown as DBDependency
         ),
-        areas: readCollection<Area>(root, 'areas', (r) => r as unknown as Area),
-        customTypes: readCollection<DBCustomType>(
-            root,
-            'customTypes',
+        areas: readCollectionFromMap<Area>(
+            doc.getMap<unknown>('areas'),
+            (r) => r as unknown as Area
+        ),
+        customTypes: readCollectionFromMap<DBCustomType>(
+            doc.getMap<unknown>('customTypes'),
             (r) => r as unknown as DBCustomType
         ),
-        notes: readCollection<Note>(root, 'notes', (r) => r as unknown as Note),
+        notes: readCollectionFromMap<Note>(
+            doc.getMap<unknown>('notes'),
+            (r) => r as unknown as Note
+        ),
         createdAt: new Date(diagramMap.get('createdAt') as number),
         updatedAt: new Date(diagramMap.get('updatedAt') as number),
     };

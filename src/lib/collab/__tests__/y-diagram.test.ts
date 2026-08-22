@@ -5,7 +5,14 @@ import type { Diagram } from '@/lib/domain/diagram';
 import type { DBTable } from '@/lib/domain/db-table';
 import type { DBField } from '@/lib/domain/db-field';
 import type { DBIndex } from '@/lib/domain/db-index';
-import { diagramToYDoc, yDocToDiagram } from '../y-diagram';
+import {
+    diagramToYDoc,
+    yDocToDiagram,
+    getOrCreateNestedMap,
+    upsertItem,
+    patchItem,
+    removeItemFromCollection,
+} from '../y-diagram';
 
 /**
  * Phase 2 step 1/2 (docs/design/realtime-collaboration.md §10): pure
@@ -321,3 +328,128 @@ describe('y-diagram concurrent merge (appendix-b:2 proof)', () => {
         expect(merged.tables!.map((t) => t.id).sort()).toEqual(['ta', 'tb']);
     });
 });
+
+describe('incremental live-doc helpers (step 3 building blocks)', () => {
+    it('getOrCreateNestedMap creates once and never replaces an existing map', () => {
+        const doc = new Y.Doc();
+        const parent = doc.getMap<unknown>('parent');
+
+        const first = getOrCreateNestedMap(parent, 'child');
+        first.set('marker', 'original');
+
+        const second = getOrCreateNestedMap(parent, 'child');
+
+        expect(second).toBe(first);
+        expect(second.get('marker')).toBe('original');
+    });
+
+    it('upsertItem appends a new item at the end (__order = size) and preserves order on update', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+
+        upsertItem(collectionMap, { id: 'a1', name: 'first' });
+        upsertItem(collectionMap, { id: 'a2', name: 'second' });
+
+        expect(
+            readCollectionFromMapForTest(collectionMap).map((r) => r.name)
+        ).toEqual(['first', 'second']);
+
+        // updating an existing item must not move it
+        upsertItem(collectionMap, { id: 'a1', name: 'first-renamed' });
+        expect(
+            readCollectionFromMapForTest(collectionMap).map((r) => r.name)
+        ).toEqual(['first-renamed', 'second']);
+    });
+
+    it('patchItem writes only the given keys, leaving the rest of the item untouched', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+        upsertItem(collectionMap, { id: 'a1', name: 'first', x: 0, y: 0 });
+
+        patchItem(collectionMap, 'a1', { x: 42 });
+
+        const itemMap = collectionMap.get('a1') as Y.Map<unknown>;
+        expect(itemMap.get('x')).toBe(42);
+        expect(itemMap.get('y')).toBe(0);
+        expect(itemMap.get('name')).toBe('first');
+    });
+
+    it('patchItem is a no-op (does not throw) against an id that no longer exists', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+
+        expect(() =>
+            patchItem(collectionMap, 'never-existed', { x: 1 })
+        ).not.toThrow();
+    });
+
+    it('removeItemFromCollection removes the entry and leaves the rest untouched', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+        upsertItem(collectionMap, { id: 'a1', name: 'first' });
+        upsertItem(collectionMap, { id: 'a2', name: 'second' });
+
+        removeItemFromCollection(collectionMap, 'a1');
+
+        expect(
+            readCollectionFromMapForTest(collectionMap).map((r) => r.id)
+        ).toEqual(['a2']);
+    });
+
+    it('a concurrent upsertItem (new area) and patchItem (edit a different area) on two peers both survive the merge', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+        upsertItem(collectionMap, { id: 'a1', name: 'first', x: 0 });
+
+        const docA = new Y.Doc();
+        Y.applyUpdate(docA, Y.encodeStateAsUpdate(doc));
+        const docB = new Y.Doc();
+        Y.applyUpdate(docB, Y.encodeStateAsUpdate(doc));
+
+        docA.transact(() => {
+            patchItem(docA.getMap<unknown>('areas'), 'a1', { x: 99 });
+        });
+        docB.transact(() => {
+            upsertItem(docB.getMap<unknown>('areas'), {
+                id: 'a2',
+                name: 'second',
+                x: 5,
+            });
+        });
+
+        sync(docA, docB);
+
+        const result = readCollectionFromMapForTest(
+            docA.getMap<unknown>('areas')
+        );
+        expect(result.find((r) => r.id === 'a1')!.x).toBe(99);
+        expect(result.find((r) => r.id === 'a2')).toBeDefined();
+    });
+});
+
+// test-only mirror of the module's private readCollectionFromMap, since
+// that's an internal helper and these tests exercise the public
+// upsert/patch/remove surface directly against raw Y.Maps.
+function readCollectionFromMapForTest(
+    collectionMap: Y.Map<unknown>
+): Array<Record<string, unknown>> {
+    const entries: Array<{
+        order: number;
+        id: string;
+        value: Record<string, unknown>;
+    }> = [];
+    collectionMap.forEach((itemMapRaw, id) => {
+        const itemMap = itemMapRaw as Y.Map<unknown>;
+        const value: Record<string, unknown> = { id };
+        itemMap.forEach((v, k) => {
+            if (k !== '__order') value[k] = v;
+        });
+        entries.push({
+            order: (itemMap.get('__order') as number) ?? 0,
+            id,
+            value,
+        });
+    });
+    entries.sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
+    return entries.map((e) => e.value);
+}
