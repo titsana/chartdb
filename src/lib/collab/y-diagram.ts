@@ -69,41 +69,6 @@ function encodeFlat<T extends PlainRecord>(item: T): PlainRecord {
     return { ...item };
 }
 
-/** Populates an existing (already-attached) collection Y.Map from scratch. Build-only — see writeNestedCollection. */
-function populateCollection<T extends { id: string }>(
-    collectionMap: Y.Map<unknown>,
-    items: T[],
-    encode: (item: T) => PlainRecord
-): void {
-    items.forEach((item, index) => {
-        const itemMap = new Y.Map<unknown>();
-        const encoded = encode(item);
-        Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
-        itemMap.set(ORDER_KEY, index);
-        collectionMap.set(item.id, itemMap);
-    });
-}
-
-/**
- * Creates a *new* nested Y.Map under `key` on `parent` and populates it.
- * Build-only: calling this on a parent that already has `key` set REPLACES
- * the whole nested map (same whole-blob hazard appendix-b:2 is about, one
- * level down). Only reachable from the fresh-doc build path below — for
- * incremental writes against a live doc, get the existing map via
- * `parent.get(key)` and call `upsertItem`/`patchItem` on it directly.
- */
-function writeNestedCollection<T extends { id: string }>(
-    parent: Y.Map<unknown>,
-    key: string,
-    items: T[] | undefined,
-    encode: (item: T) => PlainRecord = encodeFlat
-): void {
-    if (!items) return;
-    const collectionMap = new Y.Map<unknown>();
-    populateCollection(collectionMap, items, encode);
-    parent.set(key, collectionMap);
-}
-
 /**
  * `Note`/`Area`/`DBCustomType`/`DBTable` all carry their own optional
  * `order` domain field, separate from this module's internal `__order`
@@ -274,6 +239,33 @@ export function removeItemFromCollection(
     collectionMap.delete(id);
 }
 
+/**
+ * Reconciles a flat collection Y.Map to exactly match `desiredItems`:
+ * upserts every desired item (create-or-patch via `upsertItem` — an
+ * existing entry keeps its `__order` and only its changed props are
+ * touched; a new one is appended) and removes anything present in the
+ * map but absent from `desiredItems`. This is what a doc-backed
+ * "replace the whole array with this one" write becomes — the array
+ * itself has no meaning against a Y.Map, but "make the map's contents
+ * equal this array" does, and it's what `updateTablesState`'s
+ * `forceOverride` replay (and every other whole-array-replace caller)
+ * needs. Removal happens before upserting so a freed `__order` can't be
+ * mistaken for a still-live item's order by `nextOrderFor`.
+ */
+export function reconcileCollection<T extends { id: string }>(
+    collectionMap: Y.Map<unknown>,
+    desiredItems: T[],
+    encode: (item: T) => PlainRecord = encodeFlat
+): void {
+    const desiredIds = new Set(desiredItems.map((item) => item.id));
+    const idsToRemove: string[] = [];
+    collectionMap.forEach((_itemMap, id) => {
+        if (!desiredIds.has(id)) idsToRemove.push(id);
+    });
+    idsToRemove.forEach((id) => collectionMap.delete(id));
+    desiredItems.forEach((item) => upsertItem(collectionMap, item, encode));
+}
+
 // ---- Whole-table helpers (nested fields/indexes/checkConstraints) ----
 
 function encodeTable(table: DBTable): {
@@ -286,24 +278,67 @@ function encodeTable(table: DBTable): {
     return { scalars, fields, indexes, checkConstraints };
 }
 
-function writeTable(tablesMap: Y.Map<unknown>, table: DBTable): void {
+/**
+ * Creates or fully reconciles one table's entry in `tablesMap` to match
+ * `table`: scalar props are patched onto the table's own Y.Map (created
+ * fresh if this is a new table id); `fields`/`indexes`/`checkConstraints`
+ * are reconciled into their nested Y.Maps via `reconcileCollection`
+ * (created fresh if absent, via `getOrCreateNestedMap` — never replaced
+ * if they already exist, so untouched fields/indexes on an existing
+ * table keep their `__order` and object identity). Safe against BOTH a
+ * brand-new table id (behaves like a from-scratch build) and an
+ * existing one (an in-place, per-entity diff) — this is the one
+ * function every table-mutating provider method funnels through.
+ */
+export function upsertTable(tablesMap: Y.Map<unknown>, table: DBTable): void {
     const { scalars, fields, indexes, checkConstraints } = encodeTable(table);
 
-    const tableMap = new Y.Map<unknown>();
-    Object.entries(scalars).forEach(([k, v]) => tableMap.set(k, v));
+    let tableMap = tablesMap.get(table.id) as Y.Map<unknown> | undefined;
+    if (!tableMap) {
+        tableMap = new Y.Map<unknown>();
+        tablesMap.set(table.id, tableMap);
+    }
+    Object.entries(scalars).forEach(([k, v]) => tableMap!.set(k, v));
 
-    writeNestedCollection(tableMap, 'fields', fields);
-    writeNestedCollection(tableMap, 'indexes', indexes);
+    reconcileCollection(getOrCreateNestedMap(tableMap, 'fields'), fields);
+    reconcileCollection(getOrCreateNestedMap(tableMap, 'indexes'), indexes);
 
     if (checkConstraints === null) {
+        tableMap.delete('checkConstraints');
         tableMap.set(CHECK_CONSTRAINTS_NULL_KEY, true);
     } else if (checkConstraints !== undefined) {
-        writeNestedCollection(tableMap, 'checkConstraints', checkConstraints);
+        tableMap.delete(CHECK_CONSTRAINTS_NULL_KEY);
+        reconcileCollection(
+            getOrCreateNestedMap(tableMap, 'checkConstraints'),
+            checkConstraints
+        );
+    } else {
+        // absent entirely — clear whichever representation an existing
+        // table might have had; readTable reproduces "absent" only when
+        // neither key is set.
+        tableMap.delete('checkConstraints');
+        tableMap.delete(CHECK_CONSTRAINTS_NULL_KEY);
     }
-    // else: absent entirely — neither key nor nested map is written, and
-    // readTable below reproduces "absent" for that case.
+}
 
-    tablesMap.set(table.id, tableMap);
+/**
+ * Reconciles the whole `tables` map to exactly match `desiredTables` —
+ * the table-level equivalent of `reconcileCollection`, for
+ * `updateTablesState`'s `forceOverride` replay. Removing an id here
+ * removes its entire nested subtree (fields/indexes/checkConstraints)
+ * with it, which is exactly cascade-delete's intent.
+ */
+export function reconcileTables(
+    tablesMap: Y.Map<unknown>,
+    desiredTables: DBTable[]
+): void {
+    const desiredIds = new Set(desiredTables.map((t) => t.id));
+    const idsToRemove: string[] = [];
+    tablesMap.forEach((_tableMap, id) => {
+        if (!desiredIds.has(id)) idsToRemove.push(id);
+    });
+    idsToRemove.forEach((id) => tablesMap.delete(id));
+    desiredTables.forEach((table) => upsertTable(tablesMap, table));
 }
 
 function readTable(id: string, tableMap: Y.Map<unknown>): DBTable {
@@ -347,6 +382,43 @@ function readTable(id: string, tableMap: Y.Map<unknown>): DBTable {
     return table;
 }
 
+/**
+ * Decodes the whole `tables` map back to an array, sorted by each
+ * table's own domain `order` field (tables have never used the internal
+ * `__order` for their own top-level position — `order` already existed
+ * on `DBTable` before Phase 2 and is what `createTable`'s counter
+ * assigns). Exported for `useYCollectionSync`'s `readAll` — the
+ * structural-change path for the `tables` collection.
+ */
+export function readTables(tablesMap: Y.Map<unknown>): DBTable[] {
+    const tables: DBTable[] = [];
+    tablesMap.forEach((tableMapRaw, id) => {
+        tables.push(readTable(id, tableMapRaw as Y.Map<unknown>));
+    });
+    tables.sort((a, b) => {
+        const orderA = a.order ?? 0;
+        const orderB = b.order ?? 0;
+        return orderA - orderB || (a.id < b.id ? -1 : 1);
+    });
+    return tables;
+}
+
+/**
+ * Decodes exactly one table out of `tablesMap`, without touching the
+ * rest — `useYCollectionSync`'s `readOne` for the `tables` collection,
+ * used on a non-structural change (this table's own scalar props, or a
+ * field/index/checkConstraint nested inside it, changed — nothing added
+ * or removed at the top `tablesMap` level).
+ */
+export function readTableItem(
+    tablesMap: Y.Map<unknown>,
+    id: string
+): DBTable | undefined {
+    const tableMap = tablesMap.get(id) as Y.Map<unknown> | undefined;
+    if (!tableMap) return undefined;
+    return readTable(id, tableMap);
+}
+
 /** Builds a fresh `Y.Doc` from a `Diagram`. Pure — does not mutate `diagram`. */
 export function diagramToYDoc(diagram: Diagram): Y.Doc {
     const doc = new Y.Doc();
@@ -362,33 +434,22 @@ export function diagramToYDoc(diagram: Diagram): Y.Doc {
     diagramMap.set('updatedAt', diagram.updatedAt.getTime());
 
     const tablesMap = doc.getMap<unknown>('tables');
-    (diagram.tables ?? []).forEach((table) => writeTable(tablesMap, table));
+    (diagram.tables ?? []).forEach((table) => upsertTable(tablesMap, table));
 
-    populateCollection(
+    reconcileCollection(
         doc.getMap<unknown>('relationships'),
-        diagram.relationships ?? [],
-        encodeFlat
+        diagram.relationships ?? []
     );
-    populateCollection(
+    reconcileCollection(
         doc.getMap<unknown>('dependencies'),
-        diagram.dependencies ?? [],
-        encodeFlat
+        diagram.dependencies ?? []
     );
-    populateCollection(
-        doc.getMap<unknown>('areas'),
-        diagram.areas ?? [],
-        encodeFlat
-    );
-    populateCollection(
+    reconcileCollection(doc.getMap<unknown>('areas'), diagram.areas ?? []);
+    reconcileCollection(
         doc.getMap<unknown>('customTypes'),
-        diagram.customTypes ?? [],
-        encodeFlat
+        diagram.customTypes ?? []
     );
-    populateCollection(
-        doc.getMap<unknown>('notes'),
-        diagram.notes ?? [],
-        encodeFlat
-    );
+    reconcileCollection(doc.getMap<unknown>('notes'), diagram.notes ?? []);
 
     return doc;
 }
@@ -396,17 +457,7 @@ export function diagramToYDoc(diagram: Diagram): Y.Doc {
 /** Projects a `Y.Doc` (built by `diagramToYDoc`, or merged from several) back to a `Diagram`. */
 export function yDocToDiagram(doc: Y.Doc): Diagram {
     const diagramMap = doc.getMap<unknown>('diagram');
-    const tablesMap = doc.getMap<unknown>('tables');
-
-    const tables: DBTable[] = [];
-    tablesMap.forEach((tableMapRaw, id) => {
-        tables.push(readTable(id, tableMapRaw as Y.Map<unknown>));
-    });
-    tables.sort((a, b) => {
-        const orderA = a.order ?? 0;
-        const orderB = b.order ?? 0;
-        return orderA - orderB || (a.id < b.id ? -1 : 1);
-    });
+    const tables = readTables(doc.getMap<unknown>('tables'));
 
     return {
         id: diagramMap.get('id') as string,

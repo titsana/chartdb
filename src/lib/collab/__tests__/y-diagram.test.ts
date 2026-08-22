@@ -12,6 +12,11 @@ import {
     upsertItem,
     patchItem,
     removeItemFromCollection,
+    reconcileCollection,
+    upsertTable,
+    reconcileTables,
+    readTables,
+    readTableItem,
 } from '../y-diagram';
 
 /**
@@ -446,6 +451,196 @@ describe('incremental live-doc helpers (step 3 building blocks)', () => {
         );
         expect(result.find((r) => r.id === 'a1')!.x).toBe(99);
         expect(result.find((r) => r.id === 'a2')).toBeDefined();
+    });
+});
+
+describe('reconcileCollection — whole-array-replace against a live doc', () => {
+    it('upserts new/changed items and removes anything absent from desiredItems', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+        upsertItem(collectionMap, { id: 'a1', name: 'keep-untouched' });
+        upsertItem(collectionMap, { id: 'a2', name: 'will-be-edited' });
+        upsertItem(collectionMap, { id: 'a3', name: 'will-be-removed' });
+
+        reconcileCollection(collectionMap, [
+            { id: 'a1', name: 'keep-untouched' },
+            { id: 'a2', name: 'edited' },
+            { id: 'a4', name: 'new' },
+        ]);
+
+        expect(
+            readCollectionFromMapForTest(collectionMap).map((r) => [
+                r.id,
+                r.name,
+            ])
+        ).toEqual([
+            ['a1', 'keep-untouched'],
+            ['a2', 'edited'],
+            ['a4', 'new'],
+        ]);
+    });
+
+    it("an untouched item's __order survives reconciliation (isn't recreated)", () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+        upsertItem(collectionMap, { id: 'a1', name: 'first' });
+        upsertItem(collectionMap, { id: 'a2', name: 'second' });
+        const orderBefore = (collectionMap.get('a2') as Y.Map<unknown>).get(
+            '__order'
+        );
+
+        reconcileCollection(collectionMap, [
+            { id: 'a1', name: 'first' },
+            { id: 'a2', name: 'second' },
+        ]);
+
+        const orderAfter = (collectionMap.get('a2') as Y.Map<unknown>).get(
+            '__order'
+        );
+        expect(orderAfter).toBe(orderBefore);
+    });
+});
+
+describe('upsertTable / reconcileTables — the appendix-b:2 nested-collection diff', () => {
+    it('creates a brand-new table with its fields/indexes populated', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const t = table({
+            id: 't1',
+            fields: [field({ id: 'f1' })],
+            indexes: [index({ id: 'i1' })],
+        });
+
+        upsertTable(tablesMap, t);
+
+        expect(readTableItem(tablesMap, 't1')).toEqual(t);
+    });
+
+    it("patches an existing table's scalar props without touching untouched fields", () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const f1 = field({ id: 'f1', name: 'untouched' });
+        upsertTable(
+            tablesMap,
+            table({ id: 't1', name: 'old_name', fields: [f1] })
+        );
+
+        upsertTable(
+            tablesMap,
+            table({ id: 't1', name: 'new_name', fields: [f1] })
+        );
+
+        const result = readTableItem(tablesMap, 't1')!;
+        expect(result.name).toBe('new_name');
+        expect(result.fields).toEqual([f1]);
+    });
+
+    it('adding one field via upsertTable leaves sibling fields untouched (this IS appendix-b:2)', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const f1 = field({ id: 'f1', name: 'original' });
+        upsertTable(tablesMap, table({ id: 't1', fields: [f1] }));
+        const fieldsMap = (tablesMap.get('t1') as Y.Map<unknown>).get(
+            'fields'
+        ) as Y.Map<unknown>;
+        const f1MapBefore = fieldsMap.get('f1');
+
+        const f2 = field({ id: 'f2', name: 'new' });
+        upsertTable(tablesMap, table({ id: 't1', fields: [f1, f2] }));
+
+        // f1's own Y.Map instance is untouched — the write only reached
+        // the fields map's f2 entry, not a whole-array replace of f1+f2
+        expect(fieldsMap.get('f1')).toBe(f1MapBefore);
+        expect(readTableItem(tablesMap, 't1')!.fields).toEqual([f1, f2]);
+    });
+
+    it('removing a field via upsertTable removes only that field, not its siblings', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const f1 = field({ id: 'f1' });
+        const f2 = field({ id: 'f2' });
+        upsertTable(tablesMap, table({ id: 't1', fields: [f1, f2] }));
+
+        upsertTable(tablesMap, table({ id: 't1', fields: [f2] }));
+
+        expect(readTableItem(tablesMap, 't1')!.fields).toEqual([f2]);
+    });
+
+    it('checkConstraints tri-state (absent/null/present) survives upsertTable transitions between states', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const absent = table({ id: 't1' });
+        delete absent.checkConstraints;
+        upsertTable(tablesMap, absent);
+        expect('checkConstraints' in readTableItem(tablesMap, 't1')!).toBe(
+            false
+        );
+
+        upsertTable(tablesMap, table({ id: 't1', checkConstraints: null }));
+        expect(readTableItem(tablesMap, 't1')!.checkConstraints).toBeNull();
+
+        upsertTable(
+            tablesMap,
+            table({
+                id: 't1',
+                checkConstraints: [
+                    { id: 'cc1', expression: 'x > 0', createdAt: 1 },
+                ],
+            })
+        );
+        expect(readTableItem(tablesMap, 't1')!.checkConstraints).toEqual([
+            { id: 'cc1', expression: 'x > 0', createdAt: 1 },
+        ]);
+
+        const backToAbsent = table({ id: 't1' });
+        delete backToAbsent.checkConstraints;
+        upsertTable(tablesMap, backToAbsent);
+        expect('checkConstraints' in readTableItem(tablesMap, 't1')!).toBe(
+            false
+        );
+    });
+
+    it('reconcileTables removes a table (and its whole nested subtree) absent from desiredTables — cascade-delete', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        upsertTable(
+            tablesMap,
+            table({ id: 't1', fields: [field({ id: 'f1' })] })
+        );
+        upsertTable(tablesMap, table({ id: 't2' }));
+
+        reconcileTables(tablesMap, [table({ id: 't2' })]);
+
+        expect(readTables(tablesMap).map((t) => t.id)).toEqual(['t2']);
+    });
+
+    it('reconcileTables patches an existing table in place without recreating untouched siblings', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const untouchedField = field({ id: 'f1', name: 'untouched' });
+        upsertTable(
+            tablesMap,
+            table({ id: 't1', name: 'old', fields: [untouchedField] })
+        );
+        upsertTable(tablesMap, table({ id: 't2' }));
+
+        reconcileTables(tablesMap, [
+            table({ id: 't1', name: 'new', fields: [untouchedField] }),
+            table({ id: 't2' }),
+        ]);
+
+        const tables = readTables(tablesMap);
+        expect(tables.map((t) => t.id)).toEqual(['t1', 't2']);
+        expect(tables.find((t) => t.id === 't1')!.name).toBe('new');
+        expect(tables.find((t) => t.id === 't1')!.fields).toEqual([
+            untouchedField,
+        ]);
+    });
+
+    it('readTableItem returns undefined for an id that does not exist', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        expect(readTableItem(tablesMap, 'nope')).toBeUndefined();
     });
 });
 
