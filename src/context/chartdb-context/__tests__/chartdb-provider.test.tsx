@@ -208,6 +208,44 @@ describe('ChartDBProvider', () => {
         expect(result.current.relationships).toEqual([]);
     });
 
+    it('fix for appendix-b:4 — createRelationship throws instead of creating a relationship pointing at a deleted table', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-a' }));
+        });
+        // table-b never created — simulates a remote peer deleting the
+        // target table between UI-render-time validation and this commit
+
+        await expect(
+            result.current.createRelationship({
+                sourceTableId: 'table-a',
+                targetTableId: 'table-b',
+                sourceFieldId: 'does-not-exist',
+                targetFieldId: 'does-not-exist',
+            })
+        ).rejects.toThrow();
+
+        expect(result.current.relationships).toEqual([]);
+    });
+
+    it('fix for appendix-b:4 — createDependency throws instead of creating a dependency pointing at a deleted table', async () => {
+        const { result } = renderChartDB({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.addTable(baseTable({ id: 'table-a' }));
+        });
+
+        await expect(
+            result.current.createDependency({
+                tableId: 'table-a',
+                dependentTableId: 'table-b', // never created
+            })
+        ).rejects.toThrow();
+
+        expect(result.current.dependencies).toEqual([]);
+    });
+
     it('fix for appendix-b:12 — a diff-preview (readonly) session never mutates live tables/relationships/areas state', async () => {
         // diffCalculatedHandler previously mutated tables/relationships/
         // areas state unconditionally, regardless of `readonly` — only

@@ -1399,21 +1399,39 @@ export const ChartDBProvider: React.FC<
                 targetFieldId,
             }) => {
                 const sourceTable = getTable(sourceTableId);
-                const sourceTableName = sourceTable?.name ?? '';
-
                 const sourceField = sourceTable?.fields.find(
                     (field: { id: string }) => field.id === sourceFieldId
                 );
-
-                const sourceFieldName = sourceField?.name ?? '';
-
                 const targetTable = getTable(targetTableId);
-                const targetTableSchema = targetTable?.schema;
+                const targetField = targetTable?.fields.find(
+                    (field: { id: string }) => field.id === targetFieldId
+                );
+
+                // appendix-b:4 fix — re-validate existence at commit time,
+                // not just wherever the UI last checked it (which can be
+                // seconds earlier — see create-relationship-node.tsx's
+                // handleCreate). A remote peer deleting the source/target
+                // table or field in that window previously still produced
+                // a relationship pointing at nothing.
+                if (
+                    !sourceTable ||
+                    !sourceField ||
+                    !targetTable ||
+                    !targetField
+                ) {
+                    throw new Error(
+                        'createRelationship: source or target table/field no longer exists'
+                    );
+                }
+
+                const sourceTableName = sourceTable.name;
+                const sourceFieldName = sourceField.name;
+                const targetTableSchema = targetTable.schema;
 
                 const relationship: DBRelationship = {
                     id: generateId(),
                     name: `${sourceTableName}_${sourceFieldName}_fk`,
-                    sourceSchema: sourceTable?.schema,
+                    sourceSchema: sourceTable.schema,
                     sourceTableId,
                     targetSchema: targetTableSchema,
                     targetTableId,
@@ -1584,12 +1602,24 @@ export const ChartDBProvider: React.FC<
             const table = getTable(tableId);
             const dependentTable = getTable(dependentTableId);
 
+            // appendix-b:4 fix — canvas.tsx's dependency-creation branch
+            // (unlike the relationship branch right next to it) had no
+            // guard at all before calling this. Re-validate here, at
+            // commit time, so a remote peer deleting either table between
+            // drag-start and drop can't produce a dependency pointing at
+            // nothing.
+            if (!table || !dependentTable) {
+                throw new Error(
+                    'createDependency: table or dependent table no longer exists'
+                );
+            }
+
             const dependency: DBDependency = {
                 id: generateId(),
                 tableId,
                 dependentTableId,
-                dependentSchema: dependentTable?.schema,
-                schema: table?.schema,
+                dependentSchema: dependentTable.schema,
+                schema: table.schema,
                 createdAt: Date.now(),
             };
 

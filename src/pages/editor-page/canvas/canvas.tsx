@@ -806,9 +806,22 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 const tableId = params.target;
                 const dependentTableId = params.source;
 
+                // appendix-b:4 fix — createDependency now throws if either
+                // table was deleted since this connect started (dragging a
+                // dependency edge can take seconds); catch it here so a
+                // remote peer's concurrent delete surfaces as a toast, not
+                // an unhandled rejection.
                 createDependency({
                     tableId,
                     dependentTableId,
+                }).catch((error) => {
+                    console.error(error);
+                    toast({
+                        title: 'Failed to create dependency',
+                        variant: 'destructive',
+                        description:
+                            'The table may have been deleted. Please try again.',
+                    });
                 });
 
                 return;
@@ -841,11 +854,22 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 return;
             }
 
+            // appendix-b:4 fix — same as the dependency branch above:
+            // createRelationship now throws on a deleted source/target
+            // table or field; catch it instead of an unhandled rejection.
             createRelationship({
                 sourceTableId,
                 targetTableId,
                 sourceFieldId,
                 targetFieldId,
+            }).catch((error) => {
+                console.error(error);
+                toast({
+                    title: 'Failed to create relationship',
+                    variant: 'destructive',
+                    description:
+                        'The table or field may have been deleted. Please try again.',
+                });
             });
         },
         [createRelationship, createDependency, getField, toast, databaseType]

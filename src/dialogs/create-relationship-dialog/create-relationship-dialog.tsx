@@ -164,12 +164,22 @@ export const CreateRelationshipDialog: React.FC<
             return;
         }
 
-        const relationship = await createRelationship({
-            sourceFieldId: primaryFieldId,
-            sourceTableId: primaryTableId,
-            targetFieldId: referencedFieldId,
-            targetTableId: referencedTableId,
-        });
+        // appendix-b:4 fix — createRelationship now throws if the source/
+        // target table or field was deleted since this dialog last
+        // checked (setCanCreateRelationship's effect, above).
+        let relationship;
+        try {
+            relationship = await createRelationship({
+                sourceFieldId: primaryFieldId,
+                sourceTableId: primaryTableId,
+                targetFieldId: referencedFieldId,
+                targetTableId: referencedTableId,
+            });
+        } catch (error) {
+            console.error(error);
+            setErrorMessage('Failed to create relationship');
+            return;
+        }
 
         setEdges((edges) =>
             edges.map((edge) =>
@@ -208,6 +218,7 @@ export const CreateRelationshipDialog: React.FC<
         openRelationshipFromSidebar,
         setEdges,
         fitView,
+        setErrorMessage,
     ]);
 
     return (
