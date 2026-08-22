@@ -45,10 +45,12 @@ import type { Note } from '@/lib/domain/note';
  *
  * `__order` ceiling (ponytail: known, not yet a problem): it's an absolute
  * index, not a fractional/rebalanced key. `upsertItem` appends new items
- * at `size`, so a create is always correct; but `removeItemFromCollection`
- * leaves a gap (removing the 2nd of 3 leaves orders 0, 2), and nothing
- * currently closes gaps or lets a caller reorder existing items. Both are
- * fine for `updateField`-shaped patches (order never changes) but must be
+ * one past the current max (NOT `collectionMap.size` — a prior delete
+ * leaves a gap, e.g. removing the 2nd of 3 leaves orders 0, 2, and `size`
+ * after that delete is 2, which would collide with the surviving order-2
+ * item), so a create always lands strictly last. But nothing currently
+ * closes the gap itself or lets a caller reorder existing items — fine
+ * for `updateField`-shaped patches (order never changes) but must be
  * addressed — a full re-stamp of every sibling's `__order`, or a switch to
  * fractional indexing — before wiring `removeField`/reordering UI.
  */
@@ -179,8 +181,10 @@ export function getOrCreateNestedMap(
 
 /**
  * Creates or fully replaces one item's entry in `collectionMap`. A create
- * (no existing entry for `item.id`) appends at the end (`__order = size`);
- * an update to an existing entry preserves its current `__order`. Safe for
+ * (no existing entry for `item.id`) appends at the end (`__order` = one
+ * past the current max, NOT `collectionMap.size` — a prior delete leaves
+ * a gap, so `size` collides with the last remaining item's order); an
+ * update to an existing entry preserves its current `__order`. Safe for
  * concurrent use across different item ids — only ever touches the one
  * entry keyed by `item.id`, never the collection map itself.
  */
@@ -191,12 +195,23 @@ export function upsertItem<T extends { id: string }>(
 ): void {
     const existing = collectionMap.get(item.id) as Y.Map<unknown> | undefined;
     const itemMap = existing ?? new Y.Map<unknown>();
-    const order =
-        (existing?.get(ORDER_KEY) as number | undefined) ?? collectionMap.size;
+    const order = existing?.get(ORDER_KEY) as number | undefined;
+    const nextOrder = order ?? nextOrderFor(collectionMap);
     const encoded = encode(item);
     Object.entries(encoded).forEach(([k, v]) => itemMap.set(k, v));
-    itemMap.set(ORDER_KEY, order);
+    itemMap.set(ORDER_KEY, nextOrder);
     if (!existing) collectionMap.set(item.id, itemMap);
+}
+
+function nextOrderFor(collectionMap: Y.Map<unknown>): number {
+    let max = -1;
+    collectionMap.forEach((itemMapRaw) => {
+        const itemOrder = (itemMapRaw as Y.Map<unknown>).get(ORDER_KEY) as
+            | number
+            | undefined;
+        if (itemOrder !== undefined && itemOrder > max) max = itemOrder;
+    });
+    return max + 1;
 }
 
 /**

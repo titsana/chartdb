@@ -343,7 +343,7 @@ describe('incremental live-doc helpers (step 3 building blocks)', () => {
         expect(second.get('marker')).toBe('original');
     });
 
-    it('upsertItem appends a new item at the end (__order = size) and preserves order on update', () => {
+    it('upsertItem appends a new item at the end and preserves order on update', () => {
         const doc = new Y.Doc();
         const collectionMap = doc.getMap<unknown>('areas');
 
@@ -359,6 +359,28 @@ describe('incremental live-doc helpers (step 3 building blocks)', () => {
         expect(
             readCollectionFromMapForTest(collectionMap).map((r) => r.name)
         ).toEqual(['first-renamed', 'second']);
+    });
+
+    it('upsertItem appends after the current max order, not collection size — a prior delete must not collide with the last remaining item', () => {
+        const doc = new Y.Doc();
+        const collectionMap = doc.getMap<unknown>('areas');
+
+        upsertItem(collectionMap, { id: 'a1', name: 'first' }); // order 0
+        upsertItem(collectionMap, { id: 'a2', name: 'second' }); // order 1
+        upsertItem(collectionMap, { id: 'a3', name: 'third' }); // order 2
+
+        removeItemFromCollection(collectionMap, 'a2'); // size is now 2, but max order is still 2
+
+        // id deliberately sorts before 'a3', so a wrong tie-broken-by-id
+        // order would visibly misplace it (not just coincidentally agree).
+        upsertItem(collectionMap, { id: 'a0-fourth', name: 'fourth' });
+
+        // if this item wrongly got __order = size (2), it would tie with
+        // a3's __order (also 2) and, tie-broken by id, sort BEFORE a3
+        // ('a0-fourth' < 'a3') — it must land strictly after a3 instead.
+        expect(
+            readCollectionFromMapForTest(collectionMap).map((r) => r.name)
+        ).toEqual(['first', 'third', 'fourth']);
     });
 
     it('patchItem writes only the given keys, leaving the rest of the item untouched', () => {
