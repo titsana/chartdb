@@ -636,6 +636,79 @@ describe('Phase 2 (docs/design/realtime-collaboration.md §10) — tables/relati
         expect(result.current.tables.map((t) => t.id)).toEqual(['table-b']);
     });
 
+    it('round-trip fidelity fix — one field edit does not lose any other property on a fully-populated table', async () => {
+        // getLiveTable's read now flows through encodeTable/readTable
+        // (y-diagram.ts) on every single table write, not just at doc-seed
+        // time — any key those don't round-trip losslessly would now be
+        // silently rewritten wrong on every mutation, compounding on each
+        // one. Exercise every optional/nested slot DBTable/DBField/DBIndex
+        // has, including parentAreaId — the one field the design doc calls
+        // out as this cluster's entanglement point — then make one
+        // trivial, unrelated edit and assert nothing else moved.
+        // primaryKey stays false here on purpose: getTableIndexesWithPrimaryKey
+        // (called by updateField's updateTableFn, unrelated to this
+        // migration) replaces `indexes` with a freshly-generated synthetic
+        // PK index whenever a field has primaryKey: true — a real,
+        // pre-existing app behavior this test isn't about. Keeping it false
+        // isolates the round-trip-fidelity question this test actually
+        // targets: does one field edit preserve every OTHER property.
+        const richField = {
+            id: 'field-a',
+            name: 'id',
+            type: { id: 'integer', name: 'integer' },
+            primaryKey: false,
+            nullable: false,
+            unique: true,
+            characterMaximumLength: '10',
+            precision: 5,
+            scale: 2,
+            comments: 'a field comment',
+            createdAt: Date.now(),
+        };
+        const richIndex = {
+            id: 'index-a',
+            name: 'idx_id',
+            fieldIds: ['field-a'],
+            unique: true,
+            createdAt: Date.now(),
+        };
+        const richTable = baseTable({
+            id: 'table-1',
+            fields: [richField],
+            indexes: [richIndex],
+            checkConstraints: [
+                { id: 'chk-1', expression: 'x > 0', createdAt: Date.now() },
+            ],
+            isView: false,
+            isMaterializedView: false,
+            width: 250,
+            comments: 'a table comment',
+            order: 3,
+            expanded: true,
+            parentAreaId: 'area-1',
+        });
+
+        const { result } = renderChartDB({ ...storageInitialValue });
+        await act(async () => {
+            await result.current.addTable(richTable);
+        });
+
+        await act(async () => {
+            await result.current.updateField(
+                'table-1',
+                'field-a',
+                { name: 'renamed' },
+                { updateHistory: false }
+            );
+        });
+
+        const after = result.current.tables.find((t) => t.id === 'table-1')!;
+        expect(after).toEqual({
+            ...richTable,
+            fields: [{ ...richField, name: 'renamed' }],
+        });
+    });
+
     it('relationships: add, update, remove-then-undo all round-trip through the doc', async () => {
         const { result } = renderChartDBWithHistory({ ...storageInitialValue });
 
