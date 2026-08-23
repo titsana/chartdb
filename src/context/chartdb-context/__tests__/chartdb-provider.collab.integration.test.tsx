@@ -547,6 +547,14 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
             { timeout: 8_000 }
         );
 
+        // Guard against this test passing for the wrong reason: if A's
+        // rename above somehow went untracked (e.g. a future change drops
+        // updateField's `updateHistory: true` default), A's undo stack
+        // would be empty, undo() would pop nothing, and "B's edit
+        // survives" would trivially hold without scoping ever being
+        // exercised at all.
+        expect(clientA.result.current.undoManager?.undoStack.length).toBe(1);
+
         // A undoes its OWN rename — the one that set 'a-edit'. If undo
         // scoping/conflict-avoidance works as documented, this must not
         // revert the field past B's 'b-edit', which is the current value A
