@@ -38,6 +38,22 @@
 
 ---
 
+## 🍴 About this fork
+
+This is a fork of [chartdb/chartdb](https://github.com/chartdb/chartdb) that adds **real-time multiplayer collaboration** — everyone open on the same diagram sees each other's edits, cursors, and selections live, powered by [Yjs](https://yjs.dev) + [Hocuspocus](https://tiptap.dev/hocuspocus) with a NestJS + Postgres backend (`server/`) replacing the original IndexedDB/Dexie-only storage.
+
+What's different from upstream:
+
+- **Real-time sync**: every table/relationship/area/note edit syncs live via a Yjs CRDT over WebSocket; per-client undo/redo scoping so one person's undo never clobbers someone else's later edit.
+- **Presence**: live cursors, selection highlights, avatar bar, and a Figma-style "follow another user's viewport" mode.
+- **Diagram groups**: folder-style organization in the open-diagram list (create/rename/delete groups, move diagrams in/out, collapse/expand).
+- **Optional Azure AD (Entra ID) sign-in** — off by default (anonymous, matching upstream); set `AUTH_MODE=azure-ad` to require Microsoft sign-in for both the REST API and the realtime WebSocket.
+- **Deploy options**: the original nginx-only `Dockerfile`/CI pipeline is untouched; `Dockerfile.combined` + `docker-compose.yml` add a single-container option where the backend also serves the built client on one origin.
+
+See [`docs/design/realtime-collaboration.md`](docs/design/realtime-collaboration.md) for the full design, phased rollout history, and decisions (including what was deliberately cut, like Redis scale-out and per-diagram feature flagging). `server/README.md` covers running the collab server locally.
+
+---
+
 <p align="center">
   <img width='700px' src="./public/chartdb.png">
 </p>
