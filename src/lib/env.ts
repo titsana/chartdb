@@ -34,3 +34,21 @@ export const COLLAB_WS_URL: string =
 // env var, so there's exactly one place to configure "where's the collab
 // server" instead of two that could drift out of sync.
 export const COLLAB_API_URL: string = COLLAB_WS_URL.replace(/^ws/, 'http');
+
+// Phase 7 (docs/design/realtime-collaboration.md): explicit opt-in toggle —
+// unset/anything-other-than-"azure-ad" means "public" (today's behavior,
+// every deploy before this phase). "azure-ad" with missing tenant/client id
+// is a misconfiguration, not a silent fallback to public — see
+// msal-config.ts, which throws rather than guessing.
+export const AUTH_MODE: 'azure-ad' | 'public' =
+    (window?.env?.AUTH_MODE ?? import.meta.env.VITE_AUTH_MODE) === 'azure-ad'
+        ? 'azure-ad'
+        : 'public';
+export const ENTRA_TENANT_ID: string =
+    window?.env?.ENTRA_TENANT_ID || import.meta.env.VITE_ENTRA_TENANT_ID || '';
+export const ENTRA_CLIENT_ID: string =
+    window?.env?.ENTRA_CLIENT_ID || import.meta.env.VITE_ENTRA_CLIENT_ID || '';
+// e.g. `api://<client-id>/access_as_user` — must match server's
+// ENTRA_API_AUDIENCE prefix (server/src/config.ts).
+export const ENTRA_API_SCOPE: string =
+    window?.env?.ENTRA_API_SCOPE || import.meta.env.VITE_ENTRA_API_SCOPE || '';

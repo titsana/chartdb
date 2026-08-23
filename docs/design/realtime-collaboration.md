@@ -1661,3 +1661,37 @@ requirement, or the per-diagram concurrency target grows enough that
 - Explicitly document the known limitations called out in §9 (no auth —
   anyone with a diagram ID can join and edit) as user-facing, not just an
   internal risk note.
+
+**Auth added, 2026-08-23** — supersedes §5.3's "Identity: no real auth"
+and §9's "anonymous access is an accepted risk" for any deploy that sets
+`AUTH_MODE=azure-ad` (default remains `public`, i.e. every deploy before
+this date keeps behaving exactly as before — see server/.env.example and
+src/lib/env.ts). Real Azure AD (Entra ID) sign-in, gated by one explicit
+env var rather than "auth is on iff credentials happen to be present" (a
+prior, unmerged `feature/azure-ad-auth` branch used the latter — rejected
+here because an operator setting `AUTH_MODE=azure-ad` with a typo'd
+tenant/client id should get a boot-time error, not a silently-still-open
+server).
+
+Covers both channels a client can reach, not just REST — an earlier
+design pass for this only guarded `/diagrams`/`/diagram-groups` via a
+NestJS `APP_GUARD`, which does not run for the raw WebSocket upgrade
+(`ws-upgrade.service.ts` attaches directly to the underlying HTTP server,
+outside Nest's routing/guard pipeline entirely):
+- REST: `EntraAuthGuard` (server/src/auth), exempting `/health` via a
+  `@Public()` decorator so infra health checks don't need a token.
+- Realtime: Hocuspocus's own `onAuthenticate` hook (server/src/collab/
+  hocuspocus.provider.ts) — the one hook that runs for every connection
+  regardless of transport, verifying the token `HocuspocusProvider`'s
+  `token` option sends during its own protocol handshake.
+- Client: `AuthGate` (src/auth-gate.tsx) walls the entire app — including
+  `/examples`/`/templates`, confirmed via AskUserQuestion rather than
+  assumed — behind sign-in when `AUTH_MODE=azure-ad`; `public` mode never
+  imports/constructs MSAL at all.
+
+Token validation restricts `aud` to the API audience only (`api://
+<client-id>`, matching `VITE_ENTRA_API_SCOPE`'s prefix) and requires the
+`access_as_user` scope — deliberately NOT accepting the bare client id as
+a valid audience, since an ID token (browser-facing, not a bearer
+credential for this API) also carries `aud === client id`; accepting both
+would let a client swap an ID token in past the guard.

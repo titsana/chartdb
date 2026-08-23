@@ -2,7 +2,8 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Awareness } from 'y-protocols/awareness';
-import { COLLAB_WS_URL } from '@/lib/env';
+import { AUTH_MODE, COLLAB_WS_URL } from '@/lib/env';
+import { getEntraAccessToken } from '@/lib/auth/get-entra-token';
 import { seedWhenDecided } from '@/lib/collab/seed-gate';
 import {
     upsertItem,
@@ -1994,6 +1995,14 @@ export const ChartDBProvider: React.FC<
                         url: COLLAB_WS_URL,
                         name: diagram.id,
                         document: newDoc,
+                        // Verified server-side by Hocuspocus's own
+                        // onAuthenticate hook (server/src/collab/
+                        // hocuspocus.provider.ts) when AUTH_MODE=azure-ad —
+                        // a no-op there when it's not.
+                        token:
+                            AUTH_MODE === 'azure-ad'
+                                ? getEntraAccessToken
+                                : null,
                     });
                     providerRef.current = provider;
                     setAwareness(provider.awareness);

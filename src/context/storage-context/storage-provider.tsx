@@ -5,8 +5,9 @@ import type { Diagram } from '@/lib/domain/diagram';
 import type { DiagramGroup } from '@/lib/domain/diagram-group';
 import type { ChartDBConfig } from '@/lib/domain/config';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
-import { COLLAB_API_URL } from '@/lib/env';
+import { AUTH_MODE, COLLAB_API_URL } from '@/lib/env';
 import { generateId } from '@/lib/utils';
+import { getEntraAccessToken } from '@/lib/auth/get-entra-token';
 
 /**
  * Phase 4.5 (docs/design/realtime-collaboration.md §10): Dexie removed
@@ -134,8 +135,17 @@ async function apiFetch<T>(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), API_FETCH_TIMEOUT_MS);
     try {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+        // AuthGate already forced a successful sign-in before anything
+        // that calls apiFetch can render, so a token is always obtainable
+        // here when AUTH_MODE === 'azure-ad'.
+        if (AUTH_MODE === 'azure-ad') {
+            headers.Authorization = `Bearer ${await getEntraAccessToken()}`;
+        }
         const res = await fetch(`${COLLAB_API_URL}${path}`, {
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             signal: controller.signal,
             ...init,
         });

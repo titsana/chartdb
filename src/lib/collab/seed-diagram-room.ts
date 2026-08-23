@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { COLLAB_WS_URL } from '@/lib/env';
+import { AUTH_MODE, COLLAB_WS_URL } from '@/lib/env';
+import { getEntraAccessToken } from '@/lib/auth/get-entra-token';
 import type { Diagram } from '@/lib/domain/diagram';
 import { upsertTable, upsertItem, isRoomEmpty } from './y-diagram';
 import { seedWhenDecided } from './seed-gate';
@@ -43,6 +44,7 @@ export async function seedDiagramRoom(diagram: Diagram): Promise<void> {
         url: COLLAB_WS_URL,
         name: diagram.id,
         document: doc,
+        token: AUTH_MODE === 'azure-ad' ? getEntraAccessToken : null,
     });
 
     try {
