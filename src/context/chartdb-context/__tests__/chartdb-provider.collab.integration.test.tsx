@@ -973,6 +973,19 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
                 x: 42,
                 y: 7,
             });
+            // Phase 5 (follow feature): flow-space center point + zoom,
+            // broadcast the same way as cursor/displayName. Deliberately
+            // NOT the raw camera transform — see PresenceState.
+            // viewportCenter's doc comment for why that's window-size-
+            // dependent and broke across different screen resolutions.
+            clientA.result.current.awareness!.setLocalStateField(
+                'viewportCenter',
+                {
+                    x: 100,
+                    y: -50,
+                    zoom: 1.5,
+                }
+            );
         });
 
         // Real proof this crossed the network, not an in-process
@@ -986,6 +999,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
                 expect(states.get(clientAId)).toMatchObject({
                     displayName: 'Alice',
                     cursor: { x: 42, y: 7 },
+                    viewportCenter: { x: 100, y: -50, zoom: 1.5 },
                 });
             },
             { timeout: 8_000 }

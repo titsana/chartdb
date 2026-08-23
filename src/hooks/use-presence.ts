@@ -17,6 +17,22 @@ export interface PresenceState {
     // canvas.tsx). Table-node.tsx filters peers by `id` to show "someone's
     // looking at this table" highlight.
     selectedTableIds?: string[];
+    // Phase 5: the flow-space point this peer's camera is centered on, plus
+    // their zoom level, broadcast on every pan/zoom (rAF-throttled, same
+    // convention as `cursor`) so another client can "follow" them (see
+    // canvas.tsx's follow effect and presence-avatar-bar.tsx).
+    //
+    // Deliberately flow-space (like `cursor`), NOT the raw `{x, y, zoom}`
+    // transform React Flow's `getViewport`/`setViewport` use — a first
+    // version broadcast the raw transform directly, which is wrong: that
+    // transform is `{screenCenter - flowCenter * zoom}`, so the same
+    // triple centers on a DIFFERENT flow-space point on a follower whose
+    // window is a different pixel size than the leader's. Center point +
+    // zoom has no such dependency; the follower reproduces it via
+    // `setCenter(x, y, { zoom })`, which computes ITS OWN screen-space
+    // offset from ITS OWN container size — the same reason `cursor` is
+    // flow-space and not screen pixels.
+    viewportCenter?: { x: number; y: number; zoom: number };
 }
 
 export interface PresencePeer extends PresenceState {
