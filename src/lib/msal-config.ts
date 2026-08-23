@@ -2,7 +2,7 @@ import {
     PublicClientApplication,
     type Configuration,
 } from '@azure/msal-browser';
-import { ENTRA_CLIENT_ID, ENTRA_TENANT_ID, ENTRA_API_SCOPE } from './env';
+import { ENTRA_CLIENT_ID, ENTRA_TENANT_ID } from './env';
 
 // Only meaningfully used when AUTH_MODE === 'azure-ad' — see auth-gate.tsx,
 // the only place that imports msalInstance. An explicit "azure-ad" with
@@ -32,6 +32,11 @@ const msalConfig: Configuration = {
 
 export const msalInstance = new PublicClientApplication(msalConfig);
 
+// Derived from ENTRA_CLIENT_ID (api://<client-id>/access_as_user) rather
+// than a separately-configured scope string — one fewer value to keep in
+// sync with the server's own audience check (server/src/auth/entra-jwt.ts
+// derives its expected `aud` the same way). Assumes the app registration's
+// Application ID URI was left at its default `api://<client-id>` shape.
 export const loginRequest = {
-    scopes: ENTRA_API_SCOPE ? [ENTRA_API_SCOPE] : [],
+    scopes: ENTRA_CLIENT_ID ? [`api://${ENTRA_CLIENT_ID}/access_as_user`] : [],
 };

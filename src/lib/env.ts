@@ -74,7 +74,3 @@ export const ENTRA_TENANT_ID: string =
     window?.env?.ENTRA_TENANT_ID || import.meta.env.VITE_ENTRA_TENANT_ID || '';
 export const ENTRA_CLIENT_ID: string =
     window?.env?.ENTRA_CLIENT_ID || import.meta.env.VITE_ENTRA_CLIENT_ID || '';
-// e.g. `api://<client-id>/access_as_user` — must match server's
-// ENTRA_API_AUDIENCE prefix (server/src/config.ts).
-export const ENTRA_API_SCOPE: string =
-    window?.env?.ENTRA_API_SCOPE || import.meta.env.VITE_ENTRA_API_SCOPE || '';
