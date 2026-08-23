@@ -6,14 +6,15 @@ export type FollowViewportResult =
     | { action: 'none' }; // not following, or nothing to apply yet
 
 /**
- * Pure decision logic for canvas.tsx's "follow this peer" effect: given
- * who's being followed and that peer's current presence entry (already
- * looked up by the caller — canvas.tsx has to do that lookup anyway to
+ * Pure decision logic for top-navbar.tsx's "follow this peer" effect:
+ * given who's being followed and that peer's current presence entry
+ * (already looked up by the caller — it has to do that lookup anyway to
  * derive the primitive x/y/zoom values its effect depends on, see its own
  * comment on why it can't depend on the peer object/array reference
  * directly), what should happen? Separated from the effect itself so this
- * can be unit-tested without a React Flow render harness — canvas.tsx has
- * none, and would need a lot of unrelated setup to get one just for this.
+ * can be unit-tested without a React Flow render harness — neither
+ * top-navbar.tsx nor canvas.tsx (this file's other consumer, for the
+ * broadcast side) has one.
  *
  * `followedPeer: undefined` while `followingPeerId` is non-null means the
  * peer left the room mid-follow → `'clear'`. `'none'` also covers a peer

@@ -67,11 +67,7 @@ import { MIN_TABLE_SIZE } from '@/lib/domain/db-table';
 import { useLocalConfig } from '@/hooks/use-local-config';
 import { usePresence } from '@/hooks/use-presence';
 import { RemoteCursors } from './remote-cursors/remote-cursors';
-import { PresenceAvatarBar } from './presence-avatar-bar/presence-avatar-bar';
-import {
-    resolveFollowViewport,
-    viewportToCenter,
-} from './resolve-follow-viewport';
+import { viewportToCenter } from './resolve-follow-viewport';
 import {
     Tooltip,
     TooltipTrigger,
@@ -1560,7 +1556,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     );
 
     // Handle mouse move to update cursor position for floating edge
-    const { screenToFlowPosition, setCenter, getViewport } = useReactFlow();
+    const { screenToFlowPosition, getViewport } = useReactFlow();
     // Phase 5: this client's own container size, for converting its camera
     // transform to a window-size-independent flow-space center point
     // before broadcasting it (see viewportToCenter's doc comment).
@@ -1613,11 +1609,13 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     // Phase 5: broadcasts this client's own camera as a flow-space center
     // point + zoom (NOT the raw transform — see `PresenceState.
     // viewportCenter`'s doc comment for why that broke across different
-    // window sizes), so another client can "follow" it (see the follow
-    // effect + `PresenceAvatarBar` below). Same rAF-throttle convention as
-    // `handleMouseMove`'s cursor broadcast above, and same reason: React
-    // Flow's `onMove` fires far more often than once per frame during a
-    // drag/zoom gesture.
+    // window sizes), so another client can "follow" it (the follow effect
+    // + `PresenceAvatarBar` entry point live in top-navbar.tsx — they only
+    // need `setCenter`/presence data, not this component's `<ReactFlow>`
+    // element, and the avatar bar's product home is the navbar). Same
+    // rAF-throttle convention as `handleMouseMove`'s cursor broadcast
+    // above, and same reason: React Flow's `onMove` fires far more often
+    // than once per frame during a drag/zoom gesture.
     const viewportRafIdRef = useRef<number>();
     const handleViewportMove = useCallback(
         (_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
@@ -1633,62 +1631,6 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         },
         [awareness, flowWidth, flowHeight]
     );
-
-    // Phase 5: "follow this peer" — clicking their avatar in
-    // `PresenceAvatarBar` sets `followingPeerId`; this client's camera then
-    // re-snaps onto that peer's broadcast viewport every time it changes.
-    // Purely local UI state, never broadcast (see presence-avatar-bar.tsx's
-    // doc comment for why). Manual pan/zoom in between two of the leader's
-    // updates does NOT clear this — explicit product decision, stop only
-    // via clicking the (highlighted) avatar again.
-    const [followingPeerId, setFollowingPeerId] = useState<number | null>(null);
-    // resolveFollowViewport is a pure function (its own file, unit-tested)
-    // — this effect is just wiring it up to setViewport/setFollowingPeerId.
-    // Deliberately re-derived from primitive x/y/zoom below, NOT from the
-    // `presencePeers` array reference: that array gets a fresh object on
-    // every awareness change at all (e.g. the leader's cursor moving),
-    // which would replay `setViewport` far more often than the leader's
-    // *viewport* actually changes, fighting any manual pan the follower
-    // does in between.
-    const followedPeer =
-        followingPeerId !== null
-            ? presencePeers.find((peer) => peer.clientId === followingPeerId)
-            : undefined;
-    const followedCenterX = followedPeer?.viewportCenter?.x;
-    const followedCenterY = followedPeer?.viewportCenter?.y;
-    const followedCenterZoom = followedPeer?.viewportCenter?.zoom;
-    useEffect(() => {
-        const result = resolveFollowViewport(followingPeerId, followedPeer);
-        if (result.action === 'clear') {
-            setFollowingPeerId(null);
-        } else if (result.action === 'apply') {
-            // setCenter (not setViewport) — it computes its OWN
-            // screen-space offset from THIS client's own container size,
-            // which is exactly why the broadcast side sends a
-            // window-size-independent center point rather than a raw
-            // transform (see viewportToCenter's doc comment).
-            setCenter(result.center.x, result.center.y, {
-                zoom: result.center.zoom,
-                duration: 300,
-            });
-        }
-        // `followedPeer` deliberately excluded from the deps array below —
-        // it's a fresh object on every presencePeers update at all (e.g.
-        // the leader's cursor moving), which would re-run this effect (and
-        // replay setCenter) on every one of those. followedCenterX/Y/Zoom
-        // are the actual trigger: primitives that only change when the
-        // followed peer's viewport center itself does. This effect always
-        // reads the current-render's `followedPeer` regardless — it's
-        // derived from the same `presencePeers` snapshot the primitives
-        // came from, so it's never stale relative to them.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-        followingPeerId,
-        followedCenterX,
-        followedCenterY,
-        followedCenterZoom,
-        setCenter,
-    ]);
 
     // Phase 5: broadcast this client's viewport center once on mount, same
     // as identity below — `handleViewportMove` only fires on an actual
@@ -2086,12 +2028,6 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 </ReactFlow>
                 <MarkerDefinitions />
                 <RemoteCursors peers={presencePeers} />
-                <PresenceAvatarBar
-                    peers={presencePeers}
-                    followingPeerId={followingPeerId}
-                    onFollow={setFollowingPeerId}
-                    onStopFollow={() => setFollowingPeerId(null)}
-                />
                 {/* Phase 5: disconnect/reconnect UX (docs/design/
                 realtime-collaboration.md §9) — editing stays enabled while
                 disconnected (Yjs queues locally and merges on reconnect,

@@ -20,7 +20,7 @@ export interface PresenceState {
     // Phase 5: the flow-space point this peer's camera is centered on, plus
     // their zoom level, broadcast on every pan/zoom (rAF-throttled, same
     // convention as `cursor`) so another client can "follow" them (see
-    // canvas.tsx's follow effect and presence-avatar-bar.tsx).
+    // top-navbar.tsx's follow effect and presence-avatar-bar.tsx).
     //
     // Deliberately flow-space (like `cursor`), NOT the raw `{x, y, zoom}`
     // transform React Flow's `getViewport`/`setViewport` use — a first

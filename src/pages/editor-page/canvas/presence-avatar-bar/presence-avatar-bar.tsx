@@ -10,18 +10,22 @@ import {
 const FALLBACK_COLOR = '#8eb7ff';
 
 /**
- * Phase 5: Figma-style "follow this person's viewport" entry point. Click
- * a peer's avatar to jump this client's camera onto theirs and keep
- * re-snapping onto it every time their viewport updates (canvas.tsx's
- * follow effect) — panning/zooming manually in between does NOT cancel
+ * Phase 5: Figma-style "follow this person's viewport" entry point. Lives
+ * in top-navbar.tsx (that owns `followingPeerId` and the follow effect —
+ * see its own doc comment for why that doesn't need to be next to the
+ * canvas element). Click a peer's avatar to jump this client's camera
+ * onto theirs and keep re-snapping onto it every time their viewport
+ * center updates — panning/zooming manually in between does NOT cancel
  * it, by explicit product decision; only clicking the (now-highlighted)
  * avatar again stops following.
  *
- * `followingPeerId` is purely local UI state owned by canvas.tsx, never
- * broadcast — nobody else needs to know who's following whom for this to
- * work, so there's nothing to add to `PresenceState` for it (unlike
- * `viewport` itself, which IS broadcast, since that's the data being
- * followed).
+ * `followingPeerId` is purely local UI state, never broadcast — nobody
+ * else needs to know who's following whom for this to work, so there's
+ * nothing to add to `PresenceState` for it (unlike `viewportCenter`
+ * itself, which IS broadcast, since that's the data being followed).
+ *
+ * No positioning of its own — a plain inline flex row of avatar chips;
+ * the caller places it (top-navbar.tsx, alongside the other nav items).
  */
 export const PresenceAvatarBar: React.FC<{
     peers: PresencePeer[];
@@ -32,7 +36,7 @@ export const PresenceAvatarBar: React.FC<{
     if (peers.length === 0) return null;
 
     return (
-        <div className="fixed right-4 top-4 z-50 flex items-center gap-1.5 rounded-lg bg-background/95 p-1.5 shadow-md">
+        <div className="flex items-center gap-1.5">
             {peers.map((peer) => {
                 const isFollowing = peer.clientId === followingPeerId;
                 const color = peer.color ?? FALLBACK_COLOR;
