@@ -1,42 +1,46 @@
 # เอกสารโครงการ ChartDB
 
-> สร้างจาก source ณ 2026-08-20T03:11:45.620Z. เอกสารนี้ครอบคลุมไฟล์ TypeScript/TSX ทุกไฟล์และ named callable ที่ AST ตรวจพบ; anonymous inline callbacks อธิบายรวมกับ owner/flow เพราะไม่มี public identity.
+> สร้างจาก source ณ 2026-08-23T16:44:59.064Z. เอกสารนี้ครอบคลุมไฟล์ TypeScript/TSX ทุกไฟล์ (client `src/` และ server `server/src/`) และ named callable ที่ AST ตรวจพบ; anonymous inline callbacks อธิบายรวมกับ owner/flow เพราะไม่มี public identity.
 
 ## สรุปเร็ว
 
-ChartDB คือ client-side React application สำหรับสร้าง ดู แก้ และแปลง database schema เป็น diagram. ข้อมูลหลักเก็บใน IndexedDB ผ่าน Dexie; ไม่ต้องส่ง credential ฐานข้อมูลให้ application. ระบบรับ schema ผ่าน metadata JSON, SQL หรือ DBML แล้ว normalize เป็น domain model เดียว ก่อน render ด้วย XYFlow และส่งออกเป็น SQL, DBML, JSON หรือรูปภาพ.
+ChartDB เป็น full-stack application สำหรับสร้าง ดู แก้ และแปลง database schema เป็น diagram แบบ real-time multiplayer. Client (`src/`) เป็น React app; ระบบรับ schema ผ่าน metadata JSON, SQL หรือ DBML แล้ว normalize เป็น domain model เดียว ก่อน render ด้วย XYFlow และส่งออกเป็น SQL, DBML, JSON หรือรูปภาพ — ส่วนนี้ไม่เปลี่ยนจากเดิม. สิ่งที่เปลี่ยนคือ persistence: **IndexedDB/Dexie ถูกถอดออกทั้งหมดแล้ว** — diagram metadata, folder-style grouping และเนื้อหาจริง (tables/relationships/areas/notes/ฯลฯ) เก็บที่ NestJS collab server (`server/`) ผ่าน Postgres แทน แก้ไขซิงค์กันแบบ real-time ด้วย Yjs (CRDT) + Hocuspocus ทุกคนที่เปิด diagram เดียวกันเห็นการแก้ของกันและกันทันที พร้อม cursor/selection/avatar presence และ follow-mode แบบ Figma. Auth เป็น opt-in: ค่าเริ่มต้นยังเปิดกว้าง (ใครมี diagram id ก็แก้ได้ — ตั้งใจสำหรับ tool แบบ anonymous) แต่ตั้ง `AUTH_MODE=azure-ad` เปิด Microsoft Entra ID sign-in ได้จริงทั้งฝั่ง REST/WebSocket/UI. localStorage ยังใช้อยู่แต่เหลือแค่ preference ต่อ browser (theme, presence display name, ฯลฯ) ไม่ใช่ diagram data แล้ว.
 
-- Source files: 553
-- Named functions/components/method contracts: 2888
-- Test files: 107
-- Runtime: React 18 + TypeScript + Vite
-- Local persistence: IndexedDB/Dexie
+- Source files: 621 (client 589, server 32)
+- Named functions/components/method contracts: 3093
+- Test files: 133
+- Client runtime: React 18 + TypeScript + Vite
+- Server runtime: NestJS + Hocuspocus (Yjs WebSocket) + Postgres (pg, plain SQL — ไม่มี ORM)
+- Diagram content persistence: server-side Postgres ผ่าน Yjs update log + periodic snapshot compaction (ไม่มี IndexedDB/Dexie แล้ว)
+- Per-browser preferences only: localStorage (theme, presence display name/color, dialog last-open, ฯลฯ)
+- Realtime sync: Yjs CRDT ผ่าน @hocuspocus/provider (client) / @hocuspocus/server (server)
+- Auth: ไม่บังคับโดย default; Azure AD (Entra ID) เปิดได้ผ่าน `AUTH_MODE=azure-ad`
 - Diagram engine: @xyflow/react
 - Validation: Zod + dialect validators
 - UI: Tailwind + Radix UI wrappers
 
-## Startup และ route
+## Startup และ route (client)
 
 1. `src/main.tsx` โหลด polyfills/i18n/styles แล้ว mount `App`.
-2. `src/app.tsx` วาง Helmet, tooltip และ router providers.
+2. `src/app.tsx` วาง Helmet, tooltip, `AuthGate` แล้วค่อย router providers — `AuthGate` (`src/auth-gate.tsx`) เป็น no-op ทั้งหมดเมื่อ `AUTH_MODE` เป็น `public` (ค่า default), แต่ wall ทั้งแอปไว้หลัง Entra sign-in (รวม `/examples`/`/templates`) เมื่อเป็น `azure-ad`.
 3. `src/router.tsx` lazy-load หน้า editor, examples, template listing/detail/clone และ not-found.
-4. Editor สร้าง provider tree สำหรับ storage, config, history, diff, canvas, keyboard, dialog และ ChartDB domain state.
-5. Diagram ID ใน URL เลือก diagram จาก IndexedDB; template routes โหลด static catalog แล้ว clone เข้า local storage.
+4. Editor สร้าง provider tree สำหรับ storage, config, local-config, history, diff, canvas, keyboard, dialog และ ChartDB domain state.
+5. Diagram ID ใน URL → `loadDiagram` เรียก REST (`GET /diagrams/:id`) หา metadata แล้วเปิด Yjs room ผ่าน Hocuspocus provider เพื่อดึงเนื้อหาจริง; template routes โหลด static catalog แล้ว seed เข้า room ใหม่ (`seedDiagramRoom`) แทนการ clone เข้า local storage แบบเดิม.
 
 ## Domain model
 
-`Diagram` เป็น aggregate root: metadata + `tables`, `relationships`, `dependencies`, `areas`, `customTypes`, `notes`. Table มี schema/name/position/fields/indexes/check constraints/view metadata. Relationship อ้าง table/field IDs พร้อม cardinality. Zod schemas validate serialized/imported data และ utility กลุ่ม `apply-ids` ป้องกัน ID collision ตอน import/clone.
+`Diagram` เป็น aggregate root: metadata (รวม `groupId?: string | null` สำหรับ folder-style grouping — ดู `DiagramGroup`) + `tables`, `relationships`, `dependencies`, `areas`, `customTypes`, `notes`. Table มี schema/name/position/fields/indexes/check constraints/view metadata. Relationship อ้าง table/field IDs พร้อม cardinality — `foreignKeyFieldId`/`computeForeignKeyFieldIds` (`db-relationship.ts`) เป็น single source of truth ว่า FK อยู่ field ไหน (many-to-one → source field, ที่เหลือ → target field). Zod schemas validate serialized/imported data — `note.order` ยอมรับ `null` แล้ว normalize เป็น `undefined` (ไฟล์เก่าบางไฟล์มี `null` แทนที่จะไม่มี key เลย) — และ utility กลุ่ม `apply-ids` ป้องกัน ID collision ตอน import/clone.
 
-## State, persistence, history
+## State, persistence, history (client)
 
-`ChartDBProvider` เป็น command layer ฝั่ง UI: ทุก add/update/delete เปลี่ยน React state, sync Dexie, emit event และบันทึก undo action เมื่อเปิด history. `StorageProvider` นิยาม IndexedDB schema/migrations และ CRUD. Read-only/template mode ใช้ no-op storage. History provider เก็บ undo/redo stacks; action replay เรียก ChartDB commands โดยปิดการสร้าง history ซ้ำ. Diff provider เปรียบเทียบ diagram snapshots แล้วเพิ่ม/เน้นสิ่งเปลี่ยน.
+`ChartDBProvider` เป็น command layer ฝั่ง UI: ทุก add/update/delete เขียนลง shared `Y.Doc` (Yjs) ภายใต้ `localOrigin` symbol ต่อ provider instance — undo/redo ใช้ `Y.UndoManager` scoped ด้วย `trackedOrigins` ตาม origin นั้น (คนละ browser tab undo ของใครของมัน ไม่ไปลบการแก้ไขของอีกฝั่ง). `StorageProvider` (REST-backed, ไม่ใช่ IndexedDB แล้ว) คุย `GET/POST/PATCH/DELETE /diagrams` และ `/diagram-groups` กับ collab server สำหรับ metadata/listing/grouping เท่านั้น — เนื้อหาจริงของ diagram (tables/relationships/ฯลฯ) ไม่เคยผ่าน REST เลย อยู่ใน Yjs room อย่างเดียว, เปิดได้ผ่าน `loadDiagramFromData`/`reconcileWithRoom`. `local-config-provider.tsx` เก็บ preference ต่อ browser (theme, presence display name — ใช้ชื่อจาก Entra account อัตโนมัติเมื่อ sign in อยู่, ไม่งั้น random "Guest NNNN") ผ่าน localStorage. Read-only/template mode ใช้ no-op storage. History provider เก็บ undo/redo stacks; action replay เรียก ChartDB commands โดยปิดการสร้าง history ซ้ำ. Diff provider เปรียบเทียบ diagram snapshots แล้วเพิ่ม/เน้นสิ่งเปลี่ยน. Presence/awareness (`usePresence`, `presence-avatar-bar`) แสดง cursor/selection/avatar ของคนอื่นที่เปิด diagram เดียวกัน พร้อม "follow" แบบ Figma (`resolve-follow-viewport.ts`, กัน cyclic follow ผ่าน `wouldCreateFollowCycle`).
 
 ## Import pipeline
 
 - Metadata: database-specific Smart Query คืน JSON -> filter/fix metadata -> import custom types/tables/fields/indexes/relationships/dependencies -> Diagram.
 - SQL: detect dialect/import method -> validator/autofix -> dialect importer parse statements -> common builders normalize domain objects. PostgreSQL dump path preprocesses dump-specific syntax.
 - DBML: preprocess unsupported array/check/table attributes -> @dbml/core parser -> validate types/checks -> map tables, fields, indexes, refs, enums -> Diagram.
-- Diagram JSON: Zod/compatibility utilities validate, migrate shape และ regenerate IDs เมื่อจำเป็น.
+- Diagram JSON: Zod/compatibility utilities validate, migrate shape และ regenerate IDs เมื่อจำเป็น — ดู `note.order`'s null-normalization ด้านบนสำหรับตัวอย่าง compatibility issue จริงที่เจอ.
 
 ## Export pipeline
 
@@ -44,23 +48,47 @@ Diagram -> target selection -> native deterministic exporter เมื่อ dia
 
 ## UI composition
 
-Editor แบ่ง canvas กับ side panel. Canvas แปลง tables/relationships/areas/notes เป็น XYFlow nodes/edges, รองรับ drag, resize, selection, zoom, layout และ relationship creation. Side panel แก้ tables, fields, indexes, checks, custom types, DBML, areas และ notes. Dialogs ครอบคลุม create/open/import/export/schema. `src/components` เป็น Radix-based primitives ไม่มี business state หลัก.
+Editor แบ่ง canvas กับ side panel. Canvas แปลง tables/relationships/areas/notes เป็น XYFlow nodes/edges, รองรับ drag, resize, selection, zoom, layout และ relationship creation; ต่ำกว่า zoom threshold หนึ่ง (LOD) table node จะ render แบบย่อ (เก็บ Handle ไว้ให้ edge ยังต่อได้ แต่ตัด text/icon ออก) เพื่อ performance ตอน diagram ใหญ่มาก. Top navbar มี presence avatar bar (follow คนอื่นได้). Side panel แก้ tables, fields, indexes, checks, custom types, DBML, areas และ notes. Dialogs ครอบคลุม create/open/import/export/schema — open-diagram dialog รองรับ folder-style grouping (สร้าง/rename/ลบ group, ย้าย diagram เข้า/ออก group, collapse/expand group header). `src/components` เป็น Radix-based primitives ไม่มี business state หลัก.
+
+## Realtime collaboration server (server/src/)
+
+NestJS app แยกจาก client repo คนละ package (`server/package.json`) แต่ไล่มาด้วยกัน — build ด้วย `npm run build` (tsc, module: CommonJS), dev ด้วย `npm run dev` (`tsx watch`; ระวัง: esbuild ไม่ emit decorator metadata ให้ implicit type-based DI ครบทุกกรณี ต้องใช้ `@Inject(Token)` explicit สำหรับ param ที่เจอปัญหา — เจอมาแล้ว 2 จุด: `WsUpgradeService`'s `HttpAdapterHost`, `EntraAuthGuard`'s `Reflector`).
+
+- **`collab/`**: `WsUpgradeService` ผูก WebSocket upgrade เข้ากับ Nest's HTTP server เอง (raw `httpServer.on('upgrade', ...)` — ไม่ผ่าน Nest routing/guard pipeline เลย, เหมือน `ServeStaticModule`'s static serving) แล้วส่งต่อให้ `@hocuspocus/server`. `persistence-extension.ts` เป็น Hocuspocus `Extension` เขียนเอง (ไม่ใช้ `@hocuspocus/extension-database`) เพื่อคุม compaction เอง: ทุก sync-update message → `appendUpdate` (INSERT `yjs_updates`) synchronous ก่อน Hocuspocus apply/broadcast (กัน update หายถ้า server crash), Hocuspocus's `onStoreDocument` (debounce 2s, ceiling 10s เสมอแม้แก้รัวๆ ต่อเนื่อง) → `storeSnapshotAndPrune` เก็บ full-state ลง `yjs_snapshots` แล้ว `DELETE` แถวที่ compact ไปแล้วออกจาก `yjs_updates`.
+- **`db/`**: `pg` pool ตรง ๆ, ไม่มี ORM. Schema หลัก: `collab_diagrams`, `collab_diagram_groups`, `yjs_updates`, `yjs_snapshots` — ตั้งชื่อ prefix `collab_`/`yjs_` เจตนา (ไม่ใช้ `diagrams`/`diagram_groups` เฉย ๆ) เพราะ Postgres instance เดียวกันมีตารางเก่าตกค้างจาก branch `feature/collaboration_v2` (TypeORM, ยกเลิกไปแล้ว) ที่ใช้ชื่อนั้นอยู่ก่อน — `CREATE TABLE IF NOT EXISTS` เงียบ ๆ ไม่สร้างทับถ้าชื่อชนกัน.
+- **`diagrams/`, `diagram-groups/`**: REST controllers ธรรมดา คุยกับ `db/` โดยตรง ไม่ผ่าน Hocuspocus.
+- **`auth/`**: Azure AD (Entra ID) — opt-in ผ่าน `AUTH_MODE=azure-ad` env var (explicit, ไม่ใช่ implicit-by-credential-presence). `EntraAuthGuard` (NestJS `APP_GUARD`) คุม REST, ยกเว้น `@Public()` routes (`/health`, `/config.js`). Hocuspocus's `onAuthenticate` hook คุม WebSocket แยกต่างหาก (จำเป็น — REST guard ไม่ครอบ WS upgrade path เลย). Token verify ผ่าน `jsonwebtoken`/`jwks-rsa` (ไม่ใช่ `jose` — เช็คแล้วว่า `jose`@6 เป็น ESM-only จะพังใต้ CommonJS `dist/` build), จำกัด `aud` ให้ตรง API audience เท่านั้น (ไม่รับ bare client id กัน ID token สวมรอย) + เช็ค `scp` มี `access_as_user`.
+- **`config-js.controller.ts`**: `GET /config.js` แบบ dynamic (ไม่ใช่ static file) reproduce runtime env-override ของ nginx image เดิม สำหรับ deploy แบบ single-container (`Dockerfile.combined`) ที่ไม่มี nginx แล้ว — ตั้ง `Cache-Control: no-store` เจตนา (เจอปัญหาจริง: Cloudflare cache endpoint นี้ไว้เพราะนามสกุล `.js`, ทำให้ config ใหม่ไม่มีผลจนกว่าจะ purge cache).
 
 ## Configuration และ deployment
 
-Vite อ่าน build-time env; `public/config.js` และ container entrypoint รองรับ runtime override สำหรับ API endpoint/model/analytics. Nginx template serve SPA. คำสั่งหลัก: `npm run dev`, `npm test`, `npm run lint`, `npm run build`.
+**Client**: Vite อ่าน build-time `VITE_*` env; `window.env`/`/config.js` (nginx template เดิม หรือ NestJS's `ConfigJsController` ใน single-container setup) รองรับ runtime override สำหรับ OpenAI settings, analytics, `AUTH_MODE`, `ENTRA_TENANT_ID`/`ENTRA_CLIENT_ID`/`ENTRA_API_SCOPE`, `COLLAB_WS_URL`. ไม่ตั้ง `COLLAB_WS_URL` เลย → production build derive เป็น same-origin `wss://<host เดียวกับหน้าเว็บ>` อัตโนมัติ (`wsUrlForOrigin`), dev mode ยัง default `ws://localhost:1234` เหมือนเดิม.
+
+**Deploy มี 2 แบบ**: (1) `Dockerfile` เดิม — nginx serve client เท่านั้น, server แยก process/container ต่างหาก (cross-origin, ต้องตั้ง `WEBSOCKET_ORIGIN_ALLOWLIST`/CORS เอง) — นี่คือ image ที่ CI (`.github/workflows/publish.yaml`) ยัง build/push อยู่ ไม่ถูกแตะ. (2) `Dockerfile.combined` (ใหม่) — NestJS serve client's built `dist/` เอง (`ServeStaticModule`, ทำ 3-stage build) client+API domain เดียวกัน ไม่ต้องมี nginx; ถ้าตั้ง `WEBSOCKET_ORIGIN_ALLOWLIST` ต้องใส่ domain ตัวเองด้วย ไม่งั้น REST ทำงานปกติแต่ WebSocket จะเงียบ ๆ 403 (คนละ error path กับ REST). `docker-compose.yml` (repo root) รวม app (Dockerfile.combined) + Postgres สำหรับ deploy คนเดียว — ตัวแปร config ทั้งหมดผ่าน `.env` (ดู comment หัวไฟล์).
+
+Server ต้องมี `DATABASE_URL` เสมอ (ไม่มี in-memory mode) — schema migrate อัตโนมัติตอน server start. คำสั่งหลัก client: `npm run dev`, `npm test`, `npm run lint`, `npm run build`. Server (ใน `server/`): `npm run dev` (tsx watch), `npm test` (vitest, `pretest` รัน `npm run build` เองก่อนเพราะ integration test spawn compiled `dist/main.js` จริง — decorator metadata ไม่รอด esbuild transform ของ vitest).
 
 ## ข้อควรรู้ก่อนแก้โค้ด
 
 - Domain object links ใช้ IDs; เปลี่ยน ID ต้อง remap relationship/index/dependency references ครบ.
-- Mutation ต้องรักษา React state, IndexedDB และ undo/redo ให้ตรงกัน.
+- Diagram content mutation ทั้งหมดต้องผ่าน shared `Y.Doc` (ไม่ใช่ React state ตรง ๆ) ถึงจะ sync ข้าม client และคง undo/redo ให้ตรงกัน — เขียน state ตรง ๆ จะโดน Yjs observer projection ทับเงียบ ๆ.
 - Database capability ต่างกัน; เช็ก `database-capabilities.ts` ก่อนเพิ่ม import/export feature.
 - SQL identifier quoting, schema qualification, arrays, defaults และ composite keys มี regression tests จำนวนมาก.
 - Static templates/locales มีขนาดใหญ่แต่ไม่ใช่ runtime logic; reference ด้านล่างยังลงทะเบียนทุกไฟล์.
+- **Server-side**: อย่าใช้ implicit type-based NestJS DI กับ param ที่ dev mode (`tsx`) พังบ่อย — ใช้ `@Inject(Token)` explicit เสมอถ้าไม่ชัวร์. ตารางชื่อ `diagrams`/`diagram_groups`/`users` เฉย ๆ ใน Postgres instance นี้เป็นของเก่าตกค้าง คนละ schema/ไม่เกี่ยวกับโค้ดนี้ — อย่าไปใช้.
+- Guard ระดับ Nest (`APP_GUARD`) ไม่ครอบ raw HTTP upgrade handler หรือ `ServeStaticModule`'s middleware — endpoint ใหม่ที่ต้องบังคับ auth ต้องเช็คว่าจริง ๆ ผ่าน Nest controller pipeline หรือเปล่าก่อนเชื่อว่า guard ป้องกันให้.
 
 ## Function และ file reference
 
 Signature ตัด body และย่อเมื่อยาวเกิน 220 ตัวอักษร. เลขบรรทัดอ้าง source ณ เวลาสร้างเอกสาร.
+
+### `src/__tests__/auth-gate.test.tsx`
+
+#### `src/__tests__/auth-gate.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
 ### `src/app.tsx`
 
@@ -70,7 +98,19 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 8 | `App` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 9 | `App` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+
+### `src/auth-gate.tsx`
+
+#### `src/auth-gate.tsx`
+
+บทบาท: client: gates the whole app behind Entra sign-in when AUTH_MODE=azure-ad. Exports: `AuthGate`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 32 | `AuthGate` | component | React component แสดง UI และประสาน props/context/event | `({ children, authMode = AUTH_MODE, msalConfigured = isMsalConfigured, }) =>` |
+| 50 | `AuthMisconfiguredPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 64 | `EntraGate` | component | React component แสดง UI และประสาน props/context/event | `({ children }) =>` |
 
 ### `src/components/accordion`
 
@@ -954,80 +994,125 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 ### `src/context/chartdb-context`
 
+#### `src/context/chartdb-context/__tests__/chartdb-provider.collab.integration.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 57 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> { return new Promise((resolve, reject) => { const server = createServer(); server.listen(0, () => { const port = (server.address() as { port: number }).port; server.close(() ...` |
+| 68 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number): Promise<boolean> {` |
+| 85 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 88 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess(): Promise<TestServer \| null> {` |
+| 96 | `startServerProcessOnPort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcessOnPort( port: number ): Promise<TestServer \| null> { const serverDir = join(process.cwd(), 'server'); const child = spawn('node', [join(serverDir, 'dist/main.js')], { cwd: serverDir, ...` |
+| 138 | `registerTestDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function registerTestDiagram(port: number, diagramId: string) { const res = await fetch(\`http://localhost:${port}/diagrams\`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringif...` |
+| 155 | `makeMockDiff` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `function makeMockDiff(): DiffContext {` |
+| 191 | `baseTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBTable>): DBTable =>` |
+| 214 | `renderClient` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderClient() { const wrapper = ({ children }: { children: React.ReactNode }) => (` |
+| 215 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+| 364 | `ids` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t: DBTable) => t.id` |
+| 461 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t: DBTable) => t.id === 'table-1'` |
+| 797 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t: DBTable) => t.id === 'table-1'` |
+| 894 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => reject(new Error` |
+
+#### `src/context/chartdb-context/__tests__/chartdb-provider.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 34 | `makeMockDiff` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `function makeMockDiff(): DiffContext { return { newDiagram: null, originalDiagram: null, diffMap: new Map(), hasDiff: false, isSummaryOnly: false, relationshipIdMap: new Map(), calculateDiff: vi.fn(() => ({ foundDiff:...` |
+| 70 | `renderChartDB` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderChartDB(storage: StorageContext, diff = makeMockDiff()) {` |
+| 71 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+| 82 | `renderChartDBWithHistory` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderChartDBWithHistory( storage: StorageContext, diff = makeMockDiff() ) {` |
+| 86 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+| 105 | `baseTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBTable>): DBTable =>` |
+| 119 | `baseRelationship` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( overrides: Partial<DBRelationship> ): DBRelationship =>` |
+| 136 | `baseDependency` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBDependency>): DBDependency =>` |
+| 144 | `baseArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<Area>): Area =>` |
+| 268 | `updatePromise` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(current) => current.filter((` |
+| 610 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
+| 611 | `byId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id: string) =>` |
+| 704 | `after` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
+| 949 | `reverted` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(n) => n.id === not` |
+| 973 | `beforeB` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(n) =>` |
+| 981 | `afterB` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(n) =>` |
+| 1199 | `beforeB` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === typ` |
+
 #### `src/context/chartdb-context/chartdb-context.tsx`
 
 บทบาท: React context/provider และ shared state. Exports: `AddFieldEvent`, `ChartDBContext`, `ChartDBEvent`, `ChartDBEventBase`, `ChartDBEventType`, `CreateTableEvent`, `LoadDiagramEvent`, `RemoveFieldEvent`, `RemoveTableEvent`, `UpdateTableEvent`, `chartDBContext`.
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 85 | `highlightCustomTypeId` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(id?: string) => void` |
-| 88 | `updateDiagramId` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(id: string) => Promise<void>` |
-| 89 | `updateDiagramName` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( name: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 93 | `loadDiagram` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Diagram \| undefined>` |
-| 94 | `loadDiagramFromData` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagram: Diagram) => void` |
-| 95 | `updateDiagramUpdatedAt` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
-| 96 | `clearDiagramData` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
-| 97 | `deleteDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
-| 98 | `updateDiagramData` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( diagram: Diagram, options?: { forceUpdateStorage?: boolean } ) => Promise<void>` |
-| 104 | `updateDatabaseType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(databaseType: DatabaseType) => Promise<void>` |
-| 105 | `updateDatabaseEdition` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(databaseEdition?: DatabaseEdition) => Promise<void>` |
-| 108 | `createTable` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( attributes?: Partial<Omit<DBTable, 'id'>> ) => Promise<DBTable>` |
-| 111 | `addTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( table: DBTable, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 115 | `addTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tables: DBTable[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 119 | `getTable` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBTable \| null` |
-| 120 | `removeTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 124 | `removeTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 128 | `updateTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, table: Partial<DBTable>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 133 | `updateTablesState` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[], options?: { updateHistory: boolean; forceOverride?: boolean } ) => Promise<void>` |
-| 139 | `getField` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, fieldId: string) => DBField \| null` |
-| 140 | `updateField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, fieldId: string, field: Partial<DBField>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 146 | `removeField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, fieldId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 151 | `createField` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBField>` |
-| 152 | `addField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, field: DBField, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 159 | `createIndex` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBIndex>` |
-| 160 | `addIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, index: DBIndex, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 165 | `getIndex` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, indexId: string) => DBIndex \| null` |
-| 166 | `removeIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, indexId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 171 | `updateIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, indexId: string, index: Partial<DBIndex>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 179 | `createCheckConstraint` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBCheckConstraint>` |
-| 180 | `addCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraint: DBCheckConstraint, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 185 | `removeCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraintId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 190 | `updateCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraintId: string, constraint: Partial<DBCheckConstraint>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 198 | `createRelationship` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(params: { sourceTableId: string; targetTableId: string; sourceFieldId: string; targetFieldId: string; }) => Promise<DBRelationship>` |
-| 204 | `addRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( relationship: DBRelationship, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 208 | `addRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( relationships: DBRelationship[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 212 | `getRelationship` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBRelationship \| null` |
-| 213 | `removeRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 217 | `removeRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 221 | `updateRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, relationship: Partial<DBRelationship>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 228 | `createDependency` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(params: { tableId: string; dependentTableId: string; }) => Promise<DBDependency>` |
-| 232 | `addDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( dependency: DBDependency, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 236 | `addDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( dependencies: DBDependency[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 240 | `getDependency` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBDependency \| null` |
-| 241 | `removeDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 245 | `removeDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 249 | `updateDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, dependency: Partial<DBDependency>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 256 | `createArea` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(attributes?: Partial<Omit<Area, 'id'>>) => Promise<Area>` |
-| 257 | `addArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( area: Area, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 261 | `addAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( areas: Area[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 265 | `getArea` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => Area \| null` |
-| 266 | `removeArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 270 | `removeAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 274 | `updateArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, area: Partial<Area>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 281 | `createNote` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(attributes?: Partial<Omit<Note, 'id'>>) => Promise<Note>` |
-| 282 | `addNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( note: Note, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 286 | `addNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( notes: Note[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 290 | `getNote` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => Note \| null` |
-| 291 | `removeNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 295 | `removeNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 299 | `updateNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, note: Partial<Note>, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 306 | `createCustomType` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( attributes?: Partial<Omit<DBCustomType, 'id'>> ) => Promise<DBCustomType>` |
-| 309 | `addCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( customType: DBCustomType, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 313 | `addCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( customTypes: DBCustomType[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 317 | `getCustomType` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBCustomType \| null` |
-| 318 | `removeCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
-| 322 | `removeCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
-| 326 | `updateCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, customType: Partial<DBCustomType>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 105 | `highlightCustomTypeId` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(id?: string) => void` |
+| 108 | `updateDiagramId` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(id: string) => Promise<void>` |
+| 109 | `updateDiagramName` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( name: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 113 | `loadDiagram` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Diagram \| undefined>` |
+| 114 | `loadDiagramFromData` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagram: Diagram) => void` |
+| 115 | `updateDiagramUpdatedAt` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
+| 116 | `clearDiagramData` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
+| 117 | `deleteDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => Promise<void>` |
+| 118 | `updateDiagramData` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( diagram: Diagram, options?: { forceUpdateStorage?: boolean } ) => Promise<void>` |
+| 124 | `updateDatabaseType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(databaseType: DatabaseType) => Promise<void>` |
+| 125 | `updateDatabaseEdition` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(databaseEdition?: DatabaseEdition) => Promise<void>` |
+| 128 | `createTable` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( attributes?: Partial<Omit<DBTable, 'id'>> ) => Promise<DBTable>` |
+| 131 | `addTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( table: DBTable, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 135 | `addTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tables: DBTable[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 139 | `getTable` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBTable \| null` |
+| 140 | `removeTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 144 | `removeTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 148 | `updateTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, table: Partial<DBTable>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 153 | `updateTablesState` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[], options?: { updateHistory: boolean; forceOverride?: boolean } ) => Promise<void>` |
+| 159 | `getField` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, fieldId: string) => DBField \| null` |
+| 160 | `updateField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, fieldId: string, field: Partial<DBField>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 166 | `removeField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, fieldId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 171 | `createField` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBField>` |
+| 172 | `addField` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, field: DBField, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 179 | `createIndex` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBIndex>` |
+| 180 | `addIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, index: DBIndex, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 185 | `getIndex` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, indexId: string) => DBIndex \| null` |
+| 186 | `removeIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, indexId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 191 | `updateIndex` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, indexId: string, index: Partial<DBIndex>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 199 | `createCheckConstraint` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(tableId: string) => Promise<DBCheckConstraint>` |
+| 200 | `addCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraint: DBCheckConstraint, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 205 | `removeCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraintId: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 210 | `updateCheckConstraint` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( tableId: string, constraintId: string, constraint: Partial<DBCheckConstraint>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 218 | `createRelationship` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(params: { sourceTableId: string; targetTableId: string; sourceFieldId: string; targetFieldId: string; }) => Promise<DBRelationship>` |
+| 224 | `addRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( relationship: DBRelationship, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 228 | `addRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( relationships: DBRelationship[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 232 | `getRelationship` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBRelationship \| null` |
+| 233 | `removeRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 237 | `removeRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 241 | `updateRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, relationship: Partial<DBRelationship>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 248 | `createDependency` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(params: { tableId: string; dependentTableId: string; }) => Promise<DBDependency>` |
+| 252 | `addDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( dependency: DBDependency, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 256 | `addDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( dependencies: DBDependency[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 260 | `getDependency` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBDependency \| null` |
+| 261 | `removeDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 265 | `removeDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 269 | `updateDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, dependency: Partial<DBDependency>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 276 | `createArea` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(attributes?: Partial<Omit<Area, 'id'>>) => Promise<Area>` |
+| 277 | `addArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( area: Area, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 281 | `addAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( areas: Area[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 285 | `getArea` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => Area \| null` |
+| 286 | `removeArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 290 | `removeAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 294 | `updateArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, area: Partial<Area>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 301 | `createNote` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(attributes?: Partial<Omit<Note, 'id'>>) => Promise<Note>` |
+| 302 | `addNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( note: Note, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 306 | `addNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( notes: Note[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 310 | `getNote` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => Note \| null` |
+| 311 | `removeNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 315 | `removeNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 319 | `updateNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, note: Partial<Note>, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 326 | `createCustomType` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( attributes?: Partial<Omit<DBCustomType, 'id'>> ) => Promise<DBCustomType>` |
+| 329 | `addCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( customType: DBCustomType, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 333 | `addCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( customTypes: DBCustomType[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 337 | `getCustomType` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => DBCustomType \| null` |
+| 338 | `removeCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, options?: { updateHistory: boolean } ) => Promise<void>` |
+| 342 | `removeCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( ids: string[], options?: { updateHistory: boolean } ) => Promise<void>` |
+| 346 | `updateCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( id: string, customType: Partial<DBCustomType>, options?: { updateHistory: boolean } ) => Promise<void>` |
 
 #### `src/context/chartdb-context/chartdb-provider.tsx`
 
@@ -1035,95 +1120,99 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 43 | `ChartDBProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, diagram, readonly: readonlyProp }) =>` |
-| 80 | `diffCalculatedHandler` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: DiffCalculatedEvent) =>` |
-| 100 | `defaultSchemaName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => defaultS` |
-| 105 | `readonly` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => readonly` |
-| 110 | `schemas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 138 | `db` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (readonl` |
-| 143 | `currentDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => ({` |
-| 174 | `clearDiagramData` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
-| 199 | `deleteDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
-| 225 | `updateDiagramUpdatedAt` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
-| 235 | `updateDatabaseType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (databaseType) => {` |
-| 249 | `updateDatabaseEdition` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (databaseEdition) => {` |
-| 263 | `updateDiagramId` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id) => {` |
-| 272 | `updateDiagramName` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (name, options = { updateHistory: true }) => {` |
-| 302 | `addTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (tablesToAdd: DBTable[], options = { updateHistory: true }) => {` |
-| 331 | `addTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (table: DBTable, options = { updateHistory: true }) => {` |
-| 338 | `createTable` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
-| 380 | `getTable` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => tables.f` |
-| 385 | `removeTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids, options) => {` |
-| 387 | `tables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
-| 388 | `relationshipsToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(relationship) =>` |
-| 394 | `dependenciesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(dependency) =>` |
-| 465 | `removeTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 472 | `updateTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, table: Partial<DBTable>, options = { updateHistory: true } ) => {` |
-| 515 | `updateTablesState` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[], options = { updateHistory: true, forceOverride: false } ) => {` |
-| 520 | `updateTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(prevTables: DBTable[]) =>` |
-| 528 | `updatedTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(t) => t.id === prevTable.id` |
-| 543 | `tablesToDelete` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) => !updatedTables.s` |
-| 547 | `relationshipsToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(relationship) =>` |
-| 555 | `dependenciesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(dependency) =>` |
-| 648 | `getField` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, fieldId: string) => {` |
-| 656 | `updateField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, fieldId: string, field: Partial<DBField>, options = { updateHistory: true } ) => {` |
-| 665 | `updateTableFn` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table: DBTable) =>` |
-| 723 | `removeField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, fieldId: string, options = { updateHistory: true } ) => {` |
-| 729 | `updateTableFn` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table: DBTable) =>` |
-| 801 | `addField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, field: DBField, options = { updateHistory: true } ) => {` |
-| 867 | `createField` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
-| 887 | `getIndex` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, indexId: string) => {` |
-| 895 | `addIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, index: DBIndex, options = { updateHistory: true } ) => {` |
-| 939 | `removeIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, indexId: string, options = { updateHistory: true } ) => {` |
-| 995 | `createIndex` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
-| 1013 | `updateIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, indexId: string, index: Partial<DBIndex>, options = { updateHistory: true } ) => {` |
-| 1067 | `addCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraint: DBCheckConstraint, options = { updateHistory: true } ) => {` |
-| 1124 | `createCheckConstraint` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
-| 1140 | `removeCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraintId: string, options = { updateHistory: true } ) => {` |
-| 1148 | `prevConstraint` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(c) => c.id === constraintI` |
-| 1200 | `updateCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraintId: string, constraint: Partial<DBCheckConstraint>, options = { updateHistory: true } ) => {` |
-| 1209 | `prevConstraint` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(c) => c.id === constraintI` |
-| 1273 | `addRelationships` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( relationships: DBRelationship[], options = { updateHistory: true } ) => {` |
-| 1307 | `addRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( relationship: DBRelationship, options = { updateHistory: true } ) => {` |
-| 1317 | `createRelationship` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async ({ sourceTableId, targetTableId, sourceFieldId, targetFieldId, }) => {` |
-| 1328 | `sourceField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field: { id: string }) => field.id === sourceF` |
-| 1358 | `getRelationship` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) =>` |
-| 1365 | `removeRelationships` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
-| 1411 | `removeRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 1419 | `updateRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, relationship: Partial<DBRelationship>, options = { updateHistory: true } ) => {` |
-| 1465 | `addDependencies` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( dependencies: DBDependency[], options = { updateHistory: true } ) => {` |
-| 1499 | `addDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (dependency: DBDependency, options = { updateHistory: true }) => {` |
-| 1506 | `createDependency` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async ({ tableId, dependentTableId }) => {` |
-| 1527 | `getDependency` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) =>` |
-| 1533 | `removeDependencies` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
-| 1577 | `removeDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 1584 | `updateDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, dependency: Partial<DBDependency>, options = { updateHistory: true } ) => {` |
-| 1624 | `addAreas` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (areas: Area[], options = { updateHistory: true }) => {` |
-| 1648 | `addArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (area: Area, options = { updateHistory: true }) => {` |
-| 1655 | `createArea` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
-| 1675 | `getArea` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => areas.fi` |
-| 1680 | `removeAreas` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
-| 1708 | `removeArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 1715 | `updateArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, area: Partial<Area>, options = { updateHistory: true } ) => {` |
-| 1748 | `addNotes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (notes: Note[], options = { updateHistory: true }) => {` |
-| 1772 | `addNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (note: Note, options = { updateHistory: true }) => {` |
-| 1779 | `createNote` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
-| 1799 | `getNote` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => notes.fi` |
-| 1804 | `removeNotes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
-| 1832 | `removeNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 1839 | `updateNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, note: Partial<Note>, options = { updateHistory: true } ) => {` |
-| 1871 | `highlightCustomTypeId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id?: string) => setHighl` |
-| 1876 | `highlightedCustomType` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 1882 | `loadDiagramFromData` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(diagram) => {` |
-| 1924 | `updateDiagramData` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagram, options) => {` |
-| 1934 | `loadDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId: string) => {` |
-| 1955 | `getCustomType` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => customTy` |
-| 1960 | `addCustomTypes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( customTypes: DBCustomType[], options = { updateHistory: true } ) => {` |
-| 1988 | `addCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (customType: DBCustomType, options = { updateHistory: true }) => {` |
-| 1995 | `createCustomType` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
-| 2012 | `removeCustomTypes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids, options = { updateHistory: true }) => {` |
-| 2053 | `removeCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
-| 2060 | `updateCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, customType: Partial<DBCustomType>, options = { updateHistory: true } ) => {` |
+| 63 | `ChartDBProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, diagram, readonly: readonlyProp }) =>` |
+| 209 | `gateWrite` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `<Args extends unknown[]>(fn: (...args: Args) => Promise<void>) => {` |
+| 268 | `decodeNote` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 269 | `decodeCustomType` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 271 | `decodeRelationship` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 273 | `decodeDependency` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 275 | `decodeArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 352 | `diffCalculatedHandler` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: DiffCalculatedEvent) =>` |
+| 399 | `defaultSchemaName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => defaultS` |
+| 404 | `readonly` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => readonly` |
+| 409 | `schemas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 437 | `db` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (readonl` |
+| 442 | `currentDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => ({` |
+| 485 | `clearCollabDoc` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 503 | `clearDiagramData` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
+| 515 | `deleteDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
+| 541 | `updateDiagramUpdatedAt` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
+| 547 | `updateDatabaseType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (databaseType) => {` |
+| 561 | `updateDatabaseEdition` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (databaseEdition) => {` |
+| 584 | `updateDiagramId` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id) => {` |
+| 601 | `updateDiagramName` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (name) => {` |
+| 614 | `addTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (tablesToAdd: DBTable[], options = { updateHistory: true }) => {` |
+| 639 | `addTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (table: DBTable, options = { updateHistory: true }) => {` |
+| 646 | `createTable` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
+| 695 | `getTable` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => tables.f` |
+| 712 | `getLiveTable` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) =>` |
+| 718 | `removeTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids, options) => {` |
+| 763 | `removeTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 770 | `updateTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, table: Partial<DBTable>, options = { updateHistory: true } ) => {` |
+| 814 | `updateTablesState` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( updateFn: (tables: DBTable[]) => PartialExcept<DBTable, 'id'>[], options = { updateHistory: true, forceOverride: false } ) => {` |
+| 819 | `updateTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(prevTables: DBTable[]) =>` |
+| 827 | `updatedTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(t) => t.id === prevTable.id` |
+| 850 | `tablesToDelete` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) => !updatedTables.s` |
+| 866 | `deletedTableIds` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(t) =>` |
+| 897 | `getField` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, fieldId: string) => {` |
+| 905 | `updateField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, fieldId: string, field: Partial<DBField>, options = { updateHistory: true } ) => {` |
+| 922 | `updateTableFn` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table: DBTable) =>` |
+| 973 | `removeField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, fieldId: string, options = { updateHistory: true } ) => {` |
+| 981 | `updateTableFn` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table: DBTable) =>` |
+| 1026 | `addField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, field: DBField, options = { updateHistory: true } ) => {` |
+| 1070 | `createField` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
+| 1096 | `getIndex` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(tableId: string, indexId: string) => {` |
+| 1104 | `addIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, index: DBIndex, options = { updateHistory: true } ) => {` |
+| 1137 | `removeIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, indexId: string, options = { updateHistory: true } ) => {` |
+| 1172 | `createIndex` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
+| 1196 | `updateIndex` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, indexId: string, index: Partial<DBIndex>, options = { updateHistory: true } ) => {` |
+| 1232 | `addCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraint: DBCheckConstraint, options = { updateHistory: true } ) => {` |
+| 1269 | `createCheckConstraint` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (tableId: string) => {` |
+| 1285 | `removeCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraintId: string, options = { updateHistory: true } ) => {` |
+| 1322 | `updateCheckConstraint` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( tableId: string, constraintId: string, constraint: Partial<DBCheckConstraint>, options = { updateHistory: true } ) => {` |
+| 1363 | `addRelationships` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( relationships: DBRelationship[], options = { updateHistory: true } ) => {` |
+| 1384 | `addRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( relationship: DBRelationship, options = { updateHistory: true } ) => {` |
+| 1394 | `createRelationship` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async ({ sourceTableId, targetTableId, sourceFieldId, targetFieldId, }) => {` |
+| 1403 | `sourceField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field: { id: string }) => field.id === sourceF` |
+| 1407 | `targetField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field: { id: string }) => field.id === targetF` |
+| 1453 | `getRelationship` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) =>` |
+| 1460 | `removeRelationships` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
+| 1479 | `removeRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 1487 | `updateRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, relationship: Partial<DBRelationship>, options = { updateHistory: true } ) => {` |
+| 1512 | `addDependencies` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( dependencies: DBDependency[], options = { updateHistory: true } ) => {` |
+| 1533 | `addDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (dependency: DBDependency, options = { updateHistory: true }) => {` |
+| 1540 | `createDependency` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async ({ tableId, dependentTableId }) => {` |
+| 1573 | `getDependency` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) =>` |
+| 1579 | `removeDependencies` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
+| 1598 | `removeDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 1605 | `updateDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, dependency: Partial<DBDependency>, options = { updateHistory: true } ) => {` |
+| 1630 | `addAreas` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (areas: Area[], options = { updateHistory: true }) => {` |
+| 1645 | `addArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (area: Area, options = { updateHistory: true }) => {` |
+| 1652 | `createArea` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
+| 1676 | `getArea` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => areas.fi` |
+| 1681 | `removeAreas` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
+| 1696 | `removeArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 1703 | `updateArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, area: Partial<Area>, options = { updateHistory: true } ) => {` |
+| 1723 | `addNotes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (notes: Note[], options = { updateHistory: true }) => {` |
+| 1742 | `addNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (note: Note, options = { updateHistory: true }) => {` |
+| 1749 | `createNote` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
+| 1769 | `getNote` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => notes.fi` |
+| 1774 | `removeNotes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids: string[], options = { updateHistory: true }) => {` |
+| 1790 | `removeNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 1797 | `updateNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, note: Partial<Note>, options = { updateHistory: true } ) => {` |
+| 1819 | `highlightCustomTypeId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id?: string) => setHighl` |
+| 1824 | `highlightedCustomType` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 1830 | `loadDiagramFromData` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(diagram) => {` |
+| 1918 | `reconcileWithRoom` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 2061 | `updateDiagramData` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagram, options) => {` |
+| 2071 | `loadDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId: string) => {` |
+| 2092 | `getCustomType` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string) => customTy` |
+| 2097 | `addCustomTypes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( customTypes: DBCustomType[], options = { updateHistory: true } ) => {` |
+| 2122 | `addCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (customType: DBCustomType, options = { updateHistory: true }) => {` |
+| 2129 | `createCustomType` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async (attributes) => {` |
+| 2150 | `removeCustomTypes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (ids, options = { updateHistory: true }) => {` |
+| 2170 | `removeCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id: string, options = { updateHistory: true }) => {` |
+| 2177 | `updateCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ( id: string, customType: Partial<DBCustomType>, options = { updateHistory: true } ) => {` |
 
 ### `src/context/config-context`
 
@@ -1387,40 +1476,12 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 7 | `HistoryProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
-| 50 | `redoActionHandlers` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(): RedoUndoActionHandlers => ({` |
-| 211 | `undoActionHandlers` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(): RedoUndoActionHandlers => ({` |
-| 384 | `undo` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
-| 399 | `redo` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
-
-#### `src/context/history-context/redo-undo-action.ts`
-
-บทบาท: React context/provider และ shared state. Exports: `RedoActionData`, `RedoUndoAction`, `RedoUndoActionHandlers`, `UndoActionData`.
-
-ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
-
-#### `src/context/history-context/redo-undo-stack-context.tsx`
-
-บทบาท: React context/provider และ shared state. Exports: `RedoUndoStackContext`, `redoUndoStackContext`.
-
-| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
-|---:|---|---|---|---|
-| 8 | `addRedoAction` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(action: RedoUndoAction) => void` |
-| 9 | `addUndoAction` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(action: RedoUndoAction) => void` |
-| 10 | `resetRedoStack` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => void` |
-| 11 | `resetUndoStack` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `() => void` |
-
-#### `src/context/history-context/redo-undo-stack-provider.tsx`
-
-บทบาท: React context/provider และ shared state. Exports: `RedoUndoStackProvider`.
-
-| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
-|---:|---|---|---|---|
-| 6 | `RedoUndoStackProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
-| 12 | `addRedoAction` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(action) => {` |
-| 19 | `addUndoAction` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(action) => {` |
-| 26 | `resetRedoStack` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
-| 31 | `resetUndoStack` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 30 | `snapshotDoc` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function snapshotDoc(doc: Y.Doc): string { return JSON.stringify( COLLECTION_NAMES.map((name) => doc.getMap(name).toJSON()) ); }` |
+| 36 | `HistoryProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
+| 54 | `update` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 84 | `runWithStaleCheck` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(pop: () => unknown, title: string) => {` |
+| 102 | `undo` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 106 | `redo` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 ### `src/context/keyboard-shortcuts-context`
 
@@ -1501,6 +1562,24 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 ### `src/context/local-config-context`
 
+#### `src/context/local-config-context/__tests__/initial-display-name.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 13 | `mockGetAllAccounts` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 24 | `AUTH_MODE` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `get AUTH_MODE() {` |
+
+#### `src/context/local-config-context/initial-display-name.ts`
+
+บทบาท: React context/provider และ shared state. Exports: `displayNameKey`, `initialDisplayName`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 11 | `randomDisplayName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 28 | `initialDisplayName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function initialDisplayName(): string { if (AUTH_MODE === 'azure-ad') { const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0]; if (account?.name \|\| account?.username) { return ac...` |
+
 #### `src/context/local-config-context/local-config-context.tsx`
 
 บทบาท: React context/provider และ shared state. Exports: `LocalConfigContext`, `ScrollAction`.
@@ -1515,6 +1594,8 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 24 | `setGithubRepoOpened` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(githubRepoOpened: boolean) => void` |
 | 27 | `setStarUsDialogLastOpen` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(lastOpen: number) => void` |
 | 30 | `setShowMiniMapOnCanvas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(showMiniMapOnCanvas: boolean) => void` |
+| 38 | `setDisplayName` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(displayName: string) => void` |
+| 40 | `setPresenceColor` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(color: string) => void` |
 
 #### `src/context/local-config-context/local-config-provider.tsx`
 
@@ -1522,9 +1603,15 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 15 | `LocalConfigProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
+| 18 | `LocalConfigProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
 
 ### `src/context/storage-context`
+
+#### `src/context/storage-context/__tests__/storage-provider.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
 #### `src/context/storage-context/storage-context.tsx`
 
@@ -1532,53 +1619,57 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 15 | `getConfig` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `() => Promise<ChartDBConfig \| undefined>` |
-| 16 | `updateConfig` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(config: Partial<ChartDBConfig>) => Promise<void>` |
-| 19 | `getDiagramFilter` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(diagramId: string) => Promise<DiagramFilter \| undefined>` |
-| 20 | `updateDiagramFilter` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( diagramId: string, filter: DiagramFilter ) => Promise<void>` |
-| 24 | `deleteDiagramFilter` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 27 | `addDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagram: Diagram }) => Promise<void>` |
-| 28 | `listDiagrams` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(options?: { includeTables?: boolean; includeRelationships?: boolean; includeDependencies?: boolean; includeAreas?: boolean; includeCustomTypes?: boolean; includeNotes?: boolean; }) => Promise<Diagram[]>` |
-| 36 | `getDiagram` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `( id: string, options?: { includeTables?: boolean; includeRelationships?: boolean; includeDependencies?: boolean; includeAreas?: boolean; includeCustomTypes?: boolean; includeNotes?: boolean; } ) => Promise<Diagram \|...` |
-| 47 | `updateDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Diagram>; }) => Promise<void>` |
-| 51 | `deleteDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(id: string) => Promise<void>` |
-| 54 | `addTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; table: DBTable }) => Promise<void>` |
-| 55 | `getTable` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBTable \| undefined>` |
-| 59 | `updateTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBTable>; }) => Promise<void>` |
-| 63 | `putTable` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(params: { diagramId: string; table: DBTable }) => Promise<void>` |
-| 64 | `deleteTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
-| 65 | `listTables` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBTable[]>` |
-| 66 | `deleteDiagramTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 69 | `addRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; relationship: DBRelationship; }) => Promise<void>` |
-| 73 | `getRelationship` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBRelationship \| undefined>` |
-| 77 | `updateRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBRelationship>; }) => Promise<void>` |
-| 81 | `deleteRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
-| 85 | `listRelationships` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBRelationship[]>` |
-| 86 | `deleteDiagramRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 89 | `addDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; dependency: DBDependency; }) => Promise<void>` |
-| 93 | `getDependency` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBDependency \| undefined>` |
-| 97 | `updateDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBDependency>; }) => Promise<void>` |
-| 101 | `deleteDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
-| 105 | `listDependencies` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBDependency[]>` |
-| 106 | `deleteDiagramDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 109 | `addArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; area: Area }) => Promise<void>` |
-| 110 | `getArea` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<Area \| undefined>` |
-| 114 | `updateArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Area>; }) => Promise<void>` |
-| 118 | `deleteArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
-| 119 | `listAreas` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Area[]>` |
-| 120 | `deleteDiagramAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 123 | `addCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; customType: DBCustomType; }) => Promise<void>` |
-| 127 | `getCustomType` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBCustomType \| undefined>` |
-| 131 | `updateCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBCustomType>; }) => Promise<void>` |
-| 135 | `deleteCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
-| 139 | `listCustomTypes` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBCustomType[]>` |
-| 140 | `deleteDiagramCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
-| 143 | `addNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; note: Note }) => Promise<void>` |
-| 144 | `getNote` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<Note \| undefined>` |
-| 148 | `updateNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Note>; }) => Promise<void>` |
-| 152 | `deleteNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
-| 153 | `listNotes` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Note[]>` |
-| 154 | `deleteDiagramNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 16 | `getConfig` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `() => Promise<ChartDBConfig \| undefined>` |
+| 17 | `updateConfig` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(config: Partial<ChartDBConfig>) => Promise<void>` |
+| 20 | `getDiagramFilter` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(diagramId: string) => Promise<DiagramFilter \| undefined>` |
+| 21 | `updateDiagramFilter` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `( diagramId: string, filter: DiagramFilter ) => Promise<void>` |
+| 25 | `deleteDiagramFilter` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 28 | `addDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagram: Diagram }) => Promise<void>` |
+| 29 | `listDiagrams` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(options?: { includeTables?: boolean; includeRelationships?: boolean; includeDependencies?: boolean; includeAreas?: boolean; includeCustomTypes?: boolean; includeNotes?: boolean; }) => Promise<Diagram[]>` |
+| 37 | `getDiagram` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `( id: string, options?: { includeTables?: boolean; includeRelationships?: boolean; includeDependencies?: boolean; includeAreas?: boolean; includeCustomTypes?: boolean; includeNotes?: boolean; } ) => Promise<Diagram \|...` |
+| 48 | `updateDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Diagram>; }) => Promise<void>` |
+| 52 | `deleteDiagram` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(id: string) => Promise<void>` |
+| 55 | `listDiagramGroups` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<DiagramGroup[]>` |
+| 56 | `createDiagramGroup` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(params: { name: string }) => Promise<DiagramGroup>` |
+| 57 | `updateDiagramGroup` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; name: string }) => Promise<void>` |
+| 58 | `deleteDiagramGroup` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(id: string) => Promise<void>` |
+| 61 | `addTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; table: DBTable }) => Promise<void>` |
+| 62 | `getTable` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBTable \| undefined>` |
+| 66 | `updateTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBTable>; }) => Promise<void>` |
+| 70 | `putTable` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(params: { diagramId: string; table: DBTable }) => Promise<void>` |
+| 71 | `deleteTable` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
+| 72 | `listTables` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBTable[]>` |
+| 73 | `deleteDiagramTables` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 76 | `addRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; relationship: DBRelationship; }) => Promise<void>` |
+| 80 | `getRelationship` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBRelationship \| undefined>` |
+| 84 | `updateRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBRelationship>; }) => Promise<void>` |
+| 88 | `deleteRelationship` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
+| 92 | `listRelationships` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBRelationship[]>` |
+| 93 | `deleteDiagramRelationships` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 96 | `addDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; dependency: DBDependency; }) => Promise<void>` |
+| 100 | `getDependency` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBDependency \| undefined>` |
+| 104 | `updateDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBDependency>; }) => Promise<void>` |
+| 108 | `deleteDependency` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
+| 112 | `listDependencies` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBDependency[]>` |
+| 113 | `deleteDiagramDependencies` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 116 | `addArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; area: Area }) => Promise<void>` |
+| 117 | `getArea` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<Area \| undefined>` |
+| 121 | `updateArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Area>; }) => Promise<void>` |
+| 125 | `deleteArea` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
+| 126 | `listAreas` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Area[]>` |
+| 127 | `deleteDiagramAreas` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 130 | `addCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; customType: DBCustomType; }) => Promise<void>` |
+| 134 | `getCustomType` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<DBCustomType \| undefined>` |
+| 138 | `updateCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<DBCustomType>; }) => Promise<void>` |
+| 142 | `deleteCustomType` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string; }) => Promise<void>` |
+| 146 | `listCustomTypes` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<DBCustomType[]>` |
+| 147 | `deleteDiagramCustomTypes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
+| 150 | `addNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; note: Note }) => Promise<void>` |
+| 151 | `getNote` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(params: { diagramId: string; id: string; }) => Promise<Note \| undefined>` |
+| 155 | `updateNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { id: string; attributes: Partial<Note>; }) => Promise<void>` |
+| 159 | `deleteNote` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(params: { diagramId: string; id: string }) => Promise<void>` |
+| 160 | `listNotes` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(diagramId: string) => Promise<Note[]>` |
+| 161 | `deleteDiagramNotes` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `(diagramId: string) => Promise<void>` |
 
 #### `src/context/storage-context/storage-provider.tsx`
 
@@ -1586,55 +1677,31 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 16 | `StorageProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
-| 19 | `db` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 256 | `getConfig` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async (): Promise<ChartDBConfig \| undefined> =>` |
-| 261 | `updateConfig` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (config) => {` |
-| 268 | `getDiagramFilter` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async (diagramId: string): Promise<DiagramFilter \| undefined> => {` |
-| 277 | `updateDiagramFilter` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId, filter): Promise<void> => {` |
-| 288 | `deleteDiagramFilter` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId: string): Promise<void> => {` |
-| 296 | `addTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, table }) => {` |
-| 306 | `getTable` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ id, diagramId }): Promise<DBTable \| undefined> => {` |
-| 313 | `deleteDiagramTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 324 | `updateTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 331 | `putTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async ({ diagramId, table }) => {` |
-| 338 | `deleteTable` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, diagramId }) => {` |
-| 345 | `listTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId): Promise<DBTable[]> => {` |
-| 358 | `addRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, relationship }) => {` |
-| 368 | `deleteDiagramRelationships` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 379 | `getRelationship` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ id, diagramId }): Promise<DBRelationship \| undefined> => {` |
-| 386 | `updateRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 394 | `deleteRelationship` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, diagramId }) => {` |
-| 402 | `listRelationships` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId): Promise<DBRelationship[]> => {` |
-| 417 | `addDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, dependency }) => {` |
-| 427 | `getDependency` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ diagramId, id }) => {` |
-| 434 | `updateDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 441 | `deleteDependency` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, id }) => {` |
-| 448 | `listDependencies` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId) => {` |
-| 458 | `deleteDiagramDependencies` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 469 | `addArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ area, diagramId }) => {` |
-| 479 | `getArea` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ diagramId, id }) => {` |
-| 486 | `updateArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 493 | `deleteArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, id }) => {` |
-| 500 | `listAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId) => {` |
-| 510 | `deleteDiagramAreas` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 519 | `addCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, customType }) => {` |
-| 529 | `getCustomType` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ diagramId, id }): Promise<DBCustomType \| undefined> => {` |
-| 536 | `updateCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 543 | `deleteCustomType` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, id }) => {` |
-| 550 | `listCustomTypes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId): Promise<DBCustomType[]> => {` |
-| 564 | `deleteDiagramCustomTypes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 576 | `addNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ note, diagramId }) => {` |
-| 586 | `getNote` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ({ diagramId, id }) => {` |
-| 593 | `updateNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 600 | `deleteNote` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagramId, id }) => {` |
-| 607 | `listNotes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (diagramId) => {` |
-| 617 | `deleteDiagramNotes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) => {` |
-| 625 | `addDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagram }) => {` |
-| 690 | `listDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async ( options = { includeRelationships: false, includeTables: false, includeDependencies: false, includeAreas: false, includeCustomTypes: false, includeNotes: false, } ): Promise<Diagram[]> => {` |
-| 774 | `getDiagram` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async ( id, options = { includeRelationships: false, includeTables: false, includeDependencies: false, includeAreas: false, includeCustomTypes: false, includeNotes: false, } ): Promise<Diagram \| undefined> => {` |
-| 829 | `updateDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
-| 863 | `deleteDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id) => {` |
+| 31 | `noopVoid` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (): Promise<void> =>` |
+| 32 | `noopUndefined` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (): Promise<undefined> =>` |
+| 33 | `noopEmptyArray` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (): Promise<never[]> =>` |
+| 44 | `diagramFilterKey` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(diagramId: string) =>` |
+| 47 | `readConfig` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readConfig(): ChartDBConfig \| undefined {` |
+| 63 | `writeConfig` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function writeConfig(config: ChartDBConfig): void {` |
+| 88 | `fromDTO` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function fromDTO(dto: DiagramMetadataDTO): Diagram {` |
+| 114 | `fromGroupDTO` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function fromGroupDTO(dto: DiagramGroupDTO): DiagramGroup {` |
+| 131 | `apiFetch` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function apiFetch<T>( path: string, init?: RequestInit ): Promise<{ status: number; body: T \| undefined }> {` |
+| 136 | `timeout` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 159 | `StorageProvider` | component | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `({ children, }) =>` |
+| 162 | `getConfig` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async () =>` |
+| 166 | `updateConfig` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (config) => {` |
+| 173 | `getDiagramFilter` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async (diagramId) => {` |
+| 186 | `updateDiagramFilter` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId, filter) =>` |
+| 194 | `deleteDiagramFilter` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (diagramId) =>` |
+| 199 | `addDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ diagram }) => {` |
+| 228 | `listDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
+| 247 | `getDiagram` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `async (id) =>` |
+| 267 | `updateDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, attributes }) => {` |
+| 306 | `deleteDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id) => {` |
+| 326 | `listDiagramGroups` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
+| 334 | `createDiagramGroup` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async ({ name }) =>` |
+| 355 | `updateDiagramGroup` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async ({ id, name }) =>` |
+| 364 | `deleteDiagramGroup` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (id) =>` |
 
 ### `src/context/theme-context`
 
@@ -1829,11 +1896,11 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 33 | `CreateDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, }) =>` |
-| 63 | `fetchDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
-| 81 | `importNewDiagram` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async ({ selectedTables, databaseMetadata, }: { selectedTables?: SelectedTable[]; databaseMetadata?: DatabaseMetadata; } = {}) => {` |
-| 151 | `createEmptyDiagram` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async () =>` |
-| 178 | `importNewDiagramOrFilterTables` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async () =>` |
+| 34 | `CreateDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, }) =>` |
+| 64 | `fetchDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
+| 82 | `importNewDiagram` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async ({ selectedTables, databaseMetadata, }: { selectedTables?: SelectedTable[]; databaseMetadata?: DatabaseMetadata; } = {}) => {` |
+| 160 | `createEmptyDiagram` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async () =>` |
+| 188 | `importNewDiagramOrFilterTables` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async () =>` |
 
 #### `src/dialogs/create-diagram-dialog/select-database/database-option.tsx`
 
@@ -1943,9 +2010,9 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 27 | `ImportDatabaseDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, databaseType, importMethods = defaultImportMethods, initialImportMethod, }) =>` |
-| 63 | `importDatabase` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async () =>` |
-| 104 | `rightmostTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(max, table) =>` |
+| 26 | `ImportDatabaseDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, databaseType, importMethods = defaultImportMethods, initialImportMethod, }) =>` |
+| 62 | `importDatabase` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `async () =>` |
+| 103 | `rightmostTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(max, table) =>` |
 
 ### `src/dialogs/import-diagram-dialog`
 
@@ -1955,11 +2022,32 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 25 | `ImportDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, }) =>` |
-| 34 | `onFileChange` | function | Event handler เชื่อม user/system event กับ state action | `(files: File[]) =>` |
-| 50 | `handleImport` | function | Event handler เชื่อม user/system event กับ state action | `() =>` |
+| 26 | `ImportDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, }) =>` |
+| 35 | `onFileChange` | function | Event handler เชื่อม user/system event กับ state action | `(files: File[]) =>` |
+| 51 | `handleImport` | function | Event handler เชื่อม user/system event กับ state action | `() =>` |
 
 ### `src/dialogs/open-diagram-dialog`
+
+#### `src/dialogs/open-diagram-dialog/__tests__/group-diagram-rows.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 7 | `diagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<Diagram>): Diagram =>` |
+| 16 | `group` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DiagramGroup>): DiagramGroup =>` |
+| 88 | `selectionIndices` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(row) =>` |
+| 144 | `selectionIndices` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(row) =>` |
+
+#### `src/dialogs/open-diagram-dialog/create-group-popover/create-group-popover.tsx`
+
+บทบาท: dialog และ workflow ที่เกี่ยวข้อง. Exports: `CreateGroupPopover`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 21 | `CreateGroupPopover` | component | React component แสดง UI และประสาน props/context/event | `({ onCreated }) =>` |
+| 22 | `onCreated` | method | Event handler เชื่อม user/system event กับ state action | `() => void` |
+| 30 | `handleCreate` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
 
 #### `src/dialogs/open-diagram-dialog/diagram-row-actions-menu/diagram-row-actions-menu.tsx`
 
@@ -1967,11 +2055,33 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 19 | `onOpen` | method | Event handler เชื่อม user/system event กับ state action | `() => void` |
-| 20 | `refetch` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => void` |
-| 24 | `DiagramRowActionsMenu` | component | React component แสดง UI และประสาน props/context/event | `({ diagram, onOpen, refetch, numberOfDiagrams, }) =>` |
-| 34 | `onDelete` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
-| 43 | `onDuplicate` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
+| 30 | `onOpen` | method | Event handler เชื่อม user/system event กับ state action | `() => void` |
+| 31 | `refetch` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => void` |
+| 36 | `DiagramRowActionsMenu` | component | React component แสดง UI และประสาน props/context/event | `({ diagram, onOpen, refetch, numberOfDiagrams, groups, }) =>` |
+| 47 | `moveToGroup` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async (groupId: string \| null) => {` |
+| 55 | `onDelete` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
+| 64 | `onDuplicate` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
+
+#### `src/dialogs/open-diagram-dialog/group-diagram-rows.ts`
+
+บทบาท: dialog และ workflow ที่เกี่ยวข้อง. Exports: `DiagramListRow`, `groupDiagramRows`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 30 | `groupDiagramRows` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function groupDiagramRows( diagrams: Diagram[], groups: DiagramGroup[], collapsedGroupIds: ReadonlySet<string> = new Set() ): DiagramListRow[] {` |
+
+#### `src/dialogs/open-diagram-dialog/group-header-row/group-header-row.tsx`
+
+บทบาท: dialog และ workflow ที่เกี่ยวข้อง. Exports: `GroupHeaderRow`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 24 | `refetch` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => void` |
+| 26 | `onToggleCollapse` | method | Event handler เชื่อม user/system event กับ state action | `() => void` |
+| 39 | `GroupHeaderRow` | component | React component แสดง UI และประสาน props/context/event | `({ group, refetch, collapsed, onToggleCollapse, }) =>` |
+| 50 | `commitRename` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
+| 61 | `cancelRename` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 66 | `onDelete` | function | Event handler เชื่อม user/system event กับ state action | `async () =>` |
 
 #### `src/dialogs/open-diagram-dialog/open-diagram-dialog.tsx`
 
@@ -1979,11 +2089,13 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 36 | `OpenDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, canClose = true, }) =>` |
-| 50 | `fetchDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
-| 67 | `openDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(diagramId: string) => {` |
-| 77 | `handleRowKeyDown` | function | Event handler เชื่อม user/system event กับ state action | `(e: React.KeyboardEvent<HTMLTableRowElement>) => {` |
-| 121 | `onFocusHandler` | function | Event handler เชื่อม user/system event กับ state action | `(diagramId: string) => setSelec` |
+| 41 | `OpenDiagramDialog` | component | React component แสดง UI และประสาน props/context/event | `({ dialog, canClose = true, }) =>` |
+| 55 | `toggleGroupCollapse` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(groupId: string) =>` |
+| 70 | `fetchDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
+| 88 | `rows` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => groupDia` |
+| 101 | `openDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(diagramId: string) => {` |
+| 111 | `handleRowKeyDown` | function | Event handler เชื่อม user/system event กับ state action | `(e: React.KeyboardEvent<HTMLTableRowElement>) => {` |
+| 155 | `onFocusHandler` | function | Event handler เชื่อม user/system event กับ state action | `(diagramId: string) => setSelec` |
 
 ### `src/dialogs/star-us-dialog`
 
@@ -2022,6 +2134,57 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
 | 4 | `HelmetData` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+
+### `src/hooks/__tests__`
+
+#### `src/hooks/__tests__/use-debounce-v2.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 49 | `cb` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `(value: string) => void` |
+
+#### `src/hooks/__tests__/use-presence.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 23 | `relayAwareness` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function relayAwareness(from: Awareness, to: Awareness) { const update = encodeAwarenessUpdate(from, [from.clientID]); applyAwarenessUpdate(to, update, 'test'); }` |
+
+#### `src/hooks/__tests__/use-selecting-peers.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 13 | `relayAwareness` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function relayAwareness(from: Awareness, to: Awareness) {` |
+| 18 | `renderWithAwareness` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderWithAwareness(nodeId: string, awareness: Awareness) {` |
+| 19 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+
+#### `src/hooks/__tests__/use-update-table-field.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 16 | `baseField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBField>): DBField =>` |
+| 27 | `baseTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(fields: DBField[]): DBTable =>` |
+| 40 | `renderUseUpdateTableField` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderUseUpdateTableField( table: DBTable, field: DBField, updateField = vi.fn() ) {` |
+| 52 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+| 58 | `hook` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 171 | `wrapper` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `({ children }: { children: React.ReactNode }) =>` |
+
+#### `src/hooks/__tests__/use-y-collection-sync.test.tsx`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 26 | `decode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r: Record<string, unknown>) =>` |
+| 28 | `renderCollectionSync` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `function renderCollectionSync(doc: Y.Doc, mapKey: string) {` |
+| 89 | `siblingBefore` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(i) =>` |
 
 ### `src/hooks/use-breakpoint.ts`
 
@@ -2183,15 +2346,28 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 5 | `useIsMobile` | function | Hook อ่านหรือควบคุม IsMobile; ดู implementation สำหรับ dependency และ side effect | `export function useIsMobile() {` |
 | 14 | `onChange` | function | Event handler เชื่อม user/system event กับ state action | `() =>` |
 
-### `src/hooks/use-redo-undo-stack.ts`
+### `src/hooks/use-presence.ts`
 
-#### `src/hooks/use-redo-undo-stack.ts`
+#### `src/hooks/use-presence.ts`
 
-บทบาท: React hook สำหรับ logic ใช้ซ้ำ. Exports: `useRedoUndoStack`.
+บทบาท: React hook สำหรับ logic ใช้ซ้ำ. Exports: `PresencePeer`, `PresenceState`, `usePresence`.
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 4 | `useRedoUndoStack` | function | Hook อ่านหรือควบคุม RedoUndoStack; ดู implementation สำหรับ dependency และ side effect | `() =>` |
+| 84 | `usePresence` | function | Hook อ่านหรือควบคุม Presence; ดู implementation สำหรับ dependency และ side effect | `export function usePresence(awareness: Awareness \| null): PresencePeer[] { const [peers, setPeers] = useState<PresencePeer[]>([]); const peersRef = useRef(peers); useEffect(() => { if (!awareness) { peersRef.current ...` |
+| 95 | `readPeers` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(): PresencePeer[] =>` |
+| 103 | `applyPeers` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+
+### `src/hooks/use-selecting-peers.ts`
+
+#### `src/hooks/use-selecting-peers.ts`
+
+บทบาท: React hook สำหรับ logic ใช้ซ้ำ. Exports: `useSelectingPeers`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 33 | `useSelectingPeers` | function | Hook อ่านหรือควบคุม SelectingPeers; ดู implementation สำหรับ dependency และ side effect | `export function useSelectingPeers(nodeId: string): PresencePeer[] { const { awareness } = useChartDB(); const peers = usePresence(awareness); const filtered = useMemo( () => peers.filter((peer) => peer.selectedTableId...` |
+| 36 | `filtered` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => peers.fi` |
 
 ### `src/hooks/use-storage.ts`
 
@@ -2223,21 +2399,21 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 |---:|---|---|---|---|
 | 19 | `generateFieldRegexPatterns` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( dataType: DataTypeData, databaseType: DatabaseType ): { regex?: string; extractRegex?: RegExp; } =>` |
 | 74 | `useUpdateTableField` | function | Hook อ่านหรือควบคุม UpdateTableField; ดู implementation สำหรับ dependency และ side effect | `( table: DBTable, field: DBField, customUpdateField?: (attrs: Partial<DBField>) => void ) =>` |
-| 121 | `updateField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
-| 134 | `primaryKeyFields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 138 | `primaryKeyCount` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => primaryK` |
-| 144 | `dataFieldOptions` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 145 | `standardTypes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(type) =>` |
-| 167 | `customTypeOptions` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(type) => ({` |
-| 181 | `handleDataTypeChange` | function | Event handler เชื่อม user/system event กับ state action | `(value, regexMatches) => {` |
-| 275 | `debouncedNameUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: string) => {` |
-| 288 | `debouncedNullableUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: boolean) => {` |
-| 306 | `debouncedPrimaryKeyUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: boolean, primaryKeyCount: number) => {` |
-| 333 | `handlePrimaryKeyToggle` | function | Event handler เชื่อม user/system event กับ state action | `(value: boolean) => {` |
-| 346 | `handleNullableToggle` | function | Event handler เชื่อม user/system event กับ state action | `(value: boolean) => {` |
-| 355 | `handleNameChange` | function | Event handler เชื่อม user/system event กับ state action | `(value: string) => {` |
-| 364 | `generateFieldSuffix` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(typeId?: string) => {` |
-| 381 | `removeField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 130 | `primaryKeyFields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 134 | `primaryKeyCount` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => primaryK` |
+| 167 | `updateField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 180 | `dataFieldOptions` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 181 | `standardTypes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(type) =>` |
+| 203 | `customTypeOptions` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(type) => ({` |
+| 217 | `handleDataTypeChange` | function | Event handler เชื่อม user/system event กับ state action | `(value, regexMatches) => {` |
+| 311 | `debouncedNameUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: string) => {` |
+| 324 | `debouncedNullableUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: boolean) => {` |
+| 346 | `debouncedPrimaryKeyUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: boolean) => {` |
+| 368 | `handlePrimaryKeyToggle` | function | Event handler เชื่อม user/system event กับ state action | `(value: boolean) => {` |
+| 381 | `handleNullableToggle` | function | Event handler เชื่อม user/system event กับ state action | `(value: boolean) => {` |
+| 390 | `handleNameChange` | function | Event handler เชื่อม user/system event กับ state action | `(value: string) => {` |
+| 399 | `generateFieldSuffix` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `(typeId?: string) => {` |
+| 416 | `removeField` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
 
 ### `src/hooks/use-update-table.ts`
 
@@ -2250,6 +2426,18 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 7 | `useUpdateTable` | function | Hook อ่านหรือควบคุม UpdateTable; ดู implementation สำหรับ dependency และ side effect | `(table: DBTable) =>` |
 | 12 | `debouncedUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(value: string) => {` |
 | 25 | `handleTableNameChange` | function | Event handler เชื่อม user/system event กับ state action | `(value: string) => {` |
+
+### `src/hooks/use-y-collection-sync.ts`
+
+#### `src/hooks/use-y-collection-sync.ts`
+
+บทบาท: React hook สำหรับ logic ใช้ซ้ำ. Exports: `useYCollectionSync`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 35 | `useYCollectionSync` | function | Hook อ่านหรือควบคุม YCollectionSync; ดู implementation สำหรับ dependency และ side effect | `export function useYCollectionSync< T extends { id: string; order?: number \| null }, >( doc: Y.Doc \| null, mapKey: string, readAll: (collectionMap: Y.Map<unknown>) => T[], readOne: (collectionMap: Y.Map<unknown>, id...` |
+| 48 | `handler` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(events: Y.YEvent<Y.Map<unknown>>[]) =>` |
+| 72 | `idx` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(n) =>` |
 
 ### `src/i18n/i18n.ts`
 
@@ -2401,6 +2589,24 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
+### `src/lib/__tests__`
+
+#### `src/lib/__tests__/ws-url-for-origin.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `src/lib/auth`
+
+#### `src/lib/auth/get-entra-token.ts`
+
+บทบาท: client: Azure AD (Entra ID) sign-in — MSAL config, token acquisition. Exports: `getEntraAccessToken`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 30 | `getEntraAccessToken` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `export async function getEntraAccessToken(): Promise<string> { const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0]; if (!account) { throw new Error('no active Entra account — user is no...` |
+
 ### `src/lib/check-constraints`
 
 #### `src/lib/check-constraints/__tests__/check-constraints-validator.test.ts`
@@ -2437,6 +2643,85 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 136 | `generateId` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `() => string` |
 | 146 | `getNewId` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(id: string): string \| null =>` |
 
+### `src/lib/collab`
+
+#### `src/lib/collab/__tests__/seed-gate.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 7 | `fakeProvider` | function | Provider ประกอบ state/actions แล้วส่งผ่าน React context | `function fakeProvider() { const handlers: Record<string, ((data?: unknown) => void)[]> = { synced: [], status: [], }; const provider: Stat` |
+
+#### `src/lib/collab/__tests__/y-diagram.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 30 | `field` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBField>): DBField =>` |
+| 41 | `index` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBIndex>): DBIndex =>` |
+| 50 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBTable>): DBTable =>` |
+| 64 | `diagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<Diagram>): Diagram =>` |
+| 82 | `getTableMap` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `function getTableMap(doc: Y.Doc, tableId: string): Y.Map<unknown> { return doc.getMap<unknown>('tables').get(tableId) as Y.Map<unknown>; }` |
+| 86 | `getFieldMap` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `function getFieldMap( doc: Y.Doc, tableId: string, fieldId: string ): Y.Map<unknown> {` |
+| 95 | `sync` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function sync(a: Y.Doc, b: Y.Doc): void {` |
+| 137 | `byId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id: string) =>` |
+| 285 | `byId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id: string) =>` |
+| 705 | `readCollectionFromMapForTest` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readCollectionFromMapForTest( collectionMap: Y.Map<unknown> ): Array<Record<string, unknown>> { const entries: Array<{ order: number; id: string; value: Record<string, unknown>; }> = []; collectionMap.forEach...` |
+
+#### `src/lib/collab/seed-diagram-room.ts`
+
+บทบาท: client: Yjs room seeding/gating helpers สำหรับ non-editor creation flows. Exports: `seedDiagramRoom`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 39 | `seedDiagramRoom` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function seedDiagramRoom(diagram: Diagram): Promise<void> { if (!COLLAB_WS_URL) return; const doc = new Y.Doc(); const provider = new HocuspocusProvider({ url: COLLAB_WS_URL, name: diagram.id, document: d...` |
+
+#### `src/lib/collab/seed-gate.ts`
+
+บทบาท: client: Yjs room seeding/gating helpers สำหรับ non-editor creation flows. Exports: `StatusEmitter`, `seedWhenDecided`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 34 | `on` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `on(event: 'synced', cb: () => void): unknown;` |
+| 35 | `on` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `on(event: 'status', cb: (data: { status: string }) => void): unknown;` |
+| 38 | `seedWhenDecided` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function seedWhenDecided( provider: StatusEmitter, seedIfEmpty: () => void ): void {` |
+| 43 | `decide` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+
+#### `src/lib/collab/y-diagram.ts`
+
+บทบาท: client: Yjs room seeding/gating helpers สำหรับ non-editor creation flows. Exports: `compareByDomainOrder`, `diagramToYDoc`, `getOrCreateNestedMap`, `isRoomEmpty`, `patchItem`, `readCollection`, `readItem`, `readTableItem`, `readTables`, `reconcileCollection`, `reconcileTables`, `removeItemFromCollection`, `removeItemsReferencing`, `upsertItem`, `upsertTable`, `yDocToDiagram`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 92 | `setIfChanged` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `function setIfChanged(map: Y.Map<unknown>, key: string, value: unknown) { if (!equal(map.get(key), value)) { map.set(key, value); } }` |
+| 98 | `encodeFlat` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function encodeFlat<T extends PlainRecord>(item: T): PlainRecord {` |
+| 118 | `sortKeyFor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function sortKeyFor(value: unknown, internalOrder: number): number { const domainOrder = (value as { order?: unknown } \| null)?.order; return typeof domainOrder === 'number' ? domainOrder : internalOrder; }` |
+| 132 | `compareByDomainOrder` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function compareByDomainOrder<T extends { order?: number \| null }>( a: T, b: T ): number { const orderA = typeof a.order === 'number' ? a.order : Infinity; const orderB = typeof b.order === 'number' ? b.order ...` |
+| 148 | `readCollection` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function readCollection<T>( collectionMap: Y.Map<unknown> \| undefined, decode: (raw: PlainRecord) => T ): T[] { if (!collectionMap) return []; const entries: Array<{ order: number; id: string; value: T }> = []...` |
+| 172 | `readNestedCollection` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readNestedCollection<T>( parent: Y.Map<unknown> \| undefined, key: string, decode: (raw: PlainRecord) => T ): T[] {` |
+| 190 | `readItem` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function readItem<T>( collectionMap: Y.Map<unknown>, id: string, decode: (raw: PlainRecord) => T ): T \| undefined { const itemMap = collectionMap.get(id) as Y.Map<unknown> \| undefined; if (!itemMap) return un...` |
+| 207 | `getOrCreateNestedMap` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `export function getOrCreateNestedMap( parent: Y.Map<unknown>, key: string ): Y.Map<unknown> { const existing = parent.get(key) as Y.Map<unknown> \| undefined; if (existing) return existing; const created = new Y.Map<u...` |
+| 227 | `upsertItem` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function upsertItem<T extends { id: string }>( collectionMap: Y.Map<unknown>, item: T, encode: (item: T) => PlainRecord = encodeFlat ): void { const existing = collectionMap.get(item.id) as Y.Map<unknown> \| un...` |
+| 242 | `nextOrderFor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function nextOrderFor(collectionMap: Y.Map<unknown>): number {` |
+| 259 | `patchItem` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function patchItem( collectionMap: Y.Map<unknown>, id: string, patch: PlainRecord ): void { const itemMap = collectionMap.get(id) as Y.Map<unknown> \| undefined; if (!itemMap) return; Object.entries(patch).forE...` |
+| 270 | `removeItemFromCollection` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export function removeItemFromCollection( collectionMap: Y.Map<unknown>, id: string ): void { collectionMap.delete(id); }` |
+| 290 | `reconcileCollection` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function reconcileCollection<T extends { id: string }>( collectionMap: Y.Map<unknown>, desiredItems: T[], encode: (item: T) => PlainRecord = encodeFlat ): void { const desiredIds = new Set(desiredItems.map((ite...` |
+| 315 | `removeItemsReferencing` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export function removeItemsReferencing( collectionMap: Y.Map<unknown>, fieldNames: string[], ids: string[] ): void { const idsToRemove: string[] = []; collectionMap.forEach((itemMapRaw, itemId) => { const itemMap = it...` |
+| 323 | `references` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field) =>` |
+| 333 | `encodeTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function encodeTable(table: DBTable): { scalars: PlainRecord; fields: DBField[]; indexes: DBIndex[]; checkConstraints: DBCheckConstraint[] \| null \| undefined; } { const { fields, indexes, checkConstraints, ...scalar...` |
+| 355 | `upsertTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function upsertTable(tablesMap: Y.Map<unknown>, table: DBTable): void { const { scalars, fields, indexes, checkConstraints } = encodeTable(table); let tableMap = tablesMap.get(table.id) as Y.Map<unknown> \| und...` |
+| 393 | `reconcileTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function reconcileTables( tablesMap: Y.Map<unknown>, desiredTables: DBTable[] ): void { const desiredIds = new Set(desiredTables.map((t) => t.id)); const idsToRemove: string[] = []; tablesMap.forEach((_tableMap...` |
+| 406 | `readTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readTable(id: string, tableMap: Y.Map<unknown>): DBTable {` |
+| 420 | `fields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r) => r as unk` |
+| 425 | `indexes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(r) => r as unk` |
+| 455 | `readTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function readTables(tablesMap: Y.Map<unknown>): DBTable[] { const tables: DBTable[] = []; tablesMap.forEach((tableMapRaw, id) => { tables.push(readTable(id, tableMapRaw as Y.Map<unknown>)); }); tables.sort((a, ...` |
+| 475 | `readTableItem` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function readTableItem( tablesMap: Y.Map<unknown>, id: string ): DBTable \| undefined { const tableMap = tablesMap.get(id) as Y.Map<unknown> \| undefined; if (!tableMap) return undefined; return readTable(id, t...` |
+| 493 | `isRoomEmpty` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `export function isRoomEmpty(doc: Y.Doc): boolean { return ( doc.getMap<unknown>('tables').size === 0 && doc.getMap<unknown>('relationships').size === 0 && doc.getMap<unknown>('dependencies').size === 0 && doc.getMap<u...` |
+| 505 | `diagramToYDoc` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function diagramToYDoc(diagram: Diagram): Y.Doc { const doc = new Y.Doc(); const diagramMap = doc.getMap<unknown>('diagram` |
+| 540 | `yDocToDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function yDocToDiagram(doc: Y.Doc): Diagram { const diagramMap = doc.getMap<unknown>('diagram'); const tables = readTables(doc.getMap<u` |
+
 ### `src/lib/colors.ts`
 
 #### `src/lib/colors.ts`
@@ -2445,7 +2730,7 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 16 | `randomColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 24 | `randomColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 ### `src/lib/data`
 
@@ -4831,6 +5116,20 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 179 | `pkFields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(f) =>` |
 | 189 | `uniqueIndex` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(idx) =>` |
 
+#### `src/lib/domain/__tests__/db-relationship.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 8 | `rel` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<DBRelationship>): DBRelationship =>` |
+
+#### `src/lib/domain/__tests__/note.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
 #### `src/lib/domain/area.ts`
 
 บทบาท: domain model, schema, rule หรือ diff model. Exports: `Area`, `areaSchema`.
@@ -4919,12 +5218,14 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 #### `src/lib/domain/db-relationship.ts`
 
-บทบาท: domain model, schema, rule หรือ diff model. Exports: `Cardinality`, `DBRelationship`, `RelationshipType`, `dbRelationshipSchema`, `determineCardinalities`, `determineRelationshipType`.
+บทบาท: domain model, schema, rule หรือ diff model. Exports: `Cardinality`, `DBRelationship`, `RelationshipType`, `computeForeignKeyFieldIds`, `dbRelationshipSchema`, `determineCardinalities`, `determineRelationshipType`, `foreignKeyFieldId`.
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
 | 38 | `determineRelationshipType` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `({ sourceCardinality, targetCardinality, }: { sourceCardinality: Cardinality; targetCardinality: Cardinality; }): RelationshipType =>` |
-| 54 | `determineCardinalities` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `( relationshipType: RelationshipType ): { sourceCardinality: Cardinality; targetCardinality: Cardinality; } =>` |
+| 62 | `foreignKeyFieldId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( rel: Pick< DBRelationship, \| 'sourceFieldId' \| 'targetFieldId' \| 'sourceCardinality' \| 'targetCardinality' > ): string =>` |
+| 82 | `computeForeignKeyFieldIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( relationships: Pick< DBRelationship, \| 'sourceFieldId' \| 'targetFieldId' \| 'sourceCardinality' \| 'targetCardinality' >[] ): Set<string> =>` |
+| 96 | `determineCardinalities` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `( relationshipType: RelationshipType ): { sourceCardinality: Cardinality; targetCardinality: Cardinality; } =>` |
 
 #### `src/lib/domain/db-schema.ts`
 
@@ -4992,6 +5293,12 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 92 | `filteredRelationships` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(relationship) =>` |
 | 108 | `filteredDependencies` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(dependency) =>` |
 | 123 | `filteredAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(area) =>` |
+
+#### `src/lib/domain/diagram-group.ts`
+
+บทบาท: domain model, schema, rule หรือ diff model. Exports: `DiagramGroup`, `diagramGroupSchema`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
 #### `src/lib/domain/diagram.ts`
 
@@ -5167,7 +5474,7 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 #### `src/lib/domain/note.ts`
 
-บทบาท: domain model, schema, rule หรือ diff model. Exports: `Note`, `noteSchema`.
+บทบาท: domain model, schema, rule หรือ diff model. Exports: `Note`, `NoteInput`, `noteSchema`.
 
 ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
@@ -5175,9 +5482,12 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 #### `src/lib/env.ts`
 
-บทบาท: utility และ business logic. Exports: `APP_URL`, `DISABLE_ANALYTICS`, `HIDE_CHARTDB_CLOUD`, `HOST_URL`, `IS_CHARTDB_IO`, `LLM_MODEL_NAME`, `OPENAI_API_ENDPOINT`, `OPENAI_API_KEY`.
+บทบาท: utility และ business logic. Exports: `APP_URL`, `AUTH_MODE`, `COLLAB_API_URL`, `COLLAB_WS_URL`, `DISABLE_ANALYTICS`, `ENTRA_API_SCOPE`, `ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`, `HIDE_CHARTDB_CLOUD`, `HOST_URL`, `IS_CHARTDB_IO`, `LLM_MODEL_NAME`, `OPENAI_API_ENDPOINT`, `OPENAI_API_KEY`, `wsUrlForOrigin`.
 
-ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 38 | `wsUrlForOrigin` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function wsUrlForOrigin( location: Pick<Location, 'protocol' \| 'host'> ): string { const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'; return \`${wsProtocol}//${location.host}\`; }` |
+| 45 | `defaultCollabWsUrl` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function defaultCollabWsUrl(): string {` |
 
 ### `src/lib/export-import-utils.ts`
 
@@ -5232,6 +5542,14 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
 
+### `src/lib/msal-config.ts`
+
+#### `src/lib/msal-config.ts`
+
+บทบาท: client: Azure AD (Entra ID) sign-in — MSAL config, token acquisition. Exports: `isMsalConfigured`, `loginRequest`, `msalInstance`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
 ### `src/lib/types.ts`
 
 #### `src/lib/types.ts`
@@ -5256,6 +5574,21 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 77 | `createDependency` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( overrides: Partial<DBDependency> ): DBDependency =>` |
 | 87 | `createCustomType` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `( overrides: Partial<DBCustomType> ): DBCustomType =>` |
 
+#### `src/lib/utils/__tests__/canvas-handle-index.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 19 | `rel` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id: string, targetTableId: string, targetFieldId: string) =>` |
+| 76 | `dep` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(id: string, tableId: string) =>` |
+
+#### `src/lib/utils/__tests__/debounce.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
 #### `src/lib/utils/apply-ids.ts`
 
 บทบาท: utility และ business logic. Exports: `applyIds`.
@@ -5271,9 +5604,9 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 70 | `applyIds` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `({ sourceDiagram, targetDiagram, }: { sourceDiagram: Diagram; targetDiagram: Diagram; }): Diagram =>` |
 | 124 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
 | 127 | `dependentTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
-| 205 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
-| 208 | `dependentTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
-| 259 | `updatedFieldIds` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(fieldId) =>` |
+| 255 | `table` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
+| 258 | `dependentTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) => t.id === dep` |
+| 313 | `updatedFieldIds` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(fieldId) =>` |
 
 #### `src/lib/utils/area-utils.ts`
 
@@ -5289,6 +5622,15 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 100 | `arrangeTablesForArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( tablesToArrange: DBTable[], relationships: DBRelationship[], areaRect: { x: number; y: number; width: number; height: number } ): { positions: { id: string; x: number; y: number }[]; requiredWidth: number; requiredH...` |
 | 117 | `cloned` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(t) =>` |
 | 120 | `areaRels` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(rel) => ids.has(` |
+
+#### `src/lib/utils/canvas-handle-index.ts`
+
+บทบาท: utility และ business logic. Exports: `computeDependencyTargetHandleIndexes`, `computeRelationshipTargetHandleIndexes`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 14 | `computeRelationshipTargetHandleIndexes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function computeRelationshipTargetHandleIndexes( relationships: Pick< DBRelationship, 'id' \| 'targetTableId' \| 'targetFieldId' >[] ): Map<string, number> { const idsByTargetKey = new Map<string, string[]>(); ...` |
+| 38 | `computeDependencyTargetHandleIndexes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function computeDependencyTargetHandleIndexes( dependencies: Pick<DBDependency, 'id' \| 'tableId'>[] ): Map<string, number> { const idsByTableId = new Map<string, string[]>(); for (const dependency of depen` |
 
 #### `src/lib/utils/index.ts`
 
@@ -5309,15 +5651,17 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 28 | `generateDiagramId` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `() =>` |
 | 34 | `getOperatingSystem` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(): 'mac' \| 'windows' \| 'unknown' =>` |
 | 45 | `deepCopy` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `<T>(obj: T): T =>` |
-| 47 | `debounce` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `<T extends (...args: Parameters<T>) => ReturnType<T>>( func: T, waitFor: number ) =>` |
-| 58 | `removeDups` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `<T>(array: T[]): T[] =>` |
-| 62 | `decodeBase64ToUtf16LE` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(base64: string) =>` |
-| 76 | `decodeBase64ToUtf8` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(base64: string) =>` |
-| 88 | `waitFor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (ms: number): Promise<void> =>` |
-| 92 | `sha256` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (message: string): Promise<string> =>` |
-| 105 | `mergeRefs` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function mergeRefs<T>( ...inputRefs: (React.Ref<T> \| undefined)[] ): React.Ref<T> \| React.RefCallback<T> {` |
-| 127 | `isStringEmpty` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `(str: string \| undefined \| null): boolean =>` |
-| 131 | `areBooleansEqual` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( a: boolean \| undefined \| null, b: boolean \| undefined \| null ): boolean =>` |
+| 55 | `debounce` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `<T extends (...args: Parameters<T>) => ReturnType<T>>( func: T, waitFor: number ): ((...args: Parameters<T>) => void) & { cancel: () => void } =>` |
+| 58 | `cancel` | method | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() => void` |
+| 60 | `debounced` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(...args: Parameters<T>): void =>` |
+| 68 | `removeDups` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `<T>(array: T[]): T[] =>` |
+| 72 | `decodeBase64ToUtf16LE` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(base64: string) =>` |
+| 86 | `decodeBase64ToUtf8` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(base64: string) =>` |
+| 98 | `waitFor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (ms: number): Promise<void> =>` |
+| 102 | `sha256` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (message: string): Promise<string> =>` |
+| 115 | `mergeRefs` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function mergeRefs<T>( ...inputRefs: (React.Ref<T> \| undefined)[] ): React.Ref<T> \| React.RefCallback<T> {` |
+| 137 | `isStringEmpty` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `(str: string \| undefined \| null): boolean =>` |
+| 141 | `areBooleansEqual` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( a: boolean \| undefined \| null, b: boolean \| undefined \| null ): boolean =>` |
 
 ### `src/main.tsx`
 
@@ -5335,11 +5679,20 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 12 | `CloneTemplateComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
-| 20 | `cloneTemplate` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
-| 60 | `CloneTemplatePage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 13 | `CloneTemplateComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 21 | `cloneTemplate` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `async () =>` |
+| 73 | `CloneTemplatePage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
 
 ### `src/pages/editor-page`
+
+#### `src/pages/editor-page/canvas/__tests__/resolve-follow-viewport.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 9 | `peer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(overrides: Partial<PresencePeer>): PresencePeer =>` |
+| 25 | `transformFor` | function | แปลง input ให้อยู่ในรูปแบบที่ระบบใช้ | `(width: number, height: number) =>` |
 
 #### `src/pages/editor-page/canvas/area-node/area-node-context-menu.tsx`
 
@@ -5369,13 +5722,13 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 42 | `AreaNode` | component | React component แสดง UI และประสาน props/context/event | `({ selected, dragging, data: { area } }) => {` |
-| 67 | `calculateDiff` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 84 | `editAreaName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 92 | `abortEdit` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 97 | `openAreaInEditor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 114 | `enterEditMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(e: React.MouseEvent) =>` |
-| 119 | `containerClassName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 45 | `AreaNode` | component | React component แสดง UI และประสาน props/context/event | `({ id, selected, dragging, data: { area } }) => {` |
+| 72 | `calculateDiff` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 89 | `editAreaName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 97 | `abortEdit` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 102 | `openAreaInEditor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 119 | `enterEditMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(e: React.MouseEvent) =>` |
+| 124 | `containerClassName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 #### `src/pages/editor-page/canvas/canvas-context-menu.tsx`
 
@@ -5477,56 +5830,57 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 159 | `tableToTableNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( table: DBTable, { filter, databaseType, filterLoading, showDBViews, forceShow, isRelationshipCreatingTarget = false, targetEdgeCounts, }: { filter?: DiagramFilter; databaseType: DatabaseType; filterLoading: boolean;...` |
-| 212 | `areaToAreaNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( area: Area, { tables, filter, databaseType, filterLoading, }: { tables: DBTable[]; filter?: DiagramFilter; databaseType: DatabaseType; filterLoading: boolean; } ): AreaNodeType =>` |
-| 227 | `tablesInArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
-| 257 | `noteToNoteNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(note: Note): NoteNodeType =>` |
-| 276 | `Canvas` | component | React component แสดง UI และประสาน props/context/event | `({ initialTables }) =>` |
-| 336 | `shouldForceShowTable` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `(tableId: string) => {` |
-| 372 | `initialNodes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) =>` |
-| 410 | `tableNodeIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
-| 416 | `timeoutId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 417 | `targetIndexes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(acc, relationship) => {` |
-| 427 | `targetDepIndexes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(acc, dep) => {` |
-| 494 | `selectedNodesIds` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(node) =>` |
-| 506 | `selectedEdgesIds` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(edge) =>` |
-| 525 | `newEdges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge): EdgeType =>` |
-| 685 | `updatedNodes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(node) =>` |
-| 747 | `checkParentAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 748 | `visibleTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(node) =>` |
-| 751 | `visibleAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(node) =>` |
-| 782 | `update` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(u) => u.id === table.id` |
-| 801 | `onConnectHandler` | function | Event handler เชื่อม user/system event กับ state action | `async (params: AddEdgeParams) => {` |
-| 859 | `onEdgesChangeHandler` | function | Event handler เชื่อม user/system event กับ state action | `(changes) => {` |
-| 869 | `removeChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) => change.type ===` |
-| 873 | `edgesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
-| 877 | `relationshipsToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
-| 883 | `dependenciesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
-| 908 | `updateOverlappingGraphOnChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `({ positionChanges, sizeChanges, }: { positionChanges: NodePositionChange[]; sizeChanges: NodeDimensionChange[]; }) => {` |
-| 972 | `findRelevantNodesChanges` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(changes: NodeChange<NodeType>[], type: NodeType['type']) => {` |
-| 974 | `relevantChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
-| 1000 | `positionChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
-| 1011 | `removeChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) => change.type ===` |
-| 1015 | `sizeChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.type ===` |
-| 1028 | `onNodesChangeHandler` | function | Event handler เชื่อม user/system event กับ state action | `(changes) => {` |
-| 1039 | `areaDragChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
-| 1052 | `currentArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(a) => a.id === areaChange.id` |
-| 1060 | `childTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) => table.parentAreaId === areaC` |
-| 1111 | `currentArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(a) => a.id === change.id` |
-| 1143 | `updatedTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table) =>` |
-| 1146 | `removedArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) =>` |
-| 1158 | `positionChange` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.id === currentTable.id` |
-| 1161 | `sizeChange` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.id === currentTable.id` |
-| 1338 | `eventConsumer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: ChartDBEvent) => {` |
-| 1471 | `hasOverlappingTables` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 1481 | `allTablesHiddenByFilter` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 1496 | `pulseOverlappingTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 1502 | `exitEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => setEditT` |
-| 1527 | `handleMouseMove` | function | Event handler เชื่อม user/system event กับ state action | `(event: React.MouseEvent) => {` |
-| 1559 | `handleEscape` | function | Event handler เชื่อม user/system event กับ state action | `(event: KeyboardEvent) =>` |
-| 1584 | `nodesWithCursor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 1601 | `edgesWithFloating` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 1630 | `onPaneClickHandler` | function | Event handler เชื่อม user/system event กับ state action | `(event: React.MouseEvent<Element, MouseEvent>) => {` |
+| 171 | `tableToTableNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( table: DBTable, { filter, databaseType, filterLoading, showDBViews, forceShow, isRelationshipCreatingTarget = false, targetEdgeCounts, foreignKeyFieldIds, }: { filter?: DiagramFilter; databaseType: DatabaseType; fil...` |
+| 227 | `areaToAreaNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( area: Area, { tables, filter, databaseType, filterLoading, }: { tables: DBTable[]; filter?: DiagramFilter; databaseType: DatabaseType; filterLoading: boolean; } ): AreaNodeType =>` |
+| 242 | `tablesInArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
+| 272 | `noteToNoteNode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(note: Note): NoteNodeType =>` |
+| 291 | `Canvas` | component | React component แสดง UI และประสาน props/context/event | `({ initialTables }) =>` |
+| 360 | `shouldForceShowTable` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `(tableId: string) => {` |
+| 396 | `initialNodes` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) =>` |
+| 434 | `tableNodeIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(t) =>` |
+| 440 | `timeoutId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 509 | `selectedNodesIds` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(node) =>` |
+| 521 | `selectedEdgesIds` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(edge) =>` |
+| 540 | `newEdges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge): EdgeType =>` |
+| 716 | `updatedNodes` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(node) =>` |
+| 799 | `checkParentAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 802 | `visibleTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(node) =>` |
+| 805 | `visibleAreas` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(node) =>` |
+| 836 | `update` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(u) => u.id === table.id` |
+| 858 | `onConnectHandler` | function | Event handler เชื่อม user/system event กับ state action | `async (params: AddEdgeParams) => {` |
+| 940 | `onEdgesChangeHandler` | function | Event handler เชื่อม user/system event กับ state action | `(changes) => {` |
+| 950 | `removeChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) => change.type ===` |
+| 954 | `edgesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
+| 958 | `relationshipsToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
+| 964 | `dependenciesToRemove` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(edge) =>` |
+| 989 | `updateOverlappingGraphOnChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `({ positionChanges, sizeChanges, }: { positionChanges: NodePositionChange[]; sizeChanges: NodeDimensionChange[]; }) => {` |
+| 1053 | `findRelevantNodesChanges` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(changes: NodeChange<NodeType>[], type: NodeType['type']) => {` |
+| 1055 | `relevantChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
+| 1081 | `positionChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
+| 1092 | `removeChanges` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) => change.type ===` |
+| 1096 | `sizeChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.type ===` |
+| 1109 | `onNodesChangeHandler` | function | Event handler เชื่อม user/system event กับ state action | `(changes) => {` |
+| 1120 | `areaDragChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) =>` |
+| 1133 | `currentArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(a) => a.id === areaChange.id` |
+| 1141 | `childTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(table) => table.parentAreaId === areaC` |
+| 1192 | `currentArea` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(a) => a.id === change.id` |
+| 1224 | `updatedTables` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(table) =>` |
+| 1227 | `removedArea` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `(change) =>` |
+| 1239 | `positionChange` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.id === currentTable.id` |
+| 1242 | `sizeChange` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(change) => change.id === currentTable.id` |
+| 1419 | `eventConsumer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: ChartDBEvent) => {` |
+| 1552 | `hasOverlappingTables` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 1562 | `allTablesHiddenByFilter` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 1577 | `pulseOverlappingTables` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 1583 | `exitEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => setEditT` |
+| 1610 | `flowWidth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(state) =>` |
+| 1611 | `flowHeight` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(state) =>` |
+| 1623 | `handleMouseMove` | function | Event handler เชื่อม user/system event กับ state action | `(event: React.MouseEvent) => {` |
+| 1667 | `handleViewportMove` | function | Event handler เชื่อม user/system event กับ state action | `(_event: MouseEvent \| TouchEvent \| null, viewport: Viewport) => {` |
+| 1730 | `handleEscape` | function | Event handler เชื่อม user/system event กับ state action | `(event: KeyboardEvent) =>` |
+| 1755 | `nodesWithCursor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 1772 | `edgesWithFloating` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 1801 | `onPaneClickHandler` | function | Event handler เชื่อม user/system event กับ state action | `(event: React.MouseEvent<Element, MouseEvent>) => {` |
 
 #### `src/pages/editor-page/canvas/connection-line/connection-line.tsx`
 
@@ -5587,16 +5941,42 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 26 | `NoteNode` | component | React component แสดง UI และประสาน props/context/event | `({ data, selected, dragging, }) =>` |
-| 41 | `saveContent` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 47 | `abortEdit` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 52 | `enterEditMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(e: React.MouseEvent) => {` |
-| 61 | `handleDelete` | function | Event handler เชื่อม user/system event กับ state action | `(e: React.MouseEvent) => {` |
-| 69 | `handleColorChange` | function | Event handler เชื่อม user/system event กับ state action | `(color: string) => {` |
-| 76 | `handleDoubleClick` | function | Event handler เชื่อม user/system event กับ state action | `(e) => {` |
-| 90 | `eventConsumer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: CanvasEvent) => {` |
-| 112 | `getHeaderColor` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(color: string) =>` |
-| 117 | `getBodyColor` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(color: string) =>` |
+| 29 | `NoteNode` | component | React component แสดง UI และประสาน props/context/event | `({ id, data, selected, dragging, }) =>` |
+| 47 | `saveContent` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 53 | `abortEdit` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 58 | `enterEditMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(e: React.MouseEvent) => {` |
+| 67 | `handleDelete` | function | Event handler เชื่อม user/system event กับ state action | `(e: React.MouseEvent) => {` |
+| 75 | `handleColorChange` | function | Event handler เชื่อม user/system event กับ state action | `(color: string) => {` |
+| 82 | `handleDoubleClick` | function | Event handler เชื่อม user/system event กับ state action | `(e) => {` |
+| 96 | `eventConsumer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(event: CanvasEvent) => {` |
+| 118 | `getHeaderColor` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(color: string) =>` |
+| 123 | `getBodyColor` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(color: string) =>` |
+
+#### `src/pages/editor-page/canvas/presence-avatar-bar/presence-avatar-bar.tsx`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `PresenceAvatarBar`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 30 | `PresenceAvatarBar` | component | React component แสดง UI และประสาน props/context/event | `({ peers, followingPeerId, onFollow, onStopFollow }) =>` |
+| 33 | `onFollow` | method | Event handler เชื่อม user/system event กับ state action | `(clientId: number) => void` |
+| 34 | `onStopFollow` | method | Event handler เชื่อม user/system event กับ state action | `() => void` |
+
+#### `src/pages/editor-page/canvas/presence-highlight/presence-highlight.tsx`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `PresenceHighlightBadge`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 12 | `PresenceHighlightBadge` | component | React component แสดง UI และประสาน props/context/event | `({ peers, }) =>` |
+
+#### `src/pages/editor-page/canvas/presence-highlight/presence-ring-style.ts`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `presenceRingStyle`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 10 | `presenceRingStyle` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function presenceRingStyle( peers: PresencePeer[] ): CSSProperties \| undefined { if (peers.length === 0) return undefined; return { boxShadow: \`0 0 0 2px ${peers[0].color ?? FALLBACK_COLOR}\` }; }` |
 
 #### `src/pages/editor-page/canvas/relationship-edge/edit-relationship-popover.tsx`
 
@@ -5636,6 +6016,25 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 334 | `isDiffNewRelationship` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
 | 344 | `isDiffRelationshipRemoved` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
 | 355 | `edgeMidpoint` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+
+#### `src/pages/editor-page/canvas/remote-cursors/remote-cursors.tsx`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `RemoteCursors`, `RemoteCursorsProps`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 25 | `RemoteCursors` | component | React component แสดง UI และประสาน props/context/event | `({ peers }) =>` |
+| 29 | `visiblePeers` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(peer) =>` |
+
+#### `src/pages/editor-page/canvas/resolve-follow-viewport.ts`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `FollowViewportResult`, `resolveFollowViewport`, `viewportToCenter`, `wouldCreateFollowCycle`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 41 | `viewportToCenter` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function viewportToCenter( viewport: { x: number; y: number; zoom: number }, width: number, height: number ): { x: number; y: number; zoom: number } { return { x: (width / 2 - viewport.x) / viewport.zoom, y: (h...` |
+| 53 | `resolveFollowViewport` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `export function resolveFollowViewport( followingPeerId: number \| null, followedPeer: PresencePeer \| undefined ): FollowViewportResult {` |
+| 78 | `wouldCreateFollowCycle` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function wouldCreateFollowCycle( myClientId: number, targetPeerId: number, peers: PresencePeer[] ): boolean { const followingOf = new Map(peers.map((p) => [p.clientId, p.following])); const seen = new Set<numbe...` |
 
 #### `src/pages/editor-page/canvas/show-all-button.tsx`
 
@@ -5725,17 +6124,17 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 55 | `arePropsEqual` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( prevProps: TableNodeFieldProps, nextProps: TableNodeFieldProps ) =>` |
-| 82 | `TableNodeField` | component | React component แสดง UI และประสาน props/context/event | `({ field, focused, tableNodeId, highlighted, visible, isConnectable, targetEdgeCount, }) => {` |
-| 97 | `isTarget` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 112 | `isTargetFromView` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 130 | `numberOfEdgesToField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 148 | `isForeignKey` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 182 | `frameId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 238 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 306 | `isFieldAttributeChanged` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 320 | `isCustomTypeHighlighted` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 328 | `openEditTableOnField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 59 | `scheduleNodeInternalsUpdate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function scheduleNodeInternalsUpdate( tableNodeId: string, updateNodeInternals: (id: string) => void ): void {` |
+| 98 | `arePropsEqual` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `( prevProps: TableNodeFieldProps, nextProps: TableNodeFieldProps ) =>` |
+| 127 | `TableNodeField` | component | React component แสดง UI และประสาน props/context/event | `({ field, focused, tableNodeId, highlighted, visible, isConnectable, targetEdgeCount, isForeignKey: precomputedIsForeignKey, isLowDetail, }) => {` |
+| 144 | `isTarget` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 159 | `isTargetFromView` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 177 | `numberOfEdgesToField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 202 | `isForeignKey` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 281 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 349 | `isFieldAttributeChanged` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 363 | `isCustomTypeHighlighted` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 371 | `openEditTableOnField` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 #### `src/pages/editor-page/canvas/table-node/table-node-status/table-node-status.tsx`
 
@@ -5751,30 +6150,30 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 74 | `TableNode` | component | React component แสดง UI และประสาน props/context/event | `({ selected, dragging, id, data: { table, isOverlapping, highlightOverlappingTables, hasHighlightedCustomType, highlightTable, isRelationshipCreatingTarget, targetEdgeCounts, }, }) => {` |
-| 90 | `edges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(store) =>` |
-| 108 | `editTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => editTableMod` |
-| 112 | `editTableModeFieldId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (editTableMo` |
-| 123 | `isTarget` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 138 | `fields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 151 | `tableChangedName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => getTableNewN` |
-| 156 | `tableChangedColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => getTableNewC` |
-| 160 | `tableColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 182 | `calculateDiff` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 211 | `selectedRelEdges` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `() =>` |
-| 227 | `highlightedFieldIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 242 | `focused` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (!!selected` |
-| 247 | `openTableInEditor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 252 | `expandTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 261 | `shrinkTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 267 | `toggleExpand` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
-| 275 | `relatedFieldIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 284 | `visibleFields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 325 | `result` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field) =>` |
-| 338 | `isPartOfCreatingRelationship` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
-| 347 | `tableClassName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 402 | `enterEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
-| 416 | `exitEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 92 | `TableNode` | component | React component แสดง UI และประสาน props/context/event | `({ selected, dragging, id, data: { table, isOverlapping, highlightOverlappingTables, hasHighlightedCustomType, highlightTable, isRelationshipCreatingTarget, targetEdgeCounts, foreignKeyFieldIds, }, }) => {` |
+| 121 | `selectedRelEdges` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `(store) =>` |
+| 142 | `isLowDetail` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `(store) => store.transf` |
+| 164 | `editTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => editTableMod` |
+| 168 | `editTableModeFieldId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (editTableMo` |
+| 179 | `isTarget` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 194 | `fields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 207 | `tableChangedName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => getTableNewN` |
+| 212 | `tableChangedColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => getTableNewC` |
+| 216 | `tableColor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 238 | `calculateDiff` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 267 | `highlightedFieldIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 282 | `focused` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => (!!selected` |
+| 287 | `openTableInEditor` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 292 | `expandTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 301 | `shrinkTable` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 307 | `toggleExpand` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `() =>` |
+| 315 | `relatedFieldIds` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 324 | `visibleFields` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 365 | `result` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(field) =>` |
+| 378 | `isPartOfCreatingRelationship` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `() =>` |
+| 387 | `tableClassName` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 442 | `enterEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 456 | `exitEditTableMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 #### `src/pages/editor-page/canvas/temp-cursor-node/temp-cursor-node.tsx`
 
@@ -5837,10 +6236,10 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 33 | `EditorDesktopLayoutLazy` | component | React component แสดง UI และประสาน props/context/event | `() => impo` |
-| 37 | `EditorMobileLayoutLazy` | component | React component แสดง UI และประสาน props/context/event | `() => impo` |
-| 41 | `EditorPageComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
-| 114 | `EditorPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 32 | `EditorDesktopLayoutLazy` | component | React component แสดง UI และประสาน props/context/event | `() => impo` |
+| 36 | `EditorMobileLayoutLazy` | component | React component แสดง UI และประสาน props/context/event | `() => impo` |
+| 40 | `EditorPageComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 113 | `EditorPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
 
 #### `src/pages/editor-page/editor-sidebar/editor-sidebar.tsx`
 
@@ -5996,7 +6395,7 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | 178 | `generateDBML` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `async () =>` |
 | 209 | `showDiff` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async (dbmlContent: string) => {` |
 | 284 | `acceptChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async () =>` |
-| 306 | `undoChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 320 | `undoChanges` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
 
 #### `src/pages/editor-page/side-panel/list-item-header-button/list-item-header-button.tsx`
 
@@ -6432,8 +6831,9 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 12 | `TopNavbar` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
-| 15 | `renderStars` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `() =>` |
+| 21 | `TopNavbar` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 89 | `handleFollow` | function | Event handler เชื่อม user/system event กับ state action | `(clientId: number) => {` |
+| 112 | `renderStars` | function | สร้าง representation สำหรับแสดงผลหรือส่งออก | `() =>` |
 
 #### `src/pages/editor-page/use-diagram-loader.tsx`
 
@@ -6467,9 +6867,9 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 16 | `ExamplesPageComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
-| 21 | `utilizeExample` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async ({ example }: { example: Example }) => {` |
-| 109 | `ExamplesPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 17 | `ExamplesPageComponent` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+| 22 | `utilizeExample` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async ({ example }: { example: Example }) => {` |
+| 113 | `ExamplesPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
 
 ### `src/pages/not-found-page`
 
@@ -6480,6 +6880,16 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
 | 3 | `NotFoundPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
+
+### `src/pages/sign-in-page`
+
+#### `src/pages/sign-in-page/sign-in-page.tsx`
+
+บทบาท: หน้า application และ UI เฉพาะหน้า. Exports: `SignInPage`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 6 | `SignInPage` | component | React component แสดง UI และประสาน props/context/event | `() =>` |
 
 ### `src/pages/template-page`
 
@@ -6925,6 +7335,328 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 บทบาท: bootstrap, configuration หรือ declaration. ไม่มี named export.
 
 ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/__tests__`
+
+#### `server/src/__tests__/config-js.integration.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 26 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> {` |
+| 37 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number): Promise<void> {` |
+| 54 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 57 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess( extraEnv: Record<string, string> ): Promise<TestServer> {` |
+
+### `server/src/app.module.ts`
+
+#### `server/src/app.module.ts`
+
+บทบาท: server: bootstrap, config, health/config.js endpoints, or app module wiring. Exports: `AppModule`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/auth`
+
+#### `server/src/auth/__tests__/auth.integration.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 40 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> {` |
+| 51 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number): Promise<void> {` |
+| 68 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 71 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess( extraEnv: Record<string, string> ): Promise<TestServer> {` |
+
+#### `server/src/auth/auth.module.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `AuthModule`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+#### `server/src/auth/entra-auth-state.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `EntraAuthState`, `buildEntraAuthState`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 17 | `buildEntraAuthState` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function buildEntraAuthState(): EntraAuthState { const config = loadConfig(); return { authMode: config.authMode, verify: config.authMode === 'azure-ad' ? createEntraVerifier( // config.ts's loadConfig already ...` |
+
+#### `server/src/auth/entra-auth.guard.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `EntraAuthGuard`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 36 | `canActivate` | method | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `async canActivate(context: ExecutionContext): Promise<boolean> {` |
+
+#### `server/src/auth/entra-jwt.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `EntraTokenPayload`, `EntraVerifier`, `createEntraVerifier`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 31 | `createEntraVerifier` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createEntraVerifier( tenantId: string, apiAudience: string ): EntraVerifier {` |
+| 41 | `getSigningKey` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `function getSigningKey( header: JwtHeader, callback: SigningKeyCallback ): void {` |
+
+#### `server/src/auth/public.decorator.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `IS_PUBLIC_KEY`, `Public`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 10 | `Public` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+
+#### `server/src/auth/tokens.ts`
+
+บทบาท: server: Azure AD (Entra ID) auth — guard, JWT verifier, AUTH_MODE state. Exports: `ENTRA_AUTH`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/collab`
+
+#### `server/src/collab/__tests__/collab.integration.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 49 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> {` |
+| 60 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number, log: () => string): Promise<void> {` |
+| 82 | `log` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => string` |
+| 83 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 86 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess(): Promise<TestServer> {` |
+| 105 | `log` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 119 | `waitForSynced` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function waitForSynced( provider: HocuspocusProvider, label: string, server: TestServer ): Promise<void> {` |
+| 126 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+| 145 | `registerTestDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function registerTestDiagram(diagramId: string): Promise<void> { const pool = createPool(loadConfig().databaseUrl); try { await pool.query( \`INSERT INTO collab_diagrams (id, name, database_type) VALUES ($1, 'tes...` |
+| 197 | `check` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() =>` |
+
+#### `server/src/collab/collab.module.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `CollabModule`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+#### `server/src/collab/durable-log.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 18 | `buildMessage` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `function buildMessage( documentName: string, outerType: number, writeInner: (encoder: encoding.Encoder) => void ): Uint8Array { const encoder = encoding.createEncoder(); encoding.writeVarString(encoder, documentName);...` |
+| 33 | `message` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(enc) =>` |
+| 74 | `message` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(enc) => {` |
+| 101 | `message` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `(enc) =>` |
+
+#### `server/src/collab/durable-log.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `extractUpdateFromRawMessage`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 48 | `extractUpdateFromRawMessage` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function extractUpdateFromRawMessage(raw: Uint8Array): Uint8Array \| null { const decoder = decoding.createDecoder(raw); decoding.readVarString(decoder); // Hocuspocus's documentName envelope const outerType = ...` |
+
+#### `server/src/collab/hocuspocus.provider.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `createHocuspocus`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 24 | `createHocuspocus` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createHocuspocus(pool: Pool, auth: EntraAuthState): Hocuspocus { const config: Partial<Configuration> = { extensions: [createPersistenceExtension(pool)], }; if (auth.authMode === 'azure-ad') { config.o...` |
+
+#### `server/src/collab/persistence-extension.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `createPersistenceExtension`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 27 | `createPersistenceExtension` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createPersistenceExtension(pool: Pool): Extension { return { extensionName: 'chartdb-postgres-persistence', async onLoadDocument({ document, documentName, }: onLoadDocumentPayload): Promise<void> { con...` |
+| 31 | `onLoadDocument` | method | Event handler เชื่อม user/system event กับ state action | `async onLoadDocument({ document, documentName, }: onLoadDocumentPayload): Promise<void> {` |
+| 54 | `beforeHandleMessage` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `async beforeHandleMessage({ documentName, update, }: beforeHandleMessagePayload): Promise<void> { const yUpdate = extractUpdateFromRawMessage(update); if (yUpdate) { await appendUpdate(pool, documentName, yUpdate); //...` |
+| 74 | `onStoreDocument` | method | Event handler เชื่อม user/system event กับ state action | `async onStoreDocument({ document, documentName, }: onStoreDocumentPayload): Promise<void> { // Order matters — see getMaxUpdateId's doc comment in // db/persistence.ts. const throughUpdateId = await getMaxUpdateId(poo...` |
+
+#### `server/src/collab/tokens.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `COLLAB_CONFIG`, `HOCUSPOCUS`, `PG_POOL`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+#### `server/src/collab/ws-upgrade.service.ts`
+
+บทบาท: server: Hocuspocus wiring — WS upgrade, Postgres persistence extension, durable log. Exports: `WsUpgradeService`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 12 | `toWebRequest` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function toWebRequest(req: IncomingMessage): Request {` |
+| 55 | `onModuleInit` | method | Event handler เชื่อม user/system event กับ state action | `async onModuleInit(): Promise<void> {` |
+
+### `server/src/config-js.controller.ts`
+
+#### `server/src/config-js.controller.ts`
+
+บทบาท: server: bootstrap, config, health/config.js endpoints, or app module wiring. Exports: `ConfigJsController`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 45 | `serve` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Public() @Get('config.js') @Header('Content-Type', 'application/javascript') @Header('Cache-Control', 'no-store') serve(): string {` |
+
+### `server/src/config.test.ts`
+
+#### `server/src/config.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/config.ts`
+
+#### `server/src/config.ts`
+
+บทบาท: server: bootstrap, config, health/config.js endpoints, or app module wiring. Exports: `AuthMode`, `CollabConfig`, `isOriginAllowed`, `loadConfig`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 33 | `readAllowlist` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAllowlist(raw: string \| undefined): string[] {` |
+| 41 | `readAuthMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAuthMode(raw: string \| undefined): AuthMode {` |
+| 49 | `loadConfig` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {` |
+| 94 | `isOriginAllowed` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `export function isOriginAllowed( allowlist: string[], origin: string \| undefined ): boolean { if (allowlist.length === 0) return true; if (!origin) return true; return allowlist.includes(origin); }` |
+
+### `server/src/db`
+
+#### `server/src/db/diagram-groups.ts`
+
+บทบาท: server: Postgres pool, schema/migration, plain-SQL CRUD. Exports: `CreateDiagramGroupInput`, `DiagramGroupRecord`, `createDiagramGroup`, `deleteDiagramGroup`, `listDiagramGroups`, `updateDiagramGroup`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 23 | `fromRow` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function fromRow(row: DiagramGroupRow): DiagramGroupRecord {` |
+| 32 | `listDiagramGroups` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function listDiagramGroups( pool: Pool ): Promise<DiagramGroupRecord[]> {` |
+| 48 | `createDiagramGroup` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export async function createDiagramGroup( pool: Pool, input: CreateDiagramGroupInput ): Promise<DiagramGroupRecord \| null> { const result = await pool.query<DiagramGroupRow>( \`INSERT INTO collab_diagram_groups (id, n...` |
+| 62 | `updateDiagramGroup` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export async function updateDiagramGroup( pool: Pool, id: string, name: string ): Promise<DiagramGroupRecord \| null> {` |
+| 81 | `deleteDiagramGroup` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export async function deleteDiagramGroup( pool: Pool, id: string ): Promise<boolean> { const result = await pool.query( 'DELETE FROM collab_diagram_groups WHERE id = $1', [id] ); return (result.rowCount ?? 0) > 0; }` |
+
+#### `server/src/db/diagrams.ts`
+
+บทบาท: server: Postgres pool, schema/migration, plain-SQL CRUD. Exports: `CreateDiagramInput`, `DiagramRecord`, `UpdateDiagramInput`, `createDiagram`, `deleteDiagram`, `getDiagram`, `listDiagrams`, `touchDiagram`, `updateDiagram`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 31 | `fromRow` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function fromRow(row: DiagramRow): DiagramRecord {` |
+| 43 | `listDiagrams` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function listDiagrams(pool: Pool): Promise<DiagramRecord[]> {` |
+| 50 | `getDiagram` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `export async function getDiagram( pool: Pool, id: string ): Promise<DiagramRecord \| null> {` |
+| 77 | `createDiagram` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export async function createDiagram( pool: Pool, input: CreateDiagramInput ): Promise<DiagramRecord \| null> { const result = await pool.query<DiagramRow>( \`INSERT INTO collab_diagrams (id, name, database_type, databa...` |
+| 98 | `updateDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export async function updateDiagram( pool: Pool, id: string, input: UpdateDiagramInput ): Promise<DiagramRecord \| null> {` |
+| 132 | `touchDiagram` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function touchDiagram(pool: Pool, id: string): Promise<void> { await pool.query('UPDATE collab_diagrams SET updated_at = now() WHERE id = $1', [ id, ]); }` |
+| 144 | `deleteDiagram` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export async function deleteDiagram( pool: Pool, id: string ): Promise<boolean> { const result = await pool.query('DELETE FROM collab_diagrams WHERE id = $1', [ id, ]); return (result.rowCount ?? 0) > 0; }` |
+
+#### `server/src/db/persistence.ts`
+
+บทบาท: server: Postgres pool, schema/migration, plain-SQL CRUD. Exports: `appendUpdate`, `getMaxUpdateId`, `loadMergedState`, `storeSnapshotAndPrune`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 6 | `appendUpdate` | function | เปลี่ยน state หรือ domain data ตามชื่อ function | `export async function appendUpdate( pool: Pool, diagramId: string, update: Uint8Array ): Promise<void> { await pool.query( 'INSERT INTO yjs_updates (diagram_id, update) VALUES ($1, $2)', [diagramId, Buffer.from(update...` |
+| 23 | `loadMergedState` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function loadMergedState( pool: Pool, diagramId: string ): Promise<Uint8Array \| null> { const snapshotResult = await pool.query<{ snapshot: Buffer; through_update_id: string; }>( 'SELECT snapshot, throug...` |
+| 79 | `getMaxUpdateId` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `export async function getMaxUpdateId( pool: Pool, diagramId: string ): Promise<string> { const result = await pool.query<{ max: string \| null }>( 'SELECT max(id) FROM yjs_updates WHERE diagram_id = $1', [diagramId] )...` |
+| 99 | `storeSnapshotAndPrune` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function storeSnapshotAndPrune( pool: Pool, diagramId: string, fullState: Uint8Array, throughUpdateId: string ): Promise<void> { const client: PoolClient = await pool.connect(); try { await client.query('...` |
+
+#### `server/src/db/pool.ts`
+
+บทบาท: server: Postgres pool, schema/migration, plain-SQL CRUD. Exports: `createPool`, `migrate`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 3 | `createPool` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createPool(databaseUrl: string): Pool {` |
+| 167 | `migrate` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export async function migrate(pool: Pool): Promise<void> {` |
+
+### `server/src/diagram-groups`
+
+#### `server/src/diagram-groups/__tests__/diagram-groups.integration.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 25 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> {` |
+| 36 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number): Promise<void> {` |
+| 53 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 56 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess(): Promise<TestServer> {` |
+| 81 | `testGroupId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function testGroupId(): string { return \`test-group-${randomUUID()}\`; }` |
+| 84 | `testDiagramId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function testDiagramId(): string` |
+
+#### `server/src/diagram-groups/diagram-groups.controller.ts`
+
+บทบาท: server: /diagram-groups REST controller/module (folder-style grouping). Exports: `DiagramGroupsController`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 35 | `list` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Get() async list() {` |
+| 40 | `create` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `@Post() async create(@Body() body: CreateDiagramGroupInput) {` |
+| 49 | `update` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `@Patch(':id') async update(@Param('id') id: string, @Body() body: { name: string }) {` |
+| 58 | `remove` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `@Delete(':id') async remove(@Param('id') id: string) {` |
+
+#### `server/src/diagram-groups/diagram-groups.module.ts`
+
+บทบาท: server: /diagram-groups REST controller/module (folder-style grouping). Exports: `DiagramGroupsModule`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/diagrams`
+
+#### `server/src/diagrams/__tests__/diagrams.integration.test.ts`
+
+บทบาท: ชุดทดสอบและกรณี regression. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 35 | `freePort` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function freePort(): Promise<number> {` |
+| 46 | `waitForHealth` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function waitForHealth(port: number): Promise<void> {` |
+| 63 | `stop` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `() => Promise<void>` |
+| 66 | `startServerProcess` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function startServerProcess(): Promise<TestServer> {` |
+| 94 | `testDiagramId` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function testDiagramId(): string { return \`test-rest-diagram-${randomUUID()}\`; }` |
+| 252 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => reject(new Error('ne` |
+| 322 | `timer` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `() => reject(new Error('ne` |
+
+#### `server/src/diagrams/diagrams.controller.ts`
+
+บทบาท: server: /diagrams REST controller/module. Exports: `DiagramsController`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 43 | `list` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Get() async list() {` |
+| 48 | `get` | method | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `@Get(':id') async get(@Param('id') id: string) {` |
+| 57 | `create` | method | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `@Post() async create(@Body() body: CreateDiagramInput) {` |
+| 66 | `update` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `@Patch(':id') async update(@Param('id') id: string, @Body() body: UpdateDiagramInput) {` |
+| 88 | `remove` | method | เปลี่ยน state หรือ domain data ตามชื่อ function | `@Delete(':id') async remove(@Param('id') id: string) {` |
+
+#### `server/src/diagrams/diagrams.module.ts`
+
+บทบาท: server: /diagrams REST controller/module. Exports: `DiagramsModule`.
+
+ไม่มี named function/component/method; ไฟล์เป็น data, type, constant หรือ side-effect declaration.
+
+### `server/src/health.controller.ts`
+
+#### `server/src/health.controller.ts`
+
+บทบาท: server: bootstrap, config, health/config.js endpoints, or app module wiring. Exports: `HealthController`.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 6 | `check` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Public() @Get() check(): { status: 'ok' } {` |
+
+### `server/src/main.ts`
+
+#### `server/src/main.ts`
+
+บทบาท: server: bootstrap, config, health/config.js endpoints, or app module wiring. ไม่มี named export.
+
+| บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
+|---:|---|---|---|---|
+| 6 | `bootstrap` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `async function bootstrap(): Promise<void> {` |
 
 ## ขอบเขตและการ regenerate
 
