@@ -234,9 +234,14 @@ summary can't drift out of sync with it.
   once implemented (two users creating a relationship between the same two
   tables simultaneously, two users adding an index with the same name,
   etc.).
-- **No diagram-discovery path for a genuinely new collaborator — found via
-  real manual two-browser testing after Phase 4 landed, not designed for
-  by any phase above.** `loadDiagram(diagramId)` (`chartdb-provider.tsx`)
+- **No diagram-discovery path for a genuinely new collaborator — ✅ fixed
+  by Phase 4.5, confirmed by real manual two-browser testing 2026-08-23.**
+  Left as found (below) for the record of what the gap was and how it was
+  found; Phase 4.5's §10 section has the fix (`storage-provider.tsx` now
+  fetches diagram metadata from `GET /diagrams/:id`, no Dexie gate left in
+  the load path). Originally found via real manual two-browser testing
+  after Phase 4 landed, not designed for by any phase above at the time.
+  `loadDiagram(diagramId)` (`chartdb-provider.tsx`)
   reads **only** from local Dexie (`storageDB.getDiagram(...)`) — there is
   no fallback to fetch diagram metadata from the collab server. If a
   diagram id isn't already in a browser's own Dexie, `use-diagram-loader.tsx`
@@ -1350,8 +1355,11 @@ explicit "mark as saved" action, with no content write of its own to
 piggyback on) still does a real, if attribute-less, PATCH for exactly
 this reason.
 
-**Status of manual two-browser verification**: not yet re-run against this
-phase's changes. The automated coverage is real (full root test suite:
+**Status of manual two-browser verification**: ✅ re-run against this
+phase's changes and confirmed working by the project owner (two real
+browser windows against the server+client started for this phase,
+2026-08-23) — the one exit criterion with no automated substitute is now
+closed. The automated coverage is real (full root test suite:
 116 files / 927 tests, stable across 4 consecutive runs, including two new
 `seedDiagramRoom` integration tests against the real server) — but honest
 about one limit: the `hasUnsyncedChanges` poll in `seedDiagramRoom` (waits
@@ -1372,24 +1380,20 @@ have flushed before a synchronous `destroy()`), but this codebase's own
 tests don't prove it's necessary, and that shouldn't be overclaimed later
 as "verified."
 
-Separately, "two real, separate browser processes, one creates a diagram, the other opens
-it fresh" has not been physically re-done since this phase's client-side
-work landed. Should happen before this phase is treated as fully closed,
-not just automated-test-green.
-
-**Exit criteria:** Dexie package fully removed from `package.json` (✅ —
-`npm uninstall dexie`, confirmed zero remaining `from 'dexie'` imports
-first); every one of the 10 `useStorage()` consumer files still compiles
-and works against the new implementation (✅ — `tsc -b` clean, full test
-suite green); creating a diagram (blank, imported SQL, or cloned template)
-survives a hard refresh with all content intact (✅ automated, via
-`seedDiagramRoom`'s own round-trip tests — not yet manually re-verified
-in a real browser); opening a diagram by id in a browser that has never
-seen it before works, closing the §9 gap this phase exists to fix (✅
-automated — no code path left that gates room-joining on local storage —
-not yet manually re-verified with two real separate browsers); deleting a
+**Exit criteria — all met:** Dexie package fully removed from
+`package.json` (✅ — `npm uninstall dexie`, confirmed zero remaining
+`from 'dexie'` imports first); every one of the 10 `useStorage()` consumer
+files still compiles and works against the new implementation (✅ —
+`tsc -b` clean, full test suite green); creating a diagram (blank,
+imported SQL, or cloned template) survives a hard refresh with all
+content intact (✅ automated via `seedDiagramRoom`'s round-trip tests, ✅
+manually confirmed two-browser); opening a diagram by id in a browser
+that has never seen it before works, closing the §9 gap this phase exists
+to fix (✅ automated, ✅ manually confirmed two-browser); deleting a
 diagram actually stays deleted with a client still connected (✅ — landed
 and tested server-side in the earlier commit).
+
+Phase 4.5 is fully closed.
 
 ### Phase 5 — Presence, undo, and disconnect UX
 
