@@ -21,7 +21,16 @@ interface RequestLike {
 export class EntraAuthGuard implements CanActivate {
     constructor(
         @Inject(ENTRA_AUTH) private readonly auth: EntraAuthState,
-        private readonly reflector: Reflector
+        // Explicit @Inject rather than relying on implicit type-based
+        // autowiring (design:paramtypes reflection) — the exact same bug
+        // as ws-upgrade.service.ts's HttpAdapterHost param: `npm run dev`
+        // (tsx/esbuild) leaves this undefined at runtime ("Cannot read
+        // properties of undefined (reading 'getAllAndOverride')"), while
+        // the compiled `dist/` build (real tsc, used by every integration
+        // test) works fine — esbuild's emitDecoratorMetadata support is
+        // incomplete and doesn't reliably emit this metadata for every
+        // param.
+        @Inject(Reflector) private readonly reflector: Reflector
     ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
