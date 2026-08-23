@@ -1,0 +1,73 @@
+# Single-container deploy (docs/design/realtime-collaboration.md §7,
+# Dockerfile.combined) — one app image serving client+API on one origin,
+# plus the Postgres it needs. Not wired into CI; a plain `docker compose
+# up -d` for anyone who wants this deploy shape running locally or on a
+# single host.
+#
+# Config lives in a `.env` file next to this one (compose loads it
+# automatically for the ${VAR} substitutions below — same mechanism
+# server/.env / root .env already use for their own tools, just a
+# separate file since compose reads its own). Copy the block below into
+# `.env` and fill in what you need; every var not set falls back to the
+# same default the app itself would use with nothing set at all.
+#
+# AUTH_MODE=public
+# # AUTH_MODE=azure-ad
+# # ENTRA_TENANT_ID=
+# # ENTRA_API_AUDIENCE=
+# # WEBSOCKET_ORIGIN_ALLOWLIST=
+# # See Dockerfile.combined's header comment before setting this one —
+# # it must include this app's own public origin, or the client+API
+# # sharing one origin, or realtime silently 403s while REST keeps
+# # working.
+# # OPENAI_API_KEY=
+# # OPENAI_API_ENDPOINT=
+# # LLM_MODEL_NAME=
+# # HIDE_CHARTDB_CLOUD=
+# # DISABLE_ANALYTICS=
+# # APP_PORT=3001
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.combined
+    ports:
+      - '${APP_PORT:-3001}:3001'
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-chartdb}:${POSTGRES_PASSWORD:-chartdb}@postgres:5432/${POSTGRES_DB:-chartdb_collaboration}
+      AUTH_MODE: ${AUTH_MODE:-public}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_API_AUDIENCE: ${ENTRA_API_AUDIENCE:-}
+      WEBSOCKET_ORIGIN_ALLOWLIST: ${WEBSOCKET_ORIGIN_ALLOWLIST:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_ENDPOINT: ${OPENAI_API_ENDPOINT:-}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-}
+      HIDE_CHARTDB_CLOUD: ${HIDE_CHARTDB_CLOUD:-}
+      DISABLE_ANALYTICS: ${DISABLE_ANALYTICS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chartdb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chartdb}
+      POSTGRES_DB: ${POSTGRES_DB:-chartdb_collaboration}
+    volumes:
+      - chartdb_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-chartdb} -d ${POSTGRES_DB:-chartdb_collaboration}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  chartdb_postgres_data:
