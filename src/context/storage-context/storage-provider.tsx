@@ -228,8 +228,20 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
     const listDiagrams: StorageContext['listDiagrams'] =
         useCallback(async () => {
             if (!COLLAB_API_URL) return [];
-            const { body } = await apiFetch<DiagramMetadataDTO[]>('/diagrams');
-            return (body ?? []).map(fromDTO);
+            const { status, body } =
+                await apiFetch<DiagramMetadataDTO[]>('/diagrams');
+            // Bug found via a real 401 crashing far downstream (Phase 7
+            // added a new common way to get a non-200/non-404 status):
+            // only 404 was ever excluded here, so any other error status
+            // (401, 500, ...) fell through to `.map(fromDTO)` on an
+            // error-shaped body ({message, error, statusCode}), not an
+            // array — a different crash than getDiagram's, but the same
+            // root cause. Any non-2xx now throws instead of being parsed
+            // as if it were diagram data.
+            if (status < 200 || status >= 300 || !body) {
+                throw new Error(`Failed to list diagrams: HTTP ${status}`);
+            }
+            return body.map(fromDTO);
         }, []);
 
     const getDiagram: StorageContext['getDiagram'] = useCallback(async (id) => {
@@ -237,7 +249,18 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
         const { status, body } = await apiFetch<DiagramMetadataDTO>(
             `/diagrams/${id}`
         );
-        if (status === 404 || !body) return undefined;
+        if (status === 404) return undefined;
+        // Same bug as listDiagrams above, but worse here: the error body
+        // ({message, error, statusCode}) is a plain object, the same
+        // shape fromDTO expects, so it silently produced a bogus Diagram
+        // with databaseType/name/etc all undefined instead of throwing —
+        // that Diagram then reached setDatabaseType(undefined), and the
+        // real crash surfaced much later and far away, at
+        // supportsCustomTypes(undefined) in editor-sidebar.tsx/
+        // side-panel.tsx, with no hint it started here.
+        if (status < 200 || status >= 300 || !body) {
+            throw new Error(`Failed to load diagram ${id}: HTTP ${status}`);
+        }
         return fromDTO(body);
     }, []);
 

@@ -29,10 +29,21 @@ expect.extend(matchers);
 // network I/O `COLLAB_WS_URL: ''` exists to prevent. Mocked to '' too so
 // storage-provider's fetch calls fail fast against a relative empty-string
 // URL instead of reaching out for real.
+// Phase 7: same class of bug as COLLAB_WS_URL above, found the hard way —
+// AUTH_MODE isn't derived from anything else in env.ts, but it's still
+// read straight from `import.meta.env.VITE_AUTH_MODE` at module-load time,
+// meaning a developer's own local .env (set to `azure-ad` to manually test
+// this phase's sign-in flow) leaked into every test in this suite that
+// goes through apiFetch — getEntraAccessToken() then threw "no active
+// Entra account" in place of whatever the test's mocked fetch was
+// supposed to exercise. Pinned to 'public' here for the same reason
+// COLLAB_WS_URL is pinned to '': tests must be deterministic regardless
+// of what's sitting in a contributor's own .env.
 vi.mock('@/lib/env', async (importOriginal) => ({
     ...(await importOriginal<typeof EnvModule>()),
     COLLAB_WS_URL: '',
     COLLAB_API_URL: '',
+    AUTH_MODE: 'public',
 }));
 
 afterEach(() => {

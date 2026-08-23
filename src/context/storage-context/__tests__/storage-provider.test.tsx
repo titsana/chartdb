@@ -23,6 +23,14 @@ import type * as EnvModule from '@/lib/env';
 vi.doMock('@/lib/env', async (importOriginal) => ({
     ...(await importOriginal<typeof EnvModule>()),
     COLLAB_API_URL: 'http://localhost:9999',
+    // This file's own doMock takes priority over setup.ts's global
+    // AUTH_MODE:'public' override for this file (doMock called after
+    // setup.ts already ran) — without repeating it here, a local .env
+    // with VITE_AUTH_MODE=azure-ad (set to manually test Phase 7's
+    // sign-in flow) leaked back in via importOriginal() above, making
+    // apiFetch call getEntraAccessToken() and throw "no active Entra
+    // account" in place of whatever each test's mocked fetch exercises.
+    AUTH_MODE: 'public',
 }));
 
 // Matches this codebase's existing precedent for a dynamically-imported
@@ -101,5 +109,70 @@ describe('StorageProvider — apiFetch timeout', () => {
         await expect(
             result.current.getDiagram('some-diagram-id')
         ).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * Bug found via a real 401 (Phase 7's auth guard) crashing far downstream —
+ * only status 404 was ever excluded from `fromDTO`; every other error
+ * status (401, 500, ...) fell through and got parsed as if its
+ * `{message, error, statusCode}` error body were real diagram metadata,
+ * producing a Diagram with databaseType/name/etc all undefined. That
+ * reached ChartDBProvider's setDatabaseType(undefined), and the actual
+ * crash (`Cannot read properties of undefined (reading
+ * 'supportsCustomTypes')`) surfaced much later, in editor-sidebar.tsx/
+ * side-panel.tsx, with nothing pointing back to where it started.
+ */
+describe('StorageProvider — getDiagram/listDiagrams reject on non-2xx, non-404', () => {
+    it('getDiagram throws on a 401, rather than returning a bogus Diagram parsed from the error body', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve({
+                    status: 401,
+                    json: () =>
+                        Promise.resolve({
+                            message: 'missing bearer token',
+                            error: 'Unauthorized',
+                            statusCode: 401,
+                        }),
+                } as Response)
+            )
+        );
+
+        const { result } = renderHook(() => useContext(storageContext), {
+            wrapper: ({ children }: React.PropsWithChildren) => (
+                <StorageProvider>{children}</StorageProvider>
+            ),
+        });
+
+        await expect(
+            result.current.getDiagram('some-diagram-id')
+        ).rejects.toThrow(/401/);
+    });
+
+    it('listDiagrams throws on a 401, rather than calling .map on an error-shaped object', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(() =>
+                Promise.resolve({
+                    status: 401,
+                    json: () =>
+                        Promise.resolve({
+                            message: 'missing bearer token',
+                            error: 'Unauthorized',
+                            statusCode: 401,
+                        }),
+                } as Response)
+            )
+        );
+
+        const { result } = renderHook(() => useContext(storageContext), {
+            wrapper: ({ children }: React.PropsWithChildren) => (
+                <StorageProvider>{children}</StorageProvider>
+            ),
+        });
+
+        await expect(result.current.listDiagrams()).rejects.toThrow(/401/);
     });
 });

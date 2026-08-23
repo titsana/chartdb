@@ -99,7 +99,14 @@ async function startServerProcessOnPort(
     const serverDir = join(process.cwd(), 'server');
     const child = spawn('node', [join(serverDir, 'dist/main.js')], {
         cwd: serverDir,
-        env: { ...process.env, PORT: String(port) },
+        // AUTH_MODE explicitly pinned to 'public', same reasoning as
+        // src/test/setup.ts's own AUTH_MODE override — dotenv (loaded
+        // inside server/src/config.ts) only fills in vars *missing* from
+        // process.env, so without this, a contributor's own server/.env
+        // set to AUTH_MODE=azure-ad (to manually test Phase 7's sign-in
+        // flow) leaks into this spawned server, and every REST call this
+        // file makes with no token starts failing with 401.
+        env: { ...process.env, PORT: String(port), AUTH_MODE: 'public' },
         stdio: 'ignore',
     });
     const healthy = await waitForHealth(port);
@@ -233,6 +240,14 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
             // real StorageProvider) but the next test that does shouldn't
             // have to rediscover this.
             COLLAB_API_URL: `http://localhost:${server!.port}`,
+            // Same reason as src/test/setup.ts's own AUTH_MODE override —
+            // this file's doMock takes priority over that global one, so
+            // it has to repeat the pin or a contributor's local .env
+            // (VITE_AUTH_MODE=azure-ad, to manually test Phase 7's sign-in
+            // flow) leaks in here and HocuspocusProvider's `token` option
+            // tries to call getEntraAccessToken() against a server that
+            // was itself started with AUTH_MODE unset (public).
+            AUTH_MODE: 'public',
         }));
 
         ({ ChartDBProvider } = await import('../chartdb-provider'));
