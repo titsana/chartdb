@@ -3,6 +3,7 @@ import type { ScrollAction } from './local-config-context';
 import { LocalConfigContext } from './local-config-context';
 import type { Theme } from '../theme-context/theme-context';
 import { randomColor } from '@/lib/colors';
+import { displayNameKey, initialDisplayName } from './initial-display-name';
 
 const themeKey = 'theme';
 const scrollActionKey = 'scroll_action';
@@ -12,16 +13,7 @@ const githubRepoOpenedKey = 'github_repo_opened';
 const starUsDialogLastOpenKey = 'star_us_dialog_last_open';
 const showMiniMapOnCanvasKey = 'show_minimap_on_canvas';
 const showDBViewsKey = 'show_db_views';
-const displayNameKey = 'presence_display_name';
 const presenceColorKey = 'presence_color';
-
-// Phase 5: a stable-enough per-browser default so a first-time presence
-// label isn't literally blank — "Guest 1234", not tied to any account
-// (there is none — no auth is a deliberate product decision, see the
-// design doc's Phase 4.5 section). Computed once per fresh localStorage
-// (i.e. per browser, roughly), not regenerated every load.
-const randomDisplayName = () =>
-    `Guest ${Math.floor(1000 + Math.random() * 9000)}`;
 
 export const LocalConfigProvider: React.FC<React.PropsWithChildren> = ({
     children,
@@ -61,9 +53,8 @@ export const LocalConfigProvider: React.FC<React.PropsWithChildren> = ({
             (localStorage.getItem(showMiniMapOnCanvasKey) || 'true') === 'true'
         );
 
-    const [displayName, setDisplayName] = React.useState<string>(
-        localStorage.getItem(displayNameKey) || randomDisplayName()
-    );
+    const [displayName, setDisplayName] =
+        React.useState<string>(initialDisplayName);
 
     const [presenceColor, setPresenceColor] = React.useState<string>(
         localStorage.getItem(presenceColorKey) || randomColor()
