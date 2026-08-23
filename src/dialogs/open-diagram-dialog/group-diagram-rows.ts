@@ -14,6 +14,11 @@ import type { DiagramGroup } from '@/lib/domain/diagram-group';
  * exists — with none, the result looks exactly like the pre-grouping
  * flat list (every diagram, no headers at all).
  *
+ * `collapsedGroupIds` (keyed by group.id, '' for the Ungrouped bucket)
+ * skips pushing that bucket's diagram rows entirely — the header row
+ * still appears. selectionIndex is only ever incremented for rows
+ * actually pushed, so collapsing a group can't leave gaps in it.
+ *
  * Pure, extracted specifically so this logic is unit-testable —
  * open-diagram-dialog.tsx has no test harness of its own.
  */
@@ -24,7 +29,8 @@ export type DiagramListRow =
 
 export function groupDiagramRows(
     diagrams: Diagram[],
-    groups: DiagramGroup[]
+    groups: DiagramGroup[],
+    collapsedGroupIds: ReadonlySet<string> = new Set()
 ): DiagramListRow[] {
     const diagramsByGroupId = new Map<string, Diagram[]>();
     for (const diagram of diagrams) {
@@ -41,6 +47,7 @@ export function groupDiagramRows(
     let selectionIndex = 0;
     for (const group of groups) {
         rows.push({ type: 'group-header', group });
+        if (collapsedGroupIds.has(group.id)) continue;
         for (const diagram of diagramsByGroupId.get(group.id) ?? []) {
             rows.push({
                 type: 'diagram',
@@ -54,12 +61,14 @@ export function groupDiagramRows(
     if (groups.length > 0 && ungroupedDiagrams.length > 0) {
         rows.push({ type: 'ungrouped-header' });
     }
-    for (const diagram of ungroupedDiagrams) {
-        rows.push({
-            type: 'diagram',
-            diagram,
-            selectionIndex: selectionIndex++,
-        });
+    if (!collapsedGroupIds.has('')) {
+        for (const diagram of ungroupedDiagrams) {
+            rows.push({
+                type: 'diagram',
+                diagram,
+                selectionIndex: selectionIndex++,
+            });
+        }
     }
 
     return rows;

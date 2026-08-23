@@ -91,6 +91,62 @@ describe('groupDiagramRows', () => {
         expect(selectionIndices).toEqual([0, 1, 2]);
     });
 
+    it('collapsing a group hides its diagram rows but keeps the header row', () => {
+        const groupA = group({ id: 'a', name: 'A' });
+        const groupB = group({ id: 'b', name: 'B' });
+        const d1 = diagram({ id: 'd1', groupId: 'a' });
+        const d2 = diagram({ id: 'd2', groupId: 'b' });
+
+        const rows = groupDiagramRows(
+            [d1, d2],
+            [groupA, groupB],
+            new Set(['a'])
+        );
+
+        expect(rows).toEqual([
+            { type: 'group-header', group: groupA },
+            { type: 'group-header', group: groupB },
+            { type: 'diagram', diagram: d2, selectionIndex: 0 },
+        ]);
+    });
+
+    it('collapsing the Ungrouped bucket (key "") hides its diagram rows but keeps its header', () => {
+        const groupA = group({ id: 'a', name: 'A' });
+        const grouped = diagram({ id: 'd1', groupId: 'a' });
+        const ungrouped = diagram({ id: 'd2', groupId: null });
+
+        const rows = groupDiagramRows(
+            [grouped, ungrouped],
+            [groupA],
+            new Set([''])
+        );
+
+        expect(rows).toEqual([
+            { type: 'group-header', group: groupA },
+            { type: 'diagram', diagram: grouped, selectionIndex: 0 },
+            { type: 'ungrouped-header' },
+        ]);
+    });
+
+    it('collapsing a group keeps selectionIndex contiguous across the gap (no skipped numbers)', () => {
+        const groupA = group({ id: 'a', name: 'A' });
+        const groupB = group({ id: 'b', name: 'B' });
+        const rows = groupDiagramRows(
+            [
+                diagram({ id: 'd1', groupId: 'a' }),
+                diagram({ id: 'd2', groupId: 'b' }),
+                diagram({ id: 'd3', groupId: 'b' }),
+            ],
+            [groupA, groupB],
+            new Set(['a'])
+        );
+
+        const selectionIndices = rows
+            .filter((row) => row.type === 'diagram')
+            .map((row) => (row.type === 'diagram' ? row.selectionIndex : -1));
+        expect(selectionIndices).toEqual([0, 1]);
+    });
+
     it('undefined groupId and null groupId both land in the same ungrouped bucket', () => {
         const groupA = group({ id: 'a', name: 'A' });
         const dUndefined = diagram({ id: 'd1', groupId: undefined });

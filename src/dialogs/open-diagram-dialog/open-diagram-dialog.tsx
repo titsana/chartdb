@@ -24,6 +24,7 @@ import { useStorage } from '@/hooks/use-storage';
 import type { Diagram } from '@/lib/domain/diagram';
 import type { DiagramGroup } from '@/lib/domain/diagram-group';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import type { BaseDialogProps } from '../common/base-dialog-props';
@@ -48,6 +49,20 @@ export const OpenDiagramDialog: React.FC<OpenDiagramDialogProps> = ({
     const { listDiagrams, listDiagramGroups } = useStorage();
     const [diagrams, setDiagrams] = useState<Diagram[]>([]);
     const [groups, setGroups] = useState<DiagramGroup[]>([]);
+    const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
+        new Set()
+    );
+    const toggleGroupCollapse = useCallback((groupId: string) => {
+        setCollapsedGroupIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(groupId)) {
+                next.delete(groupId);
+            } else {
+                next.add(groupId);
+            }
+            return next;
+        });
+    }, []);
     const [selectedDiagramId, setSelectedDiagramId] = useState<
         string | undefined
     >();
@@ -71,8 +86,8 @@ export const OpenDiagramDialog: React.FC<OpenDiagramDialogProps> = ({
     // diagrams, then an "Ungrouped" bucket last for anything with no
     // groupId.
     const rows = useMemo(
-        () => groupDiagramRows(diagrams, groups),
-        [diagrams, groups]
+        () => groupDiagramRows(diagrams, groups, collapsedGroupIds),
+        [diagrams, groups, collapsedGroupIds]
     );
 
     useEffect(() => {
@@ -198,10 +213,20 @@ export const OpenDiagramDialog: React.FC<OpenDiagramDialogProps> = ({
                                                 key={`group-${row.group.id}`}
                                                 group={row.group}
                                                 refetch={fetchDiagrams}
+                                                collapsed={collapsedGroupIds.has(
+                                                    row.group.id
+                                                )}
+                                                onToggleCollapse={() =>
+                                                    toggleGroupCollapse(
+                                                        row.group.id
+                                                    )
+                                                }
                                             />
                                         );
                                     }
                                     if (row.type === 'ungrouped-header') {
+                                        const ungroupedCollapsed =
+                                            collapsedGroupIds.has('');
                                         return (
                                             <TableRow
                                                 key="group-ungrouped"
@@ -211,9 +236,24 @@ export const OpenDiagramDialog: React.FC<OpenDiagramDialogProps> = ({
                                                     colSpan={6}
                                                     className="font-medium text-muted-foreground"
                                                 >
-                                                    {t(
-                                                        'open_diagram_dialog.ungrouped'
-                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            toggleGroupCollapse(
+                                                                ''
+                                                            )
+                                                        }
+                                                        className="flex items-center gap-1.5"
+                                                    >
+                                                        {ungroupedCollapsed ? (
+                                                            <ChevronRight className="size-3.5" />
+                                                        ) : (
+                                                            <ChevronDown className="size-3.5" />
+                                                        )}
+                                                        {t(
+                                                            'open_diagram_dialog.ungrouped'
+                                                        )}
+                                                    </button>
                                                 </TableCell>
                                             </TableRow>
                                         );

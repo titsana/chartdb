@@ -8,7 +8,13 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/dropdown-menu/dropdown-menu';
-import { Ellipsis, Pencil, Trash2 } from 'lucide-react';
+import {
+    ChevronDown,
+    ChevronRight,
+    Ellipsis,
+    Pencil,
+    Trash2,
+} from 'lucide-react';
 import { useStorage } from '@/hooks/use-storage';
 import type { DiagramGroup } from '@/lib/domain/diagram-group';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +22,8 @@ import { useTranslation } from 'react-i18next';
 interface GroupHeaderRowProps {
     group: DiagramGroup;
     refetch: () => void;
+    collapsed: boolean;
+    onToggleCollapse: () => void;
 }
 
 /**
@@ -31,6 +39,8 @@ interface GroupHeaderRowProps {
 export const GroupHeaderRow: React.FC<GroupHeaderRowProps> = ({
     group,
     refetch,
+    collapsed,
+    onToggleCollapse,
 }) => {
     const { updateDiagramGroup, deleteDiagramGroup } = useStorage();
     const { t } = useTranslation();
@@ -74,7 +84,18 @@ export const GroupHeaderRow: React.FC<GroupHeaderRowProps> = ({
                         className="h-7 max-w-64"
                     />
                 ) : (
-                    group.name
+                    <button
+                        type="button"
+                        onClick={onToggleCollapse}
+                        className="flex items-center gap-1.5"
+                    >
+                        {collapsed ? (
+                            <ChevronRight className="size-3.5" />
+                        ) : (
+                            <ChevronDown className="size-3.5" />
+                        )}
+                        {group.name}
+                    </button>
                 )}
             </TableCell>
             <TableCell className="items-center p-0 pr-1 text-right">
