@@ -65,6 +65,38 @@ CREATE TABLE IF NOT EXISTS collab_diagrams (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Diagram grouping (folder-style — one diagram belongs to at most one
+-- group). A real entity, not a bare string column on collab_diagrams:
+-- renaming a group must not require touching every diagram row, and an
+-- empty group (all its diagrams moved out or never assigned) still
+-- persists rather than evaporating.
+--
+-- Named collab_diagram_groups, not the more obvious diagram_groups — ran
+-- into the EXACT same collision this file's own collab_diagrams/yjs_
+-- naming already documents above, for real, building this: a leftover
+-- \`diagram_groups\` table from the abandoned feature/collaboration_v2
+-- branch already exists in this Postgres instance (id UUID, plus
+-- tenant_id/normalized_name/sort_order/created_by columns, 373
+-- unrelated rows) — CREATE TABLE IF NOT EXISTS diagram_groups silently
+-- no-opped against it, and the ALTER TABLE below failed outright
+-- ("group_id" TEXT vs that table's "id" UUID) rather than quietly
+-- corrupting anything, which is how this got caught before it shipped.
+CREATE TABLE IF NOT EXISTS collab_diagram_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ON DELETE SET NULL, not CASCADE: deleting a group ungroups its diagrams
+-- rather than deleting them -- losing an organizational label should
+-- never delete real diagram data. Plain ADD COLUMN IF NOT EXISTS (unlike
+-- the yjs_updates/yjs_snapshots FK below) is safe with no advisory-lock
+-- dance: this is a brand new column with no pre-existing rows that could
+-- already violate the constraint, unlike that migration's history.
+ALTER TABLE collab_diagrams
+    ADD COLUMN IF NOT EXISTS group_id TEXT REFERENCES collab_diagram_groups (id) ON DELETE SET NULL;
 `;
 
 /**

@@ -13,6 +13,7 @@ export interface DiagramRecord {
     name: string;
     databaseType: string;
     databaseEdition: string | null;
+    groupId: string | null;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -22,6 +23,7 @@ interface DiagramRow {
     name: string;
     database_type: string;
     database_edition: string | null;
+    group_id: string | null;
     created_at: Date;
     updated_at: Date;
 }
@@ -32,6 +34,7 @@ function fromRow(row: DiagramRow): DiagramRecord {
         name: row.name,
         databaseType: row.database_type,
         databaseEdition: row.database_edition,
+        groupId: row.group_id,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -89,6 +92,7 @@ export interface UpdateDiagramInput {
     name?: string;
     databaseType?: string;
     databaseEdition?: string | null;
+    groupId?: string | null;
 }
 
 export async function updateDiagram(
@@ -101,6 +105,7 @@ export async function updateDiagram(
          SET name = COALESCE($2, name),
              database_type = COALESCE($3, database_type),
              database_edition = CASE WHEN $4 THEN $5 ELSE database_edition END,
+             group_id = CASE WHEN $6 THEN $7 ELSE group_id END,
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
@@ -110,6 +115,8 @@ export async function updateDiagram(
             input.databaseType ?? null,
             'databaseEdition' in input,
             input.databaseEdition ?? null,
+            'groupId' in input,
+            input.groupId ?? null,
         ]
     );
     return result.rows[0] ? fromRow(result.rows[0]) : null;

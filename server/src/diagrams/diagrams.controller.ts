@@ -1,4 +1,5 @@
 import {
+    BadRequestException,
     Body,
     ConflictException,
     Controller,
@@ -64,7 +65,20 @@ export class DiagramsController {
 
     @Patch(':id')
     async update(@Param('id') id: string, @Body() body: UpdateDiagramInput) {
-        const updated = await updateDiagram(this.pool, id, body);
+        let updated;
+        try {
+            updated = await updateDiagram(this.pool, id, body);
+        } catch (err) {
+            // 23503 = foreign_key_violation — `groupId` pointing at a
+            // group that doesn't exist. A clean 400 beats a raw 500 for
+            // what's really a client input error, not a server fault.
+            if ((err as { code?: string })?.code === '23503') {
+                throw new BadRequestException(
+                    `group ${body.groupId} does not exist`
+                );
+            }
+            throw err;
+        }
         if (!updated) {
             throw new NotFoundException(`diagram ${id} not found`);
         }
