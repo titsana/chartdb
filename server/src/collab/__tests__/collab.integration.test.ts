@@ -86,7 +86,13 @@ interface TestServer {
 async function startServerProcess(): Promise<TestServer> {
     const port = await freePort();
     const child = spawn('node', [join(process.cwd(), 'dist/main.js')], {
-        env: { ...process.env, PORT: String(port) },
+        // AUTH_MODE explicitly pinned — dotenv (loaded inside
+        // src/config.ts) only fills in vars *missing* from process.env, so
+        // without this, a contributor's own server/.env set to
+        // AUTH_MODE=azure-ad (to manually test Phase 7's sign-in flow)
+        // leaks into every spawned server this suite starts, and every
+        // REST call made with no token starts failing with 401.
+        env: { ...process.env, PORT: String(port), AUTH_MODE: 'public' },
         stdio: 'pipe',
     });
     let output = '';

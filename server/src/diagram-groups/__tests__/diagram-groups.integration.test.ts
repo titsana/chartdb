@@ -56,7 +56,11 @@ interface TestServer {
 async function startServerProcess(): Promise<TestServer> {
     const port = await freePort();
     const child = spawn('node', [join(process.cwd(), 'dist/main.js')], {
-        env: { ...process.env, PORT: String(port) },
+        // See collab.integration.test.ts's identical comment — dotenv only
+        // fills in vars missing from process.env, so a contributor's own
+        // server/.env (AUTH_MODE=azure-ad, for manually testing Phase 7's
+        // sign-in flow) would otherwise leak into every spawned server.
+        env: { ...process.env, PORT: String(port), AUTH_MODE: 'public' },
         stdio: 'ignore',
     });
     await waitForHealth(port);
