@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     resolveFollowViewport,
     viewportToCenter,
+    wouldCreateFollowCycle,
 } from '../resolve-follow-viewport';
 import type { PresencePeer } from '@/hooks/use-presence';
 
@@ -66,5 +67,47 @@ describe('resolveFollowViewport', () => {
         expect(
             resolveFollowViewport(1, peer({ clientId: 1, viewportCenter }))
         ).toEqual({ action: 'apply', center: viewportCenter });
+    });
+});
+
+describe('wouldCreateFollowCycle', () => {
+    const ME = 1;
+
+    it('allows following someone who follows no one', () => {
+        const peers = [peer({ clientId: 2, following: null })];
+        expect(wouldCreateFollowCycle(ME, 2, peers)).toBe(false);
+    });
+
+    it('allows following someone who follows a third, unrelated party', () => {
+        const peers = [
+            peer({ clientId: 2, following: 3 }),
+            peer({ clientId: 3, following: null }),
+        ];
+        expect(wouldCreateFollowCycle(ME, 2, peers)).toBe(false);
+    });
+
+    // The reported case: A and B try to follow each other.
+    it('blocks the direct mutual-follow case', () => {
+        const peers = [peer({ clientId: 2, following: ME })];
+        expect(wouldCreateFollowCycle(ME, 2, peers)).toBe(true);
+    });
+
+    it('blocks a longer cycle (me -> 2 -> 3 -> me)', () => {
+        const peers = [
+            peer({ clientId: 2, following: 3 }),
+            peer({ clientId: 3, following: ME }),
+        ];
+        expect(wouldCreateFollowCycle(ME, 2, peers)).toBe(true);
+    });
+
+    // A cycle exists among OTHER peers, but doesn't route through me —
+    // not my problem, must not be blocked.
+    it('does not block a cycle that exists elsewhere and never reaches me', () => {
+        const peers = [
+            peer({ clientId: 2, following: 3 }),
+            peer({ clientId: 3, following: 2 }),
+            peer({ clientId: 4, following: null }),
+        ];
+        expect(wouldCreateFollowCycle(ME, 4, peers)).toBe(false);
     });
 });

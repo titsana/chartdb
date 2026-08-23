@@ -5,12 +5,16 @@ import ChartDBDarkLogo from '@/assets/logo-dark.png';
 import { useTheme } from '@/hooks/use-theme';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { usePresence } from '@/hooks/use-presence';
+import { useToast } from '@/components/toast/use-toast';
 import { DiagramName } from './diagram-name';
 import { LastSaved } from './last-saved';
 import { LanguageNav } from './language-nav/language-nav';
 import { Menu } from './menu/menu';
 import { PresenceAvatarBar } from '../canvas/presence-avatar-bar/presence-avatar-bar';
-import { resolveFollowViewport } from '../canvas/resolve-follow-viewport';
+import {
+    resolveFollowViewport,
+    wouldCreateFollowCycle,
+} from '../canvas/resolve-follow-viewport';
 
 export interface TopNavbarProps {}
 
@@ -19,6 +23,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = () => {
     const { awareness } = useChartDB();
     const presencePeers = usePresence(awareness);
     const { setCenter } = useReactFlow();
+    const { toast } = useToast();
 
     // Phase 5: "follow this peer" — clicking their avatar below sets
     // `followingPeerId`; the canvas camera then re-snaps onto that peer's
@@ -68,6 +73,42 @@ export const TopNavbar: React.FC<TopNavbarProps> = () => {
         setCenter,
     ]);
 
+    // Broadcasts who I'm following — the one exception to "follow state is
+    // local-only, never broadcast" (see PresenceState.following's doc
+    // comment): wouldCreateFollowCycle below needs to see everyone else's
+    // target to refuse a follow that would loop back to me.
+    useEffect(() => {
+        if (!awareness) return;
+        awareness.setLocalStateField('following', followingPeerId);
+    }, [awareness, followingPeerId]);
+
+    // Guards the click itself, before setFollowingPeerId ever runs — two
+    // (or more) clients following each other would otherwise fight over
+    // the camera forever, each snapping back the instant the other's
+    // snap changes their own broadcast viewport center.
+    const handleFollow = useCallback(
+        (clientId: number) => {
+            if (
+                awareness &&
+                wouldCreateFollowCycle(
+                    awareness.clientID,
+                    clientId,
+                    presencePeers
+                )
+            ) {
+                toast({
+                    title: "Can't follow",
+                    description:
+                        'That would create a follow loop — someone in the chain is already following you.',
+                    variant: 'destructive',
+                });
+                return;
+            }
+            setFollowingPeerId(clientId);
+        },
+        [awareness, presencePeers, toast]
+    );
+
     const renderStars = useCallback(() => {
         return (
             <iframe
@@ -106,7 +147,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = () => {
                 <PresenceAvatarBar
                     peers={presencePeers}
                     followingPeerId={followingPeerId}
-                    onFollow={setFollowingPeerId}
+                    onFollow={handleFollow}
                     onStopFollow={() => setFollowingPeerId(null)}
                 />
                 <LastSaved />

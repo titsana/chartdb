@@ -986,6 +986,12 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
                     zoom: 1.5,
                 }
             );
+            // Phase 5 (follow-loop guard): who A is following, broadcast
+            // so wouldCreateFollowCycle can see it from another client.
+            clientA.result.current.awareness!.setLocalStateField(
+                'following',
+                999
+            );
         });
 
         // Real proof this crossed the network, not an in-process
@@ -1000,6 +1006,7 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
                     displayName: 'Alice',
                     cursor: { x: 42, y: 7 },
                     viewportCenter: { x: 100, y: -50, zoom: 1.5 },
+                    following: 999,
                 });
             },
             { timeout: 8_000 }

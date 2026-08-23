@@ -60,3 +60,35 @@ export function resolveFollowViewport(
 
     return { action: 'apply', center: followedPeer.viewportCenter };
 }
+
+/**
+ * Would following `targetPeerId` create a follow loop that includes ME
+ * (`myClientId`)? Direct case: I try to follow someone who's already
+ * following me. Longer case: A follows B follows C follows A — any length
+ * chain that eventually leads back to me. Walks each peer's own broadcast
+ * `following` pointer starting from the target; `peers` only needs to
+ * contain OTHER peers' entries (usePresence's own convention), since the
+ * one edge that doesn't exist yet — mine, to `targetPeerId` — is exactly
+ * the one this function is deciding whether to allow.
+ *
+ * A cycle that exists elsewhere and never reaches me (e.g. two other
+ * peers already following each other) is none of my business — this
+ * only refuses the specific follow *I'm* about to create.
+ */
+export function wouldCreateFollowCycle(
+    myClientId: number,
+    targetPeerId: number,
+    peers: PresencePeer[]
+): boolean {
+    const followingOf = new Map(peers.map((p) => [p.clientId, p.following]));
+    const seen = new Set<number>();
+    let current: number | null | undefined = targetPeerId;
+
+    while (current !== null && current !== undefined) {
+        if (current === myClientId) return true;
+        if (seen.has(current)) return false; // a cycle exists, but not through me
+        seen.add(current);
+        current = followingOf.get(current);
+    }
+    return false;
+}

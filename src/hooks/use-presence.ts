@@ -33,6 +33,16 @@ export interface PresenceState {
     // offset from ITS OWN container size — the same reason `cursor` is
     // flow-space and not screen pixels.
     viewportCenter?: { x: number; y: number; zoom: number };
+    // Phase 5: the clientId this peer is currently following (or
+    // null/undefined if they aren't following anyone). Broadcast
+    // specifically so `wouldCreateFollowCycle` (resolve-follow-viewport.ts)
+    // can refuse a follow that would form a loop — direct (A follows B,
+    // B tries to follow A back) or longer (A→B→C→A) — before it happens,
+    // rather than let two or more clients' cameras fight forever. This is
+    // the one exception to "follow state is local-only, never broadcast":
+    // detecting a cycle needs each client to know what everyone ELSE is
+    // following, not just its own target.
+    following?: number | null;
 }
 
 export interface PresencePeer extends PresenceState {
