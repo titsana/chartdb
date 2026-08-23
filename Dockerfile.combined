@@ -16,6 +16,14 @@
 # defaultCollabWsUrl), which is correct exactly because this Dockerfile
 # puts client+API on the same origin. Set it explicitly only if fronting
 # this with a reverse proxy that changes what origin the browser sees.
+#
+# WEBSOCKET_ORIGIN_ALLOWLIST gotcha, confirmed against this exact image
+# (a real WS handshake, not assumed): if you set this to anything
+# non-empty, it MUST include this app's own public origin (the browser's
+# Origin header on the WS upgrade is now that same domain, since
+# client+API share it) — leave it out and REST keeps working fine while
+# the realtime WebSocket silently 403s. Empty/unset (the default) allows
+# every origin, same as always.
 
 # --- Stage 1: build the client (Vite/React) --------------------------------
 FROM node:24-alpine AS client-builder

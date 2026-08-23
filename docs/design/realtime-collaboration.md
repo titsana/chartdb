@@ -231,6 +231,15 @@ bundled into this container), and `AUTH_MODE`/`ENTRA_TENANT_ID`/
 `ENTRA_API_AUDIENCE`/`WEBSOCKET_ORIGIN_ALLOWLIST` as documented in
 server/.env.example if opting into Azure AD auth or an origin allowlist.
 
+**`WEBSOCKET_ORIGIN_ALLOWLIST` gotcha, confirmed against a real built
+image** (a real WS handshake with a custom Origin header, not assumed):
+in this deploy shape the browser's Origin on the WS upgrade is this
+app's own public domain, since client+API share it. Setting a non-empty
+allowlist without including that domain leaves REST working fine while
+the realtime WebSocket silently 403s — same mechanism, easy to miss
+because nothing about it looks broken from the REST side. Empty/unset
+(the default) allows every origin, unaffected.
+
 ## 8. Migration / rollout plan
 
 Once enabled, a diagram is fully online-only (no fallback to today's
