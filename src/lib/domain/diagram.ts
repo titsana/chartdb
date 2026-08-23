@@ -11,7 +11,7 @@ import { areaSchema, type Area } from './area';
 import type { DBCustomType } from './db-custom-type';
 import { dbCustomTypeSchema } from './db-custom-type';
 import type { Note } from './note';
-import { noteSchema } from './note';
+import { noteSchema, type NoteInput } from './note';
 
 export interface Diagram {
     id: string;
@@ -34,18 +34,26 @@ export interface Diagram {
     updatedAt: Date;
 }
 
-export const diagramSchema: z.ZodType<Diagram> = z.object({
-    id: z.string(),
-    name: z.string(),
-    databaseType: z.nativeEnum(DatabaseType),
-    databaseEdition: z.nativeEnum(DatabaseEdition).optional(),
-    groupId: z.string().or(z.null()).optional(),
-    tables: z.array(dbTableSchema).optional(),
-    relationships: z.array(dbRelationshipSchema).optional(),
-    dependencies: z.array(dbDependencySchema).optional(),
-    areas: z.array(areaSchema).optional(),
-    customTypes: z.array(dbCustomTypeSchema).optional(),
-    notes: z.array(noteSchema).optional(),
-    createdAt: z.date(),
-    updatedAt: z.date(),
-});
+// Input type explicit (not just z.ZodType<Diagram>) because noteSchema's
+// own input differs from its output (see note.ts) — that difference has
+// to be threaded through here too, or TS sees this schema's inferred
+// `notes` input type as Note[] (order never null) when it's really
+// NoteInput[] (order may be null, normalized on parse).
+type DiagramInput = Omit<Diagram, 'notes'> & { notes?: NoteInput[] };
+
+export const diagramSchema: z.ZodType<Diagram, z.ZodTypeDef, DiagramInput> =
+    z.object({
+        id: z.string(),
+        name: z.string(),
+        databaseType: z.nativeEnum(DatabaseType),
+        databaseEdition: z.nativeEnum(DatabaseEdition).optional(),
+        groupId: z.string().or(z.null()).optional(),
+        tables: z.array(dbTableSchema).optional(),
+        relationships: z.array(dbRelationshipSchema).optional(),
+        dependencies: z.array(dbDependencySchema).optional(),
+        areas: z.array(areaSchema).optional(),
+        customTypes: z.array(dbCustomTypeSchema).optional(),
+        notes: z.array(noteSchema).optional(),
+        createdAt: z.date(),
+        updatedAt: z.date(),
+    });
