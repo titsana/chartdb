@@ -1630,7 +1630,7 @@ testing, not upfront design), and a follow-loop guard
 other. Manually confirmed working across two different screen
 resolutions.
 
-### Phase 6 — Scale-out (defer until actually needed)
+### Phase 6 — Scale-out (skipped for now, 2026-08-23)
 
 **Goal:** support more than one NestJS instance.
 - Redis pub/sub so a client on instance A gets updates from a peer on
@@ -1639,6 +1639,17 @@ resolutions.
 **Exit criteria:** only pursue this phase once running >1 instance is a
 real requirement — per §8 of the original plan, it's explicitly
 deferrable.
+
+**Decision:** target concurrency is ~20 users on a single diagram —
+small enough that one Node/Hocuspocus process handles it without
+needing to spread a room's connections across instances (no load test
+run; this is a reasoned estimate given how small 20 connections/room is
+relative to typical single-process WebSocket/broadcast capacity, not a
+measured number — revisit with an actual load test before trusting it
+at meaningfully higher concurrency). Redis and this phase are cut from
+current scope; revisit if either running >1 instance becomes a real
+requirement, or the per-diagram concurrency target grows enough that
+"reasoned estimate" isn't good enough anymore.
 
 ### Phase 7 — Hardening and rollout
 
