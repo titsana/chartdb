@@ -1498,6 +1498,12 @@ right after as its own follow-up, not deferred to a later phase.
   `getStates()` — sabotage-verified: removing the write made the
   assertion fail as predicted, confirmed, then restored).
 
+Manually confirmed two-browser, 2026-08-23: cursor + name label visible
+across clients; selection ring + name label confirmed on tables, areas,
+and notes (notes needed a follow-up fix — the note box's
+`overflow-hidden` was clipping the label, see the fix commit). Presence
+sub-part of Phase 5 is fully closed.
+
 **Not yet done:** the stronger "X is editing this table" indicator (see
 above — different from selection, not yet tracked); `Y.UndoManager`
 swap; the disconnect/reconnect UX open question. This phase's exit
