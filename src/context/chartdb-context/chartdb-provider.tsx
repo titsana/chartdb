@@ -113,6 +113,35 @@ export const ChartDBProvider: React.FC<
     // the diagram-metadata operations (name/type/edition/existence) that
     // still need a server-backed home — see storage-provider.tsx.
     const collabDocRef = useRef<Y.Doc | null>(null);
+    // Phase 5 (docs/design/realtime-collaboration.md §10): a stable,
+    // unique-per-mount value passed as `transact(fn, origin)`'s origin for
+    // every mutation that should be individually undoable, so
+    // `Y.UndoManager`'s `trackedOrigins` (see the undoManagerRef below)
+    // can tell "this tab's own edits" apart from a remote peer's — origin
+    // only needs to be `===`-comparable, a `Symbol` guarantees that with
+    // no risk of collision.
+    //
+    // Every one of the 28 collection-mutator methods below passes this
+    // conditionally — `options.updateHistory ? localOrigin : undefined` —
+    // never unconditionally. `updateHistory: false` already meant
+    // something under the old hand-rolled undo stack for real, independent
+    // reasons beyond "this IS an undo/redo replay" (grep the whole src/
+    // tree for `updateHistory: false` — e.g. use-update-table-field.ts's
+    // appendix-b:5 PK auto-correction, table-list-item-content.tsx's
+    // remaining-PK auto-unique fixup, import-database-dialog.tsx's bulk
+    // import): callers that opt out of a *visible* undo entry for a
+    // derived/automatic write need that write to also stay untracked here,
+    // or the user's next Ctrl+Z would revert an invisible side effect
+    // instead of their actual last visible action — exactly the bug
+    // appendix-b:5's comment describes the old system being fixed for.
+    //
+    // Deliberately never passed at all (regardless of `updateHistory`) to
+    // clearCollabDoc's wipe, diffCalculatedHandler's diff-apply, or the
+    // room-seed transact in loadDiagramFromData — none of those took an
+    // `options` parameter under the old system either, and tracking the
+    // seed write in particular would make a brand-new session's first
+    // Ctrl+Z delete the whole diagram.
+    const localOrigin = useRef(Symbol('chartdb-local-edit')).current;
     // Phase 4: the live WebSocket connection for collabDocRef.current's
     // room, when one is attached (see attachCollabProvider below). Only
     // ever created by loadDiagramFromData — not here at construction —
@@ -558,9 +587,14 @@ export const ChartDBProvider: React.FC<
             // directly — useYCollectionSync's observer projects this into
             // `tables` state.
             const tablesMap = collabDocRef.current!.getMap<unknown>('tables');
-            collabDocRef.current!.transact(() => {
-                tablesToAdd.forEach((table) => upsertTable(tablesMap, table));
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    tablesToAdd.forEach((table) =>
+                        upsertTable(tablesMap, table)
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -578,7 +612,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, events]
+        [localOrigin, addUndoAction, resetRedoStack, events]
     );
 
     const addTable: ChartDBContext['addTable'] = useCallback(
@@ -689,21 +723,27 @@ export const ChartDBProvider: React.FC<
             // full referential-integrity enforcement for that is server/
             // merge-time work, out of scope for a client-only fix.)
             const doc = collabDocRef.current!;
-            doc.transact(() => {
-                ids.forEach((id) =>
-                    removeItemFromCollection(doc.getMap<unknown>('tables'), id)
-                );
-                removeItemsReferencing(
-                    doc.getMap<unknown>('relationships'),
-                    ['sourceTableId', 'targetTableId'],
-                    ids
-                );
-                removeItemsReferencing(
-                    doc.getMap<unknown>('dependencies'),
-                    ['tableId', 'dependentTableId'],
-                    ids
-                );
-            });
+            doc.transact(
+                () => {
+                    ids.forEach((id) =>
+                        removeItemFromCollection(
+                            doc.getMap<unknown>('tables'),
+                            id
+                        )
+                    );
+                    removeItemsReferencing(
+                        doc.getMap<unknown>('relationships'),
+                        ['sourceTableId', 'targetTableId'],
+                        ids
+                    );
+                    removeItemsReferencing(
+                        doc.getMap<unknown>('dependencies'),
+                        ['tableId', 'dependentTableId'],
+                        ids
+                    );
+                },
+                options?.updateHistory ? localOrigin : undefined
+            );
 
             events.emit({ action: 'remove_tables', data: { tableIds: ids } });
 
@@ -725,6 +765,7 @@ export const ChartDBProvider: React.FC<
             }
         },
         [
+            localOrigin,
             addUndoAction,
             resetRedoStack,
             getTable,
@@ -766,12 +807,15 @@ export const ChartDBProvider: React.FC<
             if (liveTable) {
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, {
-                        ...liveTable,
-                        ...table,
-                    } as DBTable);
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, {
+                            ...liveTable,
+                            ...table,
+                        } as DBTable);
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             events.emit({
@@ -790,7 +834,14 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getTable, getLiveTable, events]
+        [
+            localOrigin,
+            addUndoAction,
+            resetRedoStack,
+            getTable,
+            getLiveTable,
+            events,
+        ]
     );
 
     const updateTablesState: ChartDBContext['updateTablesState'] = useCallback(
@@ -862,19 +913,25 @@ export const ChartDBProvider: React.FC<
             // snapshot — same guarantee, now against the doc.
             const doc = collabDocRef.current!;
             const deletedTableIds = tablesToDelete.map((t) => t.id);
-            doc.transact(() => {
-                reconcileTables(doc.getMap<unknown>('tables'), updatedTables);
-                removeItemsReferencing(
-                    doc.getMap<unknown>('relationships'),
-                    ['sourceTableId', 'targetTableId'],
-                    deletedTableIds
-                );
-                removeItemsReferencing(
-                    doc.getMap<unknown>('dependencies'),
-                    ['tableId', 'dependentTableId'],
-                    deletedTableIds
-                );
-            });
+            doc.transact(
+                () => {
+                    reconcileTables(
+                        doc.getMap<unknown>('tables'),
+                        updatedTables
+                    );
+                    removeItemsReferencing(
+                        doc.getMap<unknown>('relationships'),
+                        ['sourceTableId', 'targetTableId'],
+                        deletedTableIds
+                    );
+                    removeItemsReferencing(
+                        doc.getMap<unknown>('dependencies'),
+                        ['tableId', 'dependentTableId'],
+                        deletedTableIds
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             events.emit({
                 action: 'remove_tables',
@@ -899,7 +956,14 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, relationships, events, dependencies]
+        [
+            localOrigin,
+            addUndoAction,
+            resetRedoStack,
+            relationships,
+            events,
+            dependencies,
+        ]
     );
 
     const getField: ChartDBContext['getField'] = useCallback(
@@ -955,9 +1019,12 @@ export const ChartDBProvider: React.FC<
             if (currentTable) {
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updateTableFn(currentTable));
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updateTableFn(currentTable));
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             // Phase 4.5: used to re-fetch the table from Dexie here purely
@@ -987,7 +1054,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getField, getLiveTable]
+        [localOrigin, addUndoAction, resetRedoStack, getField, getLiveTable]
     );
 
     const removeField: ChartDBContext['removeField'] = useCallback(
@@ -1018,9 +1085,12 @@ export const ChartDBProvider: React.FC<
             if (currentTable) {
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updateTableFn(currentTable));
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updateTableFn(currentTable));
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             events.emit({
@@ -1048,6 +1118,7 @@ export const ChartDBProvider: React.FC<
             }
         },
         [
+            localOrigin,
             addUndoAction,
             resetRedoStack,
             getField,
@@ -1075,9 +1146,12 @@ export const ChartDBProvider: React.FC<
                 };
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updatedTable);
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updatedTable);
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             events.emit({
@@ -1104,7 +1178,14 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, events, getTable, getLiveTable]
+        [
+            localOrigin,
+            addUndoAction,
+            resetRedoStack,
+            events,
+            getTable,
+            getLiveTable,
+        ]
     );
 
     const createField: ChartDBContext['createField'] = useCallback(
@@ -1157,9 +1238,12 @@ export const ChartDBProvider: React.FC<
                 };
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updatedTable);
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updatedTable);
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             if (!currentTable) {
@@ -1177,7 +1261,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getLiveTable]
+        [localOrigin, addUndoAction, resetRedoStack, getLiveTable]
     );
 
     const removeIndex: ChartDBContext['removeIndex'] = useCallback(
@@ -1199,9 +1283,12 @@ export const ChartDBProvider: React.FC<
                 };
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updatedTable);
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updatedTable);
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             if (!currentTable) {
@@ -1219,7 +1306,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getIndex, getLiveTable]
+        [localOrigin, addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const createIndex: ChartDBContext['createIndex'] = useCallback(
@@ -1266,9 +1353,12 @@ export const ChartDBProvider: React.FC<
                 };
                 const tablesMap =
                     collabDocRef.current!.getMap<unknown>('tables');
-                collabDocRef.current!.transact(() => {
-                    upsertTable(tablesMap, updatedTable);
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        upsertTable(tablesMap, updatedTable);
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
             }
 
             if (!currentTable) {
@@ -1286,7 +1376,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getIndex, getLiveTable]
+        [localOrigin, addUndoAction, resetRedoStack, getIndex, getLiveTable]
     );
 
     const addCheckConstraint: ChartDBContext['addCheckConstraint'] =
@@ -1309,9 +1399,12 @@ export const ChartDBProvider: React.FC<
                     };
                     const tablesMap =
                         collabDocRef.current!.getMap<unknown>('tables');
-                    collabDocRef.current!.transact(() => {
-                        upsertTable(tablesMap, updatedTable);
-                    });
+                    collabDocRef.current!.transact(
+                        () => {
+                            upsertTable(tablesMap, updatedTable);
+                        },
+                        options.updateHistory ? localOrigin : undefined
+                    );
                 }
 
                 if (!currentTable) {
@@ -1329,7 +1422,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [addUndoAction, resetRedoStack, getLiveTable]
+            [localOrigin, addUndoAction, resetRedoStack, getLiveTable]
         );
 
     const createCheckConstraint: ChartDBContext['createCheckConstraint'] =
@@ -1371,9 +1464,12 @@ export const ChartDBProvider: React.FC<
                     };
                     const tablesMap =
                         collabDocRef.current!.getMap<unknown>('tables');
-                    collabDocRef.current!.transact(() => {
-                        upsertTable(tablesMap, updatedTable);
-                    });
+                    collabDocRef.current!.transact(
+                        () => {
+                            upsertTable(tablesMap, updatedTable);
+                        },
+                        options.updateHistory ? localOrigin : undefined
+                    );
                 }
 
                 if (!table) {
@@ -1391,7 +1487,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [addUndoAction, resetRedoStack, getTable, getLiveTable]
+            [localOrigin, addUndoAction, resetRedoStack, getTable, getLiveTable]
         );
 
     const updateCheckConstraint: ChartDBContext['updateCheckConstraint'] =
@@ -1421,9 +1517,12 @@ export const ChartDBProvider: React.FC<
                     };
                     const tablesMap =
                         collabDocRef.current!.getMap<unknown>('tables');
-                    collabDocRef.current!.transact(() => {
-                        upsertTable(tablesMap, updatedTable);
-                    });
+                    collabDocRef.current!.transact(
+                        () => {
+                            upsertTable(tablesMap, updatedTable);
+                        },
+                        options.updateHistory ? localOrigin : undefined
+                    );
                 }
 
                 if (!table) {
@@ -1445,7 +1544,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [addUndoAction, resetRedoStack, getTable, getLiveTable]
+            [localOrigin, addUndoAction, resetRedoStack, getTable, getLiveTable]
         );
 
     const addRelationships: ChartDBContext['addRelationships'] = useCallback(
@@ -1455,11 +1554,14 @@ export const ChartDBProvider: React.FC<
         ) => {
             const relationshipsMap =
                 collabDocRef.current!.getMap<unknown>('relationships');
-            collabDocRef.current!.transact(() => {
-                relationships.forEach((relationship) =>
-                    upsertItem(relationshipsMap, relationship)
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    relationships.forEach((relationship) =>
+                        upsertItem(relationshipsMap, relationship)
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1474,7 +1576,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack]
+        [localOrigin, addUndoAction, resetRedoStack]
     );
 
     const addRelationship: ChartDBContext['addRelationship'] = useCallback(
@@ -1564,11 +1666,14 @@ export const ChartDBProvider: React.FC<
 
                 const relationshipsMap =
                     collabDocRef.current!.getMap<unknown>('relationships');
-                collabDocRef.current!.transact(() => {
-                    ids.forEach((id) =>
-                        removeItemFromCollection(relationshipsMap, id)
-                    );
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        ids.forEach((id) =>
+                            removeItemFromCollection(relationshipsMap, id)
+                        );
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
 
                 setDiagramUpdatedAt(new Date());
 
@@ -1581,7 +1686,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [relationships, addUndoAction, resetRedoStack]
+            [localOrigin, relationships, addUndoAction, resetRedoStack]
         );
 
     const removeRelationship: ChartDBContext['removeRelationship'] =
@@ -1602,13 +1707,16 @@ export const ChartDBProvider: React.FC<
                 const prevRelationship = getRelationship(id);
                 const relationshipsMap =
                     collabDocRef.current!.getMap<unknown>('relationships');
-                collabDocRef.current!.transact(() => {
-                    patchItem(
-                        relationshipsMap,
-                        id,
-                        relationship as Record<string, unknown>
-                    );
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        patchItem(
+                            relationshipsMap,
+                            id,
+                            relationship as Record<string, unknown>
+                        );
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
 
                 setDiagramUpdatedAt(new Date());
 
@@ -1624,7 +1732,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [addUndoAction, getRelationship, resetRedoStack]
+            [localOrigin, addUndoAction, getRelationship, resetRedoStack]
         );
 
     const addDependencies: ChartDBContext['addDependencies'] = useCallback(
@@ -1634,11 +1742,14 @@ export const ChartDBProvider: React.FC<
         ) => {
             const dependenciesMap =
                 collabDocRef.current!.getMap<unknown>('dependencies');
-            collabDocRef.current!.transact(() => {
-                dependencies.forEach((dependency) =>
-                    upsertItem(dependenciesMap, dependency)
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    dependencies.forEach((dependency) =>
+                        upsertItem(dependenciesMap, dependency)
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1653,7 +1764,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack]
+        [localOrigin, addUndoAction, resetRedoStack]
     );
 
     const addDependency: ChartDBContext['addDependency'] = useCallback(
@@ -1713,11 +1824,14 @@ export const ChartDBProvider: React.FC<
 
                 const dependenciesMap =
                     collabDocRef.current!.getMap<unknown>('dependencies');
-                collabDocRef.current!.transact(() => {
-                    ids.forEach((id) =>
-                        removeItemFromCollection(dependenciesMap, id)
-                    );
-                });
+                collabDocRef.current!.transact(
+                    () => {
+                        ids.forEach((id) =>
+                            removeItemFromCollection(dependenciesMap, id)
+                        );
+                    },
+                    options.updateHistory ? localOrigin : undefined
+                );
 
                 setDiagramUpdatedAt(new Date());
 
@@ -1730,7 +1844,7 @@ export const ChartDBProvider: React.FC<
                     resetRedoStack();
                 }
             },
-            [addUndoAction, resetRedoStack, dependencies]
+            [localOrigin, addUndoAction, resetRedoStack, dependencies]
         );
 
     const removeDependency: ChartDBContext['removeDependency'] = useCallback(
@@ -1749,13 +1863,16 @@ export const ChartDBProvider: React.FC<
             const prevDependency = getDependency(id);
             const dependenciesMap =
                 collabDocRef.current!.getMap<unknown>('dependencies');
-            collabDocRef.current!.transact(() => {
-                patchItem(
-                    dependenciesMap,
-                    id,
-                    dependency as Record<string, unknown>
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    patchItem(
+                        dependenciesMap,
+                        id,
+                        dependency as Record<string, unknown>
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1768,16 +1885,19 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getDependency]
+        [localOrigin, addUndoAction, resetRedoStack, getDependency]
     );
 
     // Area operations
     const addAreas: ChartDBContext['addAreas'] = useCallback(
         async (areas: Area[], options = { updateHistory: true }) => {
             const areasMap = collabDocRef.current!.getMap<unknown>('areas');
-            collabDocRef.current!.transact(() => {
-                areas.forEach((area) => upsertItem(areasMap, area));
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    areas.forEach((area) => upsertItem(areasMap, area));
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1790,7 +1910,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack]
+        [localOrigin, addUndoAction, resetRedoStack]
     );
 
     const addArea: ChartDBContext['addArea'] = useCallback(
@@ -1836,9 +1956,12 @@ export const ChartDBProvider: React.FC<
             ];
 
             const areasMap = collabDocRef.current!.getMap<unknown>('areas');
-            collabDocRef.current!.transact(() => {
-                ids.forEach((id) => removeItemFromCollection(areasMap, id));
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    ids.forEach((id) => removeItemFromCollection(areasMap, id));
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1851,7 +1974,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [areas, addUndoAction, resetRedoStack]
+        [localOrigin, areas, addUndoAction, resetRedoStack]
     );
 
     const removeArea: ChartDBContext['removeArea'] = useCallback(
@@ -1870,9 +1993,12 @@ export const ChartDBProvider: React.FC<
             const prevArea = getArea(id);
 
             const areasMap = collabDocRef.current!.getMap<unknown>('areas');
-            collabDocRef.current!.transact(() => {
-                patchItem(areasMap, id, area as Record<string, unknown>);
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    patchItem(areasMap, id, area as Record<string, unknown>);
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1885,7 +2011,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [getArea, addUndoAction, resetRedoStack]
+        [localOrigin, getArea, addUndoAction, resetRedoStack]
     );
 
     // Note operations
@@ -1896,9 +2022,12 @@ export const ChartDBProvider: React.FC<
             // state. Writing straight to `setNotes` here would get
             // silently overwritten by the next doc-driven projection.
             const notesMap = collabDocRef.current!.getMap<unknown>('notes');
-            collabDocRef.current!.transact(() => {
-                notes.forEach((note) => upsertItem(notesMap, note));
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    notes.forEach((note) => upsertItem(notesMap, note));
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1911,7 +2040,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack]
+        [localOrigin, addUndoAction, resetRedoStack]
     );
 
     const addNote: ChartDBContext['addNote'] = useCallback(
@@ -1954,9 +2083,12 @@ export const ChartDBProvider: React.FC<
 
             // Phase 2: remove from the doc — see addNotes above.
             const notesMap = collabDocRef.current!.getMap<unknown>('notes');
-            collabDocRef.current!.transact(() => {
-                ids.forEach((id) => removeItemFromCollection(notesMap, id));
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    ids.forEach((id) => removeItemFromCollection(notesMap, id));
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -1969,7 +2101,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [notes, addUndoAction, resetRedoStack]
+        [localOrigin, notes, addUndoAction, resetRedoStack]
     );
 
     const removeNote: ChartDBContext['removeNote'] = useCallback(
@@ -1991,9 +2123,12 @@ export const ChartDBProvider: React.FC<
             // addNotes above. A no-op if `id` no longer exists (e.g. a
             // concurrent delete raced this edit).
             const notesMap = collabDocRef.current!.getMap<unknown>('notes');
-            collabDocRef.current!.transact(() => {
-                patchItem(notesMap, id, note as Record<string, unknown>);
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    patchItem(notesMap, id, note as Record<string, unknown>);
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -2006,7 +2141,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [getNote, addUndoAction, resetRedoStack]
+        [localOrigin, getNote, addUndoAction, resetRedoStack]
     );
 
     const highlightCustomTypeId = useCallback(
@@ -2264,11 +2399,14 @@ export const ChartDBProvider: React.FC<
             // here would get silently overwritten by that projection.
             const customTypesMap =
                 collabDocRef.current!.getMap<unknown>('customTypes');
-            collabDocRef.current!.transact(() => {
-                customTypes.forEach((customType) =>
-                    upsertItem(customTypesMap, customType)
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    customTypes.forEach((customType) =>
+                        upsertItem(customTypesMap, customType)
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -2281,7 +2419,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack]
+        [localOrigin, addUndoAction, resetRedoStack]
     );
 
     const addCustomType: ChartDBContext['addCustomType'] = useCallback(
@@ -2322,11 +2460,14 @@ export const ChartDBProvider: React.FC<
             // addCustomTypes above.
             const customTypesMap =
                 collabDocRef.current!.getMap<unknown>('customTypes');
-            collabDocRef.current!.transact(() => {
-                ids.forEach((id) =>
-                    removeItemFromCollection(customTypesMap, id)
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    ids.forEach((id) =>
+                        removeItemFromCollection(customTypesMap, id)
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -2343,7 +2484,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getCustomType]
+        [localOrigin, addUndoAction, resetRedoStack, getCustomType]
     );
 
     const removeCustomType: ChartDBContext['removeCustomType'] = useCallback(
@@ -2365,13 +2506,16 @@ export const ChartDBProvider: React.FC<
             // addCustomTypes above. A no-op if `id` no longer exists.
             const customTypesMap =
                 collabDocRef.current!.getMap<unknown>('customTypes');
-            collabDocRef.current!.transact(() => {
-                patchItem(
-                    customTypesMap,
-                    id,
-                    customType as Record<string, unknown>
-                );
-            });
+            collabDocRef.current!.transact(
+                () => {
+                    patchItem(
+                        customTypesMap,
+                        id,
+                        customType as Record<string, unknown>
+                    );
+                },
+                options.updateHistory ? localOrigin : undefined
+            );
 
             setDiagramUpdatedAt(new Date());
 
@@ -2384,7 +2528,7 @@ export const ChartDBProvider: React.FC<
                 resetRedoStack();
             }
         },
-        [addUndoAction, resetRedoStack, getCustomType]
+        [localOrigin, addUndoAction, resetRedoStack, getCustomType]
     );
 
     return (
