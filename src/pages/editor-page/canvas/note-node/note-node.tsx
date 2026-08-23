@@ -14,6 +14,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { getIsOldSafari } from '@/safari-compat';
+import { useSelectingPeers } from '@/hooks/use-selecting-peers';
+import { presenceRingStyle } from '../presence-highlight/presence-ring-style';
+import { PresenceHighlightBadge } from '../presence-highlight/presence-highlight';
 
 export interface NoteNodeProps extends NodeProps {
     data: {
@@ -24,12 +27,15 @@ export interface NoteNodeProps extends NodeProps {
 export type NoteNodeType = Node<{ note: Note }, 'note'>;
 
 export const NoteNode: React.FC<NoteNodeProps> = ({
+    id,
     data,
     selected,
     dragging,
 }) => {
     const { note } = data;
     const { updateNote, removeNote, readonly } = useChartDB();
+    // Phase 5: peers with this note selected on their own canvas.
+    const selectingPeers = useSelectingPeers(id);
     const [editMode, setEditMode] = useState(false);
     const [content, setContent] = useState(note.content);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -140,16 +146,18 @@ export const NoteNode: React.FC<NoteNodeProps> = ({
     return (
         <div
             className={cn(
-                'flex h-full flex-col overflow-hidden rounded-[6px] border',
+                'relative flex h-full flex-col overflow-hidden rounded-[6px] border',
                 selected
                     ? 'border-pink-600'
                     : 'border-slate-500 dark:border-slate-600'
             )}
             style={{
                 background: getBodyColor(note.color),
+                ...presenceRingStyle(selectingPeers),
             }}
             onDoubleClick={handleDoubleClick}
         >
+            <PresenceHighlightBadge peers={selectingPeers} />
             {/* Notepad header with binding */}
             <div
                 className="relative flex h-2 shrink-0 items-center justify-center"

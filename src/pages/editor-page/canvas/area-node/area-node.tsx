@@ -31,6 +31,9 @@ import { AreaNodeContextMenu } from './area-node-context-menu';
 import { useCanvas } from '@/hooks/use-canvas';
 import { useDiff } from '@/context/diff-context/use-diff';
 import { AreaNodeStatus } from './area-node-status/area-node-status';
+import { useSelectingPeers } from '@/hooks/use-selecting-peers';
+import { presenceRingStyle } from '../presence-highlight/presence-ring-style';
+import { PresenceHighlightBadge } from '../presence-highlight/presence-highlight';
 
 export type AreaNodeType = Node<
     {
@@ -40,8 +43,10 @@ export type AreaNodeType = Node<
 >;
 
 export const AreaNode: React.FC<NodeProps<AreaNodeType>> = React.memo(
-    ({ selected, dragging, data: { area } }) => {
+    ({ id, selected, dragging, data: { area } }) => {
         const { updateArea, readonly } = useChartDB();
+        // Phase 5: peers with this area selected on their own canvas.
+        const selectingPeers = useSelectingPeers(id);
         const { t } = useTranslation();
         const [editMode, setEditMode] = useState(false);
         const [areaName, setAreaName] = useState(area.name);
@@ -141,6 +146,7 @@ export const AreaNode: React.FC<NodeProps<AreaNodeType>> = React.memo(
                     style={{
                         backgroundColor: `${area.color}15`,
                         borderColor: selected ? undefined : area.color,
+                        ...presenceRingStyle(selectingPeers),
                     }}
                     onClick={(e) => {
                         setEditTableModeTable(null);
@@ -149,6 +155,7 @@ export const AreaNode: React.FC<NodeProps<AreaNodeType>> = React.memo(
                         }
                     }}
                 >
+                    <PresenceHighlightBadge peers={selectingPeers} />
                     <AreaNodeStatus
                         status={
                             isDiffNewArea
