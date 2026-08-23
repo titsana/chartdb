@@ -51,6 +51,48 @@ export const determineRelationshipType = ({
     return 'many_to_many';
 };
 
+/**
+ * Which field a relationship's foreign key sits on: the source field for
+ * many:one (the FK always goes on the "many" side when cardinalities
+ * differ), the target field for every other case (one:one, one:many,
+ * many:many all put it on target). Single source of truth for this —
+ * previously duplicated inline in canvas.tsx and table-node-field.tsx,
+ * which risked the two copies silently diverging.
+ */
+export const foreignKeyFieldId = (
+    rel: Pick<
+        DBRelationship,
+        | 'sourceFieldId'
+        | 'targetFieldId'
+        | 'sourceCardinality'
+        | 'targetCardinality'
+    >
+): string =>
+    determineRelationshipType(rel) === 'many_to_one'
+        ? rel.sourceFieldId
+        : rel.targetFieldId;
+
+/**
+ * Perf: builds the fieldId -> "is this a foreign key" index in ONE pass
+ * over `relationships`, instead of every field scanning the whole array
+ * itself (O(fields × relationships) on a large diagram — found via
+ * manual testing that this was a real jank contributor when many table
+ * nodes mount at once, e.g. zooming out after a large import).
+ */
+export const computeForeignKeyFieldIds = (
+    relationships: Pick<
+        DBRelationship,
+        | 'sourceFieldId'
+        | 'targetFieldId'
+        | 'sourceCardinality'
+        | 'targetCardinality'
+    >[]
+): Set<string> => {
+    const ids = new Set<string>();
+    relationships.forEach((rel) => ids.add(foreignKeyFieldId(rel)));
+    return ids;
+};
+
 export const determineCardinalities = (
     relationshipType: RelationshipType
 ): {

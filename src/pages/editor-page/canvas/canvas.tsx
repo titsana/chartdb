@@ -64,6 +64,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { useTranslation } from 'react-i18next';
 import type { DBTable } from '@/lib/domain/db-table';
 import { MIN_TABLE_SIZE } from '@/lib/domain/db-table';
+import { computeForeignKeyFieldIds } from '@/lib/domain/db-relationship';
 import { useLocalConfig } from '@/hooks/use-local-config';
 import { usePresence } from '@/hooks/use-presence';
 import { RemoteCursors } from './remote-cursors/remote-cursors';
@@ -177,6 +178,7 @@ const tableToTableNode = (
         forceShow,
         isRelationshipCreatingTarget = false,
         targetEdgeCounts,
+        foreignKeyFieldIds,
     }: {
         filter?: DiagramFilter;
         databaseType: DatabaseType;
@@ -185,6 +187,7 @@ const tableToTableNode = (
         forceShow?: boolean;
         isRelationshipCreatingTarget?: boolean;
         targetEdgeCounts?: Record<string, number>;
+        foreignKeyFieldIds?: Record<string, boolean>;
     }
 ): TableNodeType => {
     // Always use absolute position for now
@@ -214,6 +217,7 @@ const tableToTableNode = (
             isOverlapping: false,
             isRelationshipCreatingTarget,
             targetEdgeCounts,
+            foreignKeyFieldIds,
         },
         width: table.width ?? MIN_TABLE_SIZE,
         hidden,
@@ -597,12 +601,23 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     useEffect(() => {
         // Compute target edge counts per field (same logic as edge creation)
         // This ensures handle creation is synchronized with edge indices
+        //
+        // Perf: also builds a diagram-wide isForeignKey index here
+        // (computeForeignKeyFieldIds, db-relationship.ts — one
+        // O(relationships) pass) — this used to be a separate
+        // O(relationships) scan done independently by every field, every
+        // mount. Found via manual testing: zooming out on a large diagram
+        // (many fields mounting at once) was very janky, and this was one
+        // of the two dominant per-mount costs alongside the already-fixed
+        // updateNodeInternals coalescing.
         const targetEdgeCountsByField: Record<string, number> = {};
         relationships.forEach((rel) => {
             const fieldId = rel.targetFieldId;
             targetEdgeCountsByField[fieldId] =
                 (targetEdgeCountsByField[fieldId] || 0) + 1;
         });
+        const foreignKeyFieldIdsGlobal =
+            computeForeignKeyFieldIds(relationships);
 
         setNodes((prevNodes) => {
             const newNodes = [
@@ -612,10 +627,14 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
                     // Get target edge counts for this table's fields
                     const tableTargetEdgeCounts: Record<string, number> = {};
+                    const tableForeignKeyFieldIds: Record<string, boolean> = {};
                     table.fields.forEach((field) => {
                         if (targetEdgeCountsByField[field.id]) {
                             tableTargetEdgeCounts[field.id] =
                                 targetEdgeCountsByField[field.id];
+                        }
+                        if (foreignKeyFieldIdsGlobal.has(field.id)) {
+                            tableForeignKeyFieldIds[field.id] = true;
                         }
                     });
 
@@ -627,6 +646,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                         forceShow: shouldForceShowTable(table.id),
                         isRelationshipCreatingTarget: false,
                         targetEdgeCounts: tableTargetEdgeCounts,
+                        foreignKeyFieldIds: tableForeignKeyFieldIds,
                     });
 
                     // Check if table uses the highlighted custom type

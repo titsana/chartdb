@@ -61,6 +61,12 @@ import { useCanvas } from '@/hooks/use-canvas';
 export const TABLE_RELATIONSHIP_SOURCE_HANDLE_ID_PREFIX = 'table_rel_source_';
 export const TABLE_RELATIONSHIP_TARGET_HANDLE_ID_PREFIX = 'table_rel_target_';
 
+// Perf (LOD): zoom level below which field rows drop their visual detail
+// (see `isLowDetail` below). Chosen as "field text would be unreadably
+// small anyway" — same rough threshold React Flow itself docs as typical
+// for hiding fine detail at scale.
+const LOD_ZOOM_THRESHOLD = 0.5;
+
 export type TableNodeType = Node<
     {
         table: DBTable;
@@ -71,6 +77,14 @@ export type TableNodeType = Node<
         isRelationshipCreatingTarget?: boolean;
         // Map of fieldId -> number of edges targeting that field (for handle creation)
         targetEdgeCounts?: Record<string, number>;
+        // Perf: fieldId -> is this field a foreign key, precomputed once in
+        // canvas.tsx over the whole `relationships` array (same reasoning
+        // as `targetEdgeCounts`) — see table-node-field.tsx's own comment
+        // on why scanning `relationships` per field per mount was a real
+        // cost on large diagrams. Optional, with the same per-field
+        // fallback scan `targetEdgeCount` already has, for any call site
+        // that doesn't populate it.
+        foreignKeyFieldIds?: Record<string, boolean>;
     },
     'table'
 >;
@@ -88,6 +102,7 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
             highlightTable,
             isRelationshipCreatingTarget,
             targetEdgeCounts,
+            foreignKeyFieldIds,
         },
     }) => {
         const { updateTable, relationships, readonly } = useChartDB();
@@ -116,6 +131,17 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
             }
             return relEdges;
         }, equal);
+        // Perf (LOD): below this zoom level, field rows render name/icons/
+        // diff-highlighting anyway isn't legible — skip that content
+        // entirely (table-node-field.tsx's `isLowDetail` branch) rather
+        // than pay for it on every one of a large diagram's tables/fields
+        // while zoomed out enough to see them all at once. The selector
+        // returns a plain boolean, so Zustand's default reference
+        // equality already only re-renders this node when the THRESHOLD
+        // is actually crossed, not on every zoom tick.
+        const isLowDetail = useStore(
+            (store) => store.transform[2] < LOD_ZOOM_THRESHOLD
+        );
         // Phase 5: peers with this table selected on their own canvas.
         const selectingPeers = useSelectingPeers(id);
         const {
@@ -640,6 +666,8 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
                                 visible={true}
                                 isConnectable={!table.isView}
                                 targetEdgeCount={targetEdgeCounts?.[field.id]}
+                                isForeignKey={foreignKeyFieldIds?.[field.id]}
+                                isLowDetail={isLowDetail}
                             />
                         ))}
                     </div>

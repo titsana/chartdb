@@ -21,6 +21,7 @@ import {
     Pencil,
 } from 'lucide-react';
 import { generateDBFieldSuffix, type DBField } from '@/lib/domain/db-field';
+import { foreignKeyFieldId } from '@/lib/domain/db-relationship';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { cn } from '@/lib/utils';
 import {
@@ -41,6 +42,32 @@ export const LEFT_HANDLE_ID_PREFIX = 'left_rel_';
 export const RIGHT_HANDLE_ID_PREFIX = 'right_rel_';
 export const TARGET_ID_PREFIX = 'target_rel_';
 
+// Perf fix found via manual testing: zooming out on a large diagram (many
+// tables mounting at once) was very janky. Every field of every table
+// called `updateNodeInternals(tableNodeId)` separately on mount — a table
+// with 15 fields fired 15 SEPARATE calls, each one forcing a synchronous
+// DOM reflow read over every handle in that table AND walking every node
+// in the ENTIRE diagram (`updateAbsolutePositions` inside React Flow's own
+// `updateNodeInternals` action is diagram-wide, not scoped to one table —
+// confirmed by reading @xyflow/system's source). All of a table's fields
+// mount in the same tick, so this Set — shared across every
+// `TableNodeField` instance via module scope, keyed by tableNodeId —
+// coalesces however many of them ask for a recompute into exactly ONE
+// real call per animation frame, per table.
+const pendingNodeInternalsUpdates = new Set<string>();
+
+function scheduleNodeInternalsUpdate(
+    tableNodeId: string,
+    updateNodeInternals: (id: string) => void
+): void {
+    if (pendingNodeInternalsUpdates.has(tableNodeId)) return;
+    pendingNodeInternalsUpdates.add(tableNodeId);
+    requestAnimationFrame(() => {
+        pendingNodeInternalsUpdates.delete(tableNodeId);
+        updateNodeInternals(tableNodeId);
+    });
+}
+
 export interface TableNodeFieldProps {
     tableNodeId: string;
     field: DBField;
@@ -50,6 +77,22 @@ export interface TableNodeFieldProps {
     isConnectable: boolean;
     // Target edge count passed from canvas to ensure sync with edge creation
     targetEdgeCount?: number;
+    // Perf: precomputed once in canvas.tsx over the whole `relationships`
+    // array, same reasoning as `targetEdgeCount` — see `isForeignKey`
+    // below's own comment for why the per-field fallback scan was a real
+    // cost on large diagrams.
+    isForeignKey?: boolean;
+    // Perf (LOD): true below table-node.tsx's zoom threshold. Renders a
+    // stripped-down row — same Handle elements, at the same positions, so
+    // relationship edges keep anchoring correctly — with no name/type
+    // text, icons, tooltips, or diff-highlighting, none of which is
+    // legible at that zoom level anyway. See the doc comment on the
+    // low-detail branch below for why the Handles specifically are NOT
+    // dropped (React Flow can't find an edge's specific handle otherwise,
+    // and just drops the edge entirely rather than falling back to the
+    // node's center — confirmed by reading its source before choosing
+    // this design over hiding fields outright).
+    isLowDetail?: boolean;
 }
 
 const arePropsEqual = (
@@ -75,7 +118,9 @@ const arePropsEqual = (
         prevProps.visible === nextProps.visible &&
         prevProps.isConnectable === nextProps.isConnectable &&
         prevProps.tableNodeId === nextProps.tableNodeId &&
-        prevProps.targetEdgeCount === nextProps.targetEdgeCount
+        prevProps.targetEdgeCount === nextProps.targetEdgeCount &&
+        prevProps.isForeignKey === nextProps.isForeignKey &&
+        prevProps.isLowDetail === nextProps.isLowDetail
     );
 };
 
@@ -88,6 +133,8 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
         visible,
         isConnectable,
         targetEdgeCount,
+        isForeignKey: precomputedIsForeignKey,
+        isLowDetail,
     }) => {
         const { relationships, readonly, highlightedCustomType, databaseType } =
             useChartDB();
@@ -145,46 +192,42 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
             return count;
         }, [targetEdgeCount, relationships, tableNodeId, field.id]);
 
+        // Perf fix found via manual testing on a large imported diagram:
+        // this used to unconditionally scan the WHOLE `relationships`
+        // array on every field, every mount — O(fields × relationships)
+        // diagram-wide, with no index. canvas.tsx now precomputes this
+        // once (same reasoning/pattern as `targetEdgeCount`) and passes
+        // it down; the scan below only runs as a fallback for any call
+        // site that doesn't provide it.
         const isForeignKey = useMemo(() => {
-            return relationships.some((rel) => {
-                // FK placement logic:
-                // - FK goes on the "many" side when cardinalities differ
-                // - FK goes on target when cardinalities are the same (one:one, many:many)
-                // The only case where FK goes on source is many:one
-                const fkOnSource =
-                    rel.sourceCardinality === 'many' &&
-                    rel.targetCardinality === 'one';
-
-                if (fkOnSource) {
-                    return (
-                        rel.sourceTableId === tableNodeId &&
-                        rel.sourceFieldId === field.id
-                    );
-                }
-
-                // All other cases: FK on target
-                return (
-                    rel.targetTableId === tableNodeId &&
-                    rel.targetFieldId === field.id
-                );
-            });
-        }, [relationships, tableNodeId, field.id]);
+            if (precomputedIsForeignKey !== undefined) {
+                return precomputedIsForeignKey;
+            }
+            // Fallback only — matches computeForeignKeyFieldIds exactly
+            // (single source of truth in db-relationship.ts), just without
+            // the diagram-wide index canvas.tsx builds once and passes
+            // down as `precomputedIsForeignKey` on the normal render path.
+            return relationships.some(
+                (rel) => foreignKeyFieldId(rel) === field.id
+            );
+        }, [precomputedIsForeignKey, relationships, field.id]);
 
         const previousNumberOfEdgesToFieldRef = useRef<number | null>(null);
 
         useEffect(() => {
-            // Always update on first render, then only when count changes
+            // Always update on first render, then only when count changes.
+            // The ref updates synchronously here (not deferred inside the
+            // rAF, unlike the old version) — this field's own request is
+            // "accounted for" the moment it's made, regardless of whether
+            // the actual `updateNodeInternals` call ends up being the one
+            // a sibling field's request already scheduled for this frame
+            // (see scheduleNodeInternalsUpdate above).
             if (
                 previousNumberOfEdgesToFieldRef.current === null ||
                 previousNumberOfEdgesToFieldRef.current !== numberOfEdgesToField
             ) {
-                // Use requestAnimationFrame for immediate but batched update
-                const frameId = requestAnimationFrame(() => {
-                    updateNodeInternals(tableNodeId);
-                    previousNumberOfEdgesToFieldRef.current =
-                        numberOfEdgesToField;
-                });
-                return () => cancelAnimationFrame(frameId);
+                previousNumberOfEdgesToFieldRef.current = numberOfEdgesToField;
+                scheduleNodeInternalsUpdate(tableNodeId, updateNodeInternals);
             }
         }, [tableNodeId, updateNodeInternals, numberOfEdgesToField]);
 
@@ -342,6 +385,69 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
             field.id,
             readonly,
         ]);
+
+        // Perf (LOD): every Handle below is copied VERBATIM from the full
+        // render further down — same ids, same positions, same count
+        // logic — deliberately, so a relationship edge anchored to this
+        // exact field keeps resolving to the exact same point regardless
+        // of which branch rendered. Everything else (name, type, icons,
+        // tooltips, diff-highlighting) is dropped — none of it is legible
+        // at this zoom level anyway, and it was a real jank contributor
+        // when many tables/fields mount at once (e.g. zooming out after a
+        // large import).
+        if (isLowDetail) {
+            return (
+                <div
+                    className={cn('relative flex h-8 items-center border-t', {
+                        'max-h-8 opacity-100': visible,
+                        'z-0 max-h-0 overflow-hidden opacity-0': !visible,
+                    })}
+                >
+                    {isConnectable ? (
+                        <>
+                            <Handle
+                                id={`${RIGHT_HANDLE_ID_PREFIX}${field.id}`}
+                                className={`!h-4 !w-4 !border-2 !bg-pink-600 ${!focused || readonly || isTargetFromView ? '!invisible' : ''}`}
+                                position={Position.Right}
+                                type="source"
+                            />
+                            <Handle
+                                id={`${LEFT_HANDLE_ID_PREFIX}${field.id}`}
+                                className={`!h-4 !w-4 !border-2 !bg-pink-600 ${!focused || readonly || isTargetFromView ? '!invisible' : ''}`}
+                                position={Position.Left}
+                                type="source"
+                            />
+                        </>
+                    ) : null}
+                    {(!connection.inProgress || isTarget) && isConnectable && (
+                        <>
+                            {Array.from(
+                                { length: numberOfEdgesToField },
+                                (_, index) => index
+                            ).map((index) => (
+                                <Handle
+                                    id={`${TARGET_ID_PREFIX}${index}_${field.id}`}
+                                    key={`${TARGET_ID_PREFIX}${index}_${field.id}`}
+                                    className={`!invisible`}
+                                    position={Position.Left}
+                                    type="target"
+                                />
+                            ))}
+                            <Handle
+                                id={`${TARGET_ID_PREFIX}${numberOfEdgesToField}_${field.id}`}
+                                className={
+                                    isTarget
+                                        ? '!absolute !left-0 !top-0 !h-full !w-full !transform-none !rounded-none !border-none !opacity-0'
+                                        : `!invisible`
+                                }
+                                position={Position.Left}
+                                type="target"
+                            />
+                        </>
+                    )}
+                </div>
+            );
+        }
 
         return (
             <div
