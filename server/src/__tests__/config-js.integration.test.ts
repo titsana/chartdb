@@ -109,7 +109,7 @@ describe.skipIf(!databaseReachable)('GET /config.js', () => {
         const server = await startServerProcess({
             AUTH_MODE: 'azure-ad',
             ENTRA_TENANT_ID: 'test-tenant-id',
-            ENTRA_API_AUDIENCE: 'api://test-client-id',
+            ENTRA_CLIENT_ID: 'test-client-id',
         });
         try {
             const res = await fetch(`http://localhost:${server.port}/config.js`);

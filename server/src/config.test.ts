@@ -55,19 +55,19 @@ describe('loadConfig — authMode', () => {
         );
     });
 
-    it('accepts AUTH_MODE=azure-ad when tenant + audience are set', () => {
+    it('accepts AUTH_MODE=azure-ad when tenant + client id are set', () => {
         const config = loadConfig({
             ...baseEnv,
             AUTH_MODE: 'azure-ad',
             ENTRA_TENANT_ID: 'tenant-1',
-            ENTRA_API_AUDIENCE: 'api://client-1',
+            ENTRA_CLIENT_ID: 'client-1',
         });
         expect(config.authMode).toBe('azure-ad');
         expect(config.entraTenantId).toBe('tenant-1');
-        expect(config.entraApiAudience).toBe('api://client-1');
+        expect(config.entraClientId).toBe('client-1');
     });
 
-    it('rejects AUTH_MODE=azure-ad missing ENTRA_TENANT_ID/ENTRA_API_AUDIENCE — fail loud, not a silent fallback to public', () => {
+    it('rejects AUTH_MODE=azure-ad missing ENTRA_TENANT_ID/ENTRA_CLIENT_ID — fail loud, not a silent fallback to public', () => {
         expect(() =>
             loadConfig({ ...baseEnv, AUTH_MODE: 'azure-ad' })
         ).toThrow(/ENTRA_TENANT_ID/);

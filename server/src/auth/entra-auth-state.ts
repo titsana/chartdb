@@ -5,7 +5,7 @@ import { createEntraVerifier, type EntraVerifier } from './entra-jwt';
 export interface EntraAuthState {
     authMode: AuthMode;
     /** Non-null iff authMode === 'azure-ad' (config.ts guarantees the
-     * tenant/audience env vars exist whenever that mode is selected). */
+     * tenant/client id env vars exist whenever that mode is selected). */
     verify: EntraVerifier | null;
 }
 
@@ -24,7 +24,7 @@ export function buildEntraAuthState(): EntraAuthState {
                       // config.ts's loadConfig already throws at boot if
                       // authMode is 'azure-ad' and either is missing.
                       config.entraTenantId!,
-                      config.entraApiAudience!
+                      config.entraClientId!
                   )
                 : null,
     };

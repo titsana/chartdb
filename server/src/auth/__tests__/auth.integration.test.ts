@@ -93,7 +93,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — AUTH_MODE=azure-ad', () => {
         const server = await startServerProcess({
             AUTH_MODE: 'azure-ad',
             ENTRA_TENANT_ID: 'test-tenant-id',
-            ENTRA_API_AUDIENCE: 'api://test-client-id',
+            ENTRA_CLIENT_ID: 'test-client-id',
         });
         try {
             const health = await fetch(`http://localhost:${server.port}/health`);
@@ -112,7 +112,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — AUTH_MODE=azure-ad', () => {
         const server = await startServerProcess({
             AUTH_MODE: 'azure-ad',
             ENTRA_TENANT_ID: 'test-tenant-id',
-            ENTRA_API_AUDIENCE: 'api://test-client-id',
+            ENTRA_CLIENT_ID: 'test-client-id',
         });
         try {
             const res = await fetch(`http://localhost:${server.port}/diagrams`, {

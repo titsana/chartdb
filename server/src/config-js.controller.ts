@@ -14,7 +14,6 @@ const CLIENT_ENV_VARS = [
     'AUTH_MODE',
     'ENTRA_TENANT_ID',
     'ENTRA_CLIENT_ID',
-    'ENTRA_API_SCOPE',
 ] as const;
 
 /**

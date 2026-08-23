@@ -13,13 +13,20 @@ export type EntraVerifier = (token: string) => Promise<EntraTokenPayload>;
  * Phase 7: verifies an Azure AD (Entra ID) access token against the
  * tenant's own signing keys.
  *
- * Deliberately NOT accepting the bare client id as a valid `aud` — only
- * `entraApiAudience` (e.g. `api://<client-id>`, matching
- * VITE_ENTRA_API_SCOPE's prefix). An ID token issued to this same app also
- * carries `aud === client id`; ID tokens are meant for the browser, not as
- * bearer credentials for this API, so accepting that value here would let
- * a client swap an ID token in and pass. This was raised in review before
- * writing this file, not found after.
+ * Expected `aud` is derived as `api://<client-id>` rather than taking a
+ * separately-configured audience string — one fewer value to keep in sync
+ * with the client's own VITE_ENTRA_CLIENT_ID, at the cost of assuming the
+ * app registration's Application ID URI was left at its default
+ * `api://<client-id>` shape (true for every deploy this codebase has
+ * configured so far; a custom Application ID URI would need this changed
+ * back to a configured value).
+ *
+ * Deliberately NOT also accepting the bare client id as a valid `aud`. An
+ * ID token issued to this same app also carries `aud === client id`; ID
+ * tokens are meant for the browser, not as bearer credentials for this
+ * API, so accepting that value here would let a client swap an ID token
+ * in and pass. This was raised in review before writing this file, not
+ * found after.
  *
  * `scp` is checked for the exact scope the client requests (see
  * msal-config.ts's loginRequest) — an access token minted for some other
@@ -30,8 +37,9 @@ const REQUIRED_SCOPE = 'access_as_user';
 
 export function createEntraVerifier(
     tenantId: string,
-    apiAudience: string
+    clientId: string
 ): EntraVerifier {
+    const apiAudience = `api://${clientId}`;
     const client = jwksClient({
         jwksUri: `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
         cache: true,

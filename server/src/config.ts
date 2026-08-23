@@ -26,8 +26,14 @@ export interface CollabConfig {
     authMode: AuthMode;
     /** Only set (and only required) when authMode === 'azure-ad'. */
     entraTenantId?: string;
-    /** Expected `aud` claim on the access token, e.g. `api://<client-id>`. */
-    entraApiAudience?: string;
+    /** Same app registration's client id — entra-jwt.ts derives the
+     * expected `aud` claim from this (`api://<client-id>`) rather than
+     * taking a separately-configured audience string, so there's one
+     * fewer value to keep in sync with the client's own
+     * VITE_ENTRA_CLIENT_ID. Assumes the app registration's Application ID
+     * URI is left at its default `api://<client-id>` shape — true for
+     * every deploy this codebase has configured so far. */
+    entraClientId?: string;
 }
 
 function readAllowlist(raw: string | undefined): string[] {
@@ -60,9 +66,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     // the whole point of making the toggle explicit (see the AskUserQuestion
     // exchange this design came from) is that a misconfigured "azure-ad"
     // should be loud, not quietly behave like "public".
-    if (authMode === 'azure-ad' && (!env.ENTRA_TENANT_ID || !env.ENTRA_API_AUDIENCE)) {
+    if (authMode === 'azure-ad' && (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID)) {
         throw new Error(
-            'AUTH_MODE=azure-ad requires ENTRA_TENANT_ID and ENTRA_API_AUDIENCE (see server/.env.example).'
+            'AUTH_MODE=azure-ad requires ENTRA_TENANT_ID and ENTRA_CLIENT_ID (see server/.env.example).'
         );
     }
 
@@ -72,7 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
         originAllowlist: readAllowlist(env.WEBSOCKET_ORIGIN_ALLOWLIST),
         authMode,
         entraTenantId: env.ENTRA_TENANT_ID,
-        entraApiAudience: env.ENTRA_API_AUDIENCE,
+        entraClientId: env.ENTRA_CLIENT_ID,
     };
 }
 
