@@ -89,6 +89,7 @@ import type { Graph } from '@/lib/graph';
 import { removeVertex } from '@/lib/graph';
 import type { ChartDBEvent } from '@/context/chartdb-context/chartdb-context';
 import { cn, debounce, getOperatingSystem } from '@/lib/utils';
+import { useDebounce } from '@/hooks/use-debounce-v2';
 import type { DependencyEdgeType } from './dependency-edge/dependency-edge';
 import { DependencyEdge } from './dependency-edge/dependency-edge';
 import {
@@ -753,12 +754,35 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         }
     }, [filter, fitView, tables, setOverlapGraph, databaseType, showDBViews]);
 
-    useEffect(() => {
-        const checkParentAreas = debounce(() => {
-            const visibleTables = nodes
+    // Bug found via manual testing: dragging an area (or a table) fast
+    // could make a table "fall out" of its area. Root cause was here —
+    // `debounce(...)` used to be called fresh inside this effect on every
+    // `nodes` change, which fires on every drag-move frame, not just
+    // drag-end. Each fresh instance got its own independent, never-
+    // canceled timer, so a fast drag spawned dozens of uncoordinated
+    // 300ms timers, each closed over a different mid-drag position
+    // snapshot. They fired in a staggered burst after the drag settled,
+    // and whichever happened to fire LAST won — with no guarantee that
+    // was the one holding the true final position, since they were
+    // racing independently rather than debouncing anything. This is
+    // exactly the appendix-b:6 class of bug `useDebounce` (use-debounce-
+    // v2.ts) already exists to prevent elsewhere — using it here too,
+    // rather than hand-rolling the same fix a second time.
+    //
+    // `nodesRef` (updated every render) lets the debounced callback below
+    // stay OUT of `nodes`' own dependency chain — it only needs to be
+    // recreated if `updateTablesState`'s identity changes, so `nodes`
+    // changing every drag frame doesn't tear down and rebuild the
+    // debounce wrapper on every frame either.
+    const nodesRef = useRef(nodes);
+    nodesRef.current = nodes;
+    const checkParentAreas = useDebounce(
+        useCallback(() => {
+            const currentNodes = nodesRef.current;
+            const visibleTables = currentNodes
                 .filter((node) => node.type === 'table' && !node.hidden)
                 .map((node) => (node as TableNodeType).data.table);
-            const visibleAreas = nodes
+            const visibleAreas = currentNodes
                 .filter((node) => node.type === 'area' && !node.hidden)
                 .map((node) => (node as AreaNodeType).data.area);
 
@@ -803,10 +827,13 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     { updateHistory: false }
                 );
             }
-        }, 300);
+        }, [updateTablesState]),
+        300
+    );
 
+    useEffect(() => {
         checkParentAreas();
-    }, [nodes, updateTablesState]);
+    }, [nodes, checkParentAreas]);
 
     const onConnectHandler = useCallback(
         async (params: AddEdgeParams) => {
