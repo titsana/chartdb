@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Awareness } from 'y-protocols/awareness';
+import equal from 'fast-deep-equal';
 
 /**
  * Phase 5 (docs/design/realtime-collaboration.md §10): one remote peer's
@@ -61,12 +62,32 @@ export interface PresencePeer extends PresenceState {
  * self-renews the local client's state and prunes peers that go stale for
  * 30s (see `outdatedTimeout` in awareness.js) — adding another interval on
  * top would be redundant, not defensive.
+ *
+ * Perf fix found via manual testing on a large imported diagram
+ * (hundreds of tables): `table-node.tsx`/`area-node.tsx`/`note-node.tsx`
+ * each call this hook once (via `useSelectingPeers`), so N nodes means
+ * N+1 independent subscriptions to the SAME `awareness.on('change', ...)`
+ * event. `y-protocols/awareness`'s `setLocalState`/`setLocalStateField`
+ * emit `'change'` for the LOCAL client's own writes too (confirmed by
+ * reading awareness.js — not just remote peers'), and canvas.tsx
+ * broadcasts this client's own cursor/viewport on every mousemove/pan
+ * frame. Without the `equal(...)` bail-out below, every one of those
+ * frames called `setPeers()` with a brand-new array of brand-new
+ * objects — a new reference every time even when the *content* (which
+ * excludes this client's own state already) hadn't actually changed —
+ * re-rendering every single node component on every mouse-move/pan
+ * frame, purely from panning ALONE with zero other peers connected.
+ * `readPeers()`'s result only genuinely differs when a REMOTE peer's
+ * state changed, so skipping the `setPeers` call when it's deep-equal to
+ * the last one eliminates that self-inflicted churn entirely.
  */
 export function usePresence(awareness: Awareness | null): PresencePeer[] {
     const [peers, setPeers] = useState<PresencePeer[]>([]);
+    const peersRef = useRef(peers);
 
     useEffect(() => {
         if (!awareness) {
+            peersRef.current = [];
             setPeers([]);
             return;
         }
@@ -79,11 +100,17 @@ export function usePresence(awareness: Awareness | null): PresencePeer[] {
                     ...(state as PresenceState),
                 }));
 
-        setPeers(readPeers());
+        const applyPeers = () => {
+            const next = readPeers();
+            if (equal(next, peersRef.current)) return;
+            peersRef.current = next;
+            setPeers(next);
+        };
 
-        const handler = () => setPeers(readPeers());
-        awareness.on('change', handler);
-        return () => awareness.off('change', handler);
+        applyPeers();
+
+        awareness.on('change', applyPeers);
+        return () => awareness.off('change', applyPeers);
     }, [awareness]);
 
     return peers;

@@ -97,4 +97,75 @@ describe('usePresence', () => {
         const { result } = renderHook(() => usePresence(null));
         expect(result.current).toEqual([]);
     });
+
+    // Perf bug found via manual testing on a large imported diagram: this
+    // hook is called once PER NODE (table/area/note, via
+    // useSelectingPeers), so N nodes = N+1 subscriptions to the same
+    // `awareness.on('change')`. That event fires for this client's OWN
+    // state writes too (every mousemove/pan broadcasts cursor/viewport),
+    // not just remote peers' — panning alone, with zero other peers
+    // connected, was re-rendering every node component on every frame.
+    // `readPeers()` already excludes this client's own state, so nothing
+    // in its OUTPUT should actually change when only local state moves —
+    // this pins that no re-render (and no new array reference) happens in
+    // that case.
+    it("does not re-render (same array reference) when only this client's own state changes", () => {
+        const localDoc = new Y.Doc();
+        const localAwareness = new Awareness(localDoc);
+        let renderCount = 0;
+        const { result } = renderHook(() => {
+            renderCount++;
+            return usePresence(localAwareness);
+        });
+
+        const peersAfterMount = result.current;
+        const renderCountAfterMount = renderCount;
+
+        act(() => {
+            localAwareness.setLocalStateField('cursor', { x: 1, y: 2 });
+        });
+        act(() => {
+            localAwareness.setLocalStateField('cursor', { x: 3, y: 4 });
+        });
+        act(() => {
+            localAwareness.setLocalStateField('viewportCenter', {
+                x: 5,
+                y: 6,
+                zoom: 1,
+            });
+        });
+
+        expect(renderCount).toBe(renderCountAfterMount);
+        expect(result.current).toBe(peersAfterMount);
+    });
+
+    // Contrast case: a REMOTE peer's state change must still come through
+    // — the fix above skips a no-op update, not real ones.
+    it("does re-render when a remote peer's state actually changes", async () => {
+        const localDoc = new Y.Doc();
+        const localAwareness = new Awareness(localDoc);
+        const remoteDoc = new Y.Doc();
+        const remoteAwareness = new Awareness(remoteDoc);
+        remoteAwareness.setLocalState({ cursor: { x: 0, y: 0 } });
+
+        const { result } = renderHook(() => usePresence(localAwareness));
+
+        act(() => {
+            relayAwareness(remoteAwareness, localAwareness);
+        });
+        await waitFor(() => {
+            expect(result.current).toHaveLength(1);
+        });
+        const peersAfterFirstMove = result.current;
+
+        act(() => {
+            remoteAwareness.setLocalStateField('cursor', { x: 9, y: 9 });
+            relayAwareness(remoteAwareness, localAwareness);
+        });
+
+        await waitFor(() => {
+            expect(result.current[0].cursor).toEqual({ x: 9, y: 9 });
+        });
+        expect(result.current).not.toBe(peersAfterFirstMove);
+    });
 });

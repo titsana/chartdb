@@ -47,6 +47,7 @@ import { TableNodeContextMenu } from './table-node-context-menu';
 import { cn } from '@/lib/utils';
 import { TableNodeDependencyIndicator } from './table-node-dependency-indicator';
 import type { EdgeType } from '../canvas';
+import equal from 'fast-deep-equal';
 import {
     Tooltip,
     TooltipContent,
@@ -90,7 +91,31 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
         },
     }) => {
         const { updateTable, relationships, readonly } = useChartDB();
-        const edges = useStore((store) => store.edges) as EdgeType[];
+        // Perf fix found via manual testing on a large imported diagram:
+        // `useStore((store) => store.edges)` subscribed to the WHOLE edges
+        // array — any edge anywhere changing (e.g. clicking ANY table,
+        // which reselects/highlights its edges) gave every mounted table
+        // node a new array reference, re-rendering all of them just to run
+        // this same O(edges) filter again and (usually) discover nothing
+        // relevant to THIS table changed. Filtering inside the selector
+        // itself, with a deep-equal comparator, means React Flow's store
+        // only actually re-renders this node when ITS OWN relevant edges
+        // (the ones touching `id`) changed — one click now re-renders the
+        // handful of nodes whose edges actually changed, not every node
+        // in the diagram.
+        const selectedRelEdges = useStore((store) => {
+            const relEdges: RelationshipEdgeType[] = [];
+            for (const edge of store.edges as EdgeType[]) {
+                if (
+                    edge.type === 'relationship-edge' &&
+                    (edge.source === id || edge.target === id) &&
+                    (edge.selected || edge.data?.highlighted)
+                ) {
+                    relEdges.push(edge as RelationshipEdgeType);
+                }
+            }
+            return relEdges;
+        }, equal);
         // Phase 5: peers with this table selected on their own canvas.
         const selectingPeers = useSelectingPeers(id);
         const {
@@ -212,22 +237,6 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
 
         const { isDiffTableChanged, isDiffNewTable, isDiffTableRemoved } =
             diffState;
-
-        const selectedRelEdges: RelationshipEdgeType[] = useMemo(() => {
-            if (edges.length === 0) return [];
-
-            const relEdges: RelationshipEdgeType[] = [];
-            for (const edge of edges) {
-                if (
-                    edge.type === 'relationship-edge' &&
-                    (edge.source === id || edge.target === id) &&
-                    (edge.selected || edge.data?.highlighted)
-                ) {
-                    relEdges.push(edge as RelationshipEdgeType);
-                }
-            }
-            return relEdges;
-        }, [edges, id]);
 
         const highlightedFieldIds = useMemo(() => {
             const fieldIds = new Set<string>();
