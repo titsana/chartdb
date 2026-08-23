@@ -1414,15 +1414,37 @@ doing; undoing your own action never reverts someone else's; losing
 connection has a defined, non-silent UX.
 
 **Remote cursors + display name — ✅ Done.** Scoped down from the full
-presence bullet above on purpose: per-user selection highlight and "X is
-editing this table" need a new `CanvasContext` field or canvas event to
-carry the currently-selected table id out of `canvas.tsx` (today it's
-only React Flow's own internal `node.selected`, projected locally — see
-the scoping pass before this landed), and neither is needed to meet this
-phase's own exit criterion ("a user can tell who else is present and what
-they're doing") — cursors with name labels already do. Cut, not
-forgotten; revisit if selection highlight turns out to matter in
-practice.
+presence bullet above on purpose at first: per-user selection highlight
+needed a new broadcast field, not a `CanvasContext` change — scoping
+found `selectedTableIds` was already component-local state in
+`canvas.tsx` (`useState`, derived from React Flow's own `node.selected`
+via an existing effect), so the cheapest path was broadcasting that
+array as-is rather than adding a context field. Cursors + identity
+landed first; selection highlight ("X is looking at this table") landed
+right after as its own follow-up, not deferred to a later phase.
+
+**Per-table selection highlight — ✅ Done.**
+- `PresenceState.selectedTableIds?: string[]` (`use-presence.ts`) — new
+  awareness field, broadcast from `canvas.tsx` via its own
+  `useEffect([awareness, selectedTableIds])` (mirrors the identity
+  broadcast pattern, not the mousemove rAF one — selection changes far
+  less often than cursor position).
+- `table-node.tsx` calls `usePresence(awareness)` a second time (the hook
+  already owns its own subscribe/cleanup, so this is cheap) and filters
+  to peers whose `selectedTableIds` includes this node's own `id`. No
+  `node.data`/`CanvasContext` plumbing needed — `table-node.tsx` already
+  calls `useChartDB()` for other reasons, so `awareness` came along for
+  free.
+- Render: a colored `box-shadow` ring on the table (peer's `presenceColor`)
+  plus a small name-label badge above it, same visual language as
+  `RemoteCursors`' pointer label.
+- ponytail: if more than one peer has the same table selected at once,
+  only the first peer's color/name is shown — "someone's here" is enough
+  for this pass; a stacked-avatar/multi-ring display is the upgrade path
+  if simultaneous multi-peer edits on one table turn out common.
+- "X is editing this table" (a stronger claim than "selected" — actively
+  typing/editing vs. just clicked on) is still cut; `selectedTableIds`
+  only tracks React Flow node selection, not edit-mode state.
 - `usePresence` (`src/hooks/use-presence.ts`) projects a room's
   `y-protocols` `Awareness` into React state — the presence equivalent of
   `useYCollectionSync`, but built on `awareness.on('change', ...)`/
@@ -1476,11 +1498,11 @@ practice.
   `getStates()` — sabotage-verified: removing the write made the
   assertion fail as predicted, confirmed, then restored).
 
-**Not yet done:** per-user selection highlight / "editing this table"
-indicator (see the cut-scope note above); `Y.UndoManager` swap; the
-disconnect/reconnect UX open question. This phase's exit criterion is
-only partially met — presence (cursors) is done, undo semantics and
-disconnect UX are still open.
+**Not yet done:** the stronger "X is editing this table" indicator (see
+above — different from selection, not yet tracked); `Y.UndoManager`
+swap; the disconnect/reconnect UX open question. This phase's exit
+criterion is only partially met — presence (cursors + selection) is
+done, undo semantics and disconnect UX are still open.
 
 ### Phase 6 — Scale-out (defer until actually needed)
 

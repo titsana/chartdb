@@ -48,6 +48,7 @@ describe('usePresence', () => {
             displayName: 'Remote User',
             color: '#ff0000',
             cursor: { x: 10, y: 20 },
+            selectedTableIds: ['table-1'],
         });
 
         act(() => {
@@ -62,6 +63,7 @@ describe('usePresence', () => {
             displayName: 'Remote User',
             color: '#ff0000',
             cursor: { x: 10, y: 20 },
+            selectedTableIds: ['table-1'],
         });
     });
 

@@ -1606,6 +1606,13 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         awareness.setLocalStateField('color', presenceColor);
     }, [awareness, displayName, presenceColor]);
 
+    // Phase 5: broadcast this client's selected table ids, so peers can
+    // show a "someone's looking at this table" highlight (table-node.tsx).
+    useEffect(() => {
+        if (!awareness) return;
+        awareness.setLocalStateField('selectedTableIds', selectedTableIds);
+    }, [awareness, selectedTableIds]);
+
     // Cleanup RAF on unmount
     useEffect(() => {
         return () => {

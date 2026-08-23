@@ -37,6 +37,7 @@ import {
 import { TableNodeField } from './table-node-field';
 import { useLayout } from '@/hooks/use-layout';
 import { useChartDB } from '@/hooks/use-chartdb';
+import { usePresence } from '@/hooks/use-presence';
 import type { RelationshipEdgeType } from '../relationship-edge/relationship-edge';
 import type { DBField } from '@/lib/domain/db-field';
 import { useTranslation } from 'react-i18next';
@@ -86,8 +87,23 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
             targetEdgeCounts,
         },
     }) => {
-        const { updateTable, relationships, readonly } = useChartDB();
+        const { updateTable, relationships, readonly, awareness } =
+            useChartDB();
         const edges = useStore((store) => store.edges) as EdgeType[];
+        // Phase 5: peers with this table selected on their own canvas.
+        // ponytail: only the first peer's color/name is shown when more
+        // than one peer has this table selected at once — good enough for
+        // "someone's here"; upgrade to a stacked-avatar/multi-ring display
+        // if simultaneous multi-peer edits on one table turn out common.
+        const presencePeers = usePresence(awareness);
+        const selectingPeers = useMemo(
+            () =>
+                presencePeers.filter((peer) =>
+                    peer.selectedTableIds?.includes(id)
+                ),
+            [presencePeers, id]
+        );
+        const peerHighlightColor = selectingPeers[0]?.color ?? '#8eb7ff';
         const {
             openTableFromSidebar,
             selectSidebarSection,
@@ -431,6 +447,11 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
                 ) : null}
                 <div
                     className={tableClassName}
+                    style={
+                        selectingPeers.length > 0
+                            ? { boxShadow: `0 0 0 2px ${peerHighlightColor}` }
+                            : undefined
+                    }
                     onClick={(e) => {
                         if (e.detail === 2 && !readonly) {
                             e.stopPropagation();
@@ -492,6 +513,14 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
                         table={table}
                         focused={focused}
                     />
+                    {selectingPeers.length > 0 ? (
+                        <div
+                            className="absolute -top-6 left-0 z-10 max-w-full truncate rounded px-1.5 py-0.5 text-xs font-medium text-white shadow"
+                            style={{ backgroundColor: peerHighlightColor }}
+                        >
+                            {selectingPeers[0].displayName ?? 'Guest'}
+                        </div>
+                    ) : null}
                     <TableNodeStatus
                         status={
                             isDiffNewTable

@@ -12,6 +12,11 @@ export interface PresenceState {
     displayName?: string;
     color?: string;
     cursor?: { x: number; y: number } | null;
+    // Phase 5: which table(s) this peer currently has selected on their own
+    // canvas (mirrors React Flow's local `node.selected`, broadcast — see
+    // canvas.tsx). Table-node.tsx filters peers by `id` to show "someone's
+    // looking at this table" highlight.
+    selectedTableIds?: string[];
 }
 
 export interface PresencePeer extends PresenceState {
