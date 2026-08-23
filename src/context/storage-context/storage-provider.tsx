@@ -99,16 +99,31 @@ function fromDTO(dto: DiagramMetadataDTO): Diagram {
     };
 }
 
+// A killed/unreachable server can leave `fetch` pending forever (no
+// close event to reject on) rather than failing fast — bug found via
+// manual disconnect testing: a caller that does `showLoader(); await
+// apiFetch(...); hideLoader();` with no timeout leaves the full-screen
+// loading dialog stuck open indefinitely. 10s is generous for a local
+// REST call but still bounds the hang.
+const API_FETCH_TIMEOUT_MS = 10_000;
+
 async function apiFetch<T>(
     path: string,
     init?: RequestInit
 ): Promise<{ status: number; body: T | undefined }> {
-    const res = await fetch(`${COLLAB_API_URL}${path}`, {
-        headers: { 'Content-Type': 'application/json' },
-        ...init,
-    });
-    const body = res.status === 204 ? undefined : await res.json();
-    return { status: res.status, body };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_FETCH_TIMEOUT_MS);
+    try {
+        const res = await fetch(`${COLLAB_API_URL}${path}`, {
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            ...init,
+        });
+        const body = res.status === 204 ? undefined : await res.json();
+        return { status: res.status, body };
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 
 export const StorageProvider: React.FC<React.PropsWithChildren> = ({

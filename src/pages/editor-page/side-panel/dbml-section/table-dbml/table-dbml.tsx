@@ -287,13 +287,26 @@ export const TableDBML: React.FC<TableDBMLProps> = () => {
 
         showLoader();
 
-        await updateDiagramData(newDiagram, { forceUpdateStorage: true });
+        // try/finally so a network failure (e.g. server unreachable —
+        // found via manual disconnect testing, see use-diagram-loader.tsx
+        // for the same bug) can't leave the full-screen loader stuck open.
+        try {
+            await updateDiagramData(newDiagram, { forceUpdateStorage: true });
 
-        resetDiff();
-        setEditedDbml(editedDbml);
-        setIsEditMode(false);
-        lastDBMLChange.current = editedDbml;
-        hideLoader();
+            resetDiff();
+            setEditedDbml(editedDbml);
+            setIsEditMode(false);
+            lastDBMLChange.current = editedDbml;
+        } catch {
+            toast({
+                title: 'Could not save changes',
+                description:
+                    "Couldn't reach the server. Check your connection and try again.",
+                variant: 'destructive',
+            });
+        } finally {
+            hideLoader();
+        }
     }, [
         editedDbml,
         updateDiagramData,
@@ -301,6 +314,7 @@ export const TableDBML: React.FC<TableDBMLProps> = () => {
         resetDiff,
         showLoader,
         hideLoader,
+        toast,
     ]);
 
     const undoChanges = useCallback(() => {
