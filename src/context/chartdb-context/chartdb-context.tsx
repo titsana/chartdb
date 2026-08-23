@@ -87,6 +87,12 @@ export interface ChartDBContext {
     // loaded yet). See chartdb-provider.tsx's `awareness` state for why
     // this is real state, not a ref read.
     awareness: Awareness | null;
+    // Phase 5: true while a live room's WebSocket is down. NOT folded
+    // into `readonly` — edits still apply locally and converge on
+    // reconnect (see chartdb-provider.tsx's `disconnected` doc comment).
+    // Exposed only so the UI can show a "you're offline, changes will
+    // sync" banner.
+    disconnected: boolean;
 
     highlightedCustomType?: DBCustomType;
     highlightCustomTypeId: (id?: string) => void;
@@ -358,6 +364,7 @@ export const chartDBContext = createContext<ChartDBContext>({
     },
     events: new EventEmitter(),
     awareness: null,
+    disconnected: false,
 
     // General operations
     updateDiagramId: emptyFn,

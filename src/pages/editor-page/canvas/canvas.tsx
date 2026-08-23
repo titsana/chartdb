@@ -52,6 +52,7 @@ import {
     AlertTriangle,
     Highlighter,
     EyeOff,
+    WifiOff,
 } from 'lucide-react';
 import { Button } from '@/components/button/button';
 import { useLayout } from '@/hooks/use-layout';
@@ -311,6 +312,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         highlightedCustomType,
         highlightCustomTypeId,
         awareness,
+        disconnected,
     } = useChartDB();
     const { showSidePanel } = useLayout();
     const { effectiveTheme } = useTheme();
@@ -1974,6 +1976,22 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 </ReactFlow>
                 <MarkerDefinitions />
                 <RemoteCursors peers={presencePeers} />
+                {/* Phase 5: disconnect/reconnect UX (docs/design/
+                realtime-collaboration.md §9) — editing stays enabled while
+                disconnected (Yjs queues locally and merges on reconnect,
+                see `disconnected`'s doc comment in chartdb-provider.tsx);
+                this banner is just the heads-up that a refresh right now
+                would lose whatever hasn't synced yet. Gone automatically
+                the moment `disconnected` flips back to false. */}
+                {disconnected ? (
+                    <div className="fixed left-1/2 top-4 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 shadow-md dark:bg-amber-950 dark:text-amber-200">
+                        <WifiOff className="size-4 shrink-0" />
+                        <span>
+                            Disconnected — changes will sync once reconnected.
+                            Don&apos;t refresh yet.
+                        </span>
+                    </div>
+                ) : null}
             </div>
         </CanvasContextMenu>
     );

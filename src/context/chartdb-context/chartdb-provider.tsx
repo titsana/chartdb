@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
-import { HocuspocusProvider } from '@hocuspocus/provider';
+import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Awareness } from 'y-protocols/awareness';
 import { COLLAB_WS_URL } from '@/lib/env';
 import { seedWhenDecided } from '@/lib/collab/seed-gate';
@@ -131,6 +131,18 @@ export const ChartDBProvider: React.FC<
     // loadDiagramFromData, both on creation and on the destroy-before-
     // rebuild path.
     const [awareness, setAwareness] = useState<Awareness | null>(null);
+    // Phase 5: true while a room's WebSocket is down. Deliberately NOT
+    // folded into `readonly` — the reconnect-convergence integration test
+    // (chartdb-provider.collab.integration.test.tsx) proves Yjs already
+    // queues edits locally regardless of connection state and merges them
+    // on reconnect, so blocking edits here would throw away working,
+    // tested behavior rather than protect anything. Exposed only so the
+    // UI can show a "you're disconnected, changes will sync" banner. Same
+    // set-alongside-providerRef/reset-on-rebuild treatment as `awareness`
+    // above. Never true for a readonly/local-only session (template
+    // preview) — no provider is ever created there, so no 'status' event
+    // can fire.
+    const [disconnected, setDisconnected] = useState(false);
     // Phase 4 ready-gate (docs/design/realtime-collaboration.md's Phase 4
     // section has the full writeup of the bug this closes): on the
     // collab-connect path, `loadDiagramFromData` sets React state
@@ -2048,6 +2060,7 @@ export const ChartDBProvider: React.FC<
                 // leave stale presence data from a previous diagram
                 // visible.
                 setAwareness(null);
+                setDisconnected(false);
                 const newDoc = new Y.Doc();
                 collabDocRef.current = newDoc;
                 // Opens the ready-gate window (see gateWrite's doc comment
@@ -2152,6 +2165,16 @@ export const ChartDBProvider: React.FC<
                     });
                     providerRef.current = provider;
                     setAwareness(provider.awareness);
+                    // Phase 5: disconnect/reconnect UX — tracks status only
+                    // for the banner; edits stay live while disconnected
+                    // (see `disconnected`'s doc comment above for why). No
+                    // explicit `.off()` on teardown: this provider instance
+                    // is destroyed and discarded, never reused, above.
+                    provider.on('status', ({ status }: { status: string }) => {
+                        setDisconnected(
+                            status === WebSocketStatus.Disconnected
+                        );
+                    });
                     seedWhenDecided(provider, reconcileWithRoom);
                 } else {
                     // Readonly (template preview) or no collab server
@@ -2380,6 +2403,7 @@ export const ChartDBProvider: React.FC<
                 events,
                 readonly,
                 awareness,
+                disconnected,
                 updateDiagramData,
                 updateDiagramId,
                 updateDiagramName,

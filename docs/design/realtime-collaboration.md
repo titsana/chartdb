@@ -80,11 +80,18 @@ manual conflict UI needed.
   conflict.
 
 - **This system is online-only.** The `Y.Doc` has **no local persistence
-  provider** (no `y-indexeddb`, no offline queue) — Postgres on the server
-  is the only durable copy of diagram data. If the WebSocket connection
-  drops, the client stops accepting edits (see §9) until it reconnects and
-  re-syncs from the server; there is nothing to reconcile because nothing
-  was written locally while disconnected.
+  provider** (no `y-indexeddb`), so nothing survives a page refresh while
+  disconnected. That's different from "edits stop working": Yjs applies
+  writes to the in-memory `Y.Doc` regardless of connection state and
+  queues them for the server — a killed connection can't stop that,
+  proven by a real-server integration test (reconnect-convergence, Phase
+  4). **Corrected from an earlier draft of this line**, which said the
+  client stops accepting edits on disconnect — that was never actually
+  built, and building it (Phase 5) would have thrown away this already-
+  working, already-tested behavior for no protective benefit. See §9 and
+  Phase 5 below for the resolved disconnect UX: editing stays live; a
+  banner just warns that a refresh right now would lose what hasn't
+  synced.
 - A WebSocket provider connects to the new server and syncs `Y.Doc` updates
   in both directions whenever connected.
 - **Presence** (cursor position, current selection, typed display name) uses
@@ -207,10 +214,20 @@ summary can't drift out of sync with it.
 
 ## 9. Open questions / risks
 
-- **Disconnect behavior**: since this is online-only, what does the UI do
-  the moment the WebSocket drops — freeze the canvas read-only, show a
-  blocking "reconnecting…" overlay, or something less disruptive? Needs a
-  concrete UX spec; "the user just can't edit" isn't enough on its own.
+- **Disconnect behavior — ✅ resolved.** Editing stays live while
+  disconnected: Yjs already queues writes on the in-memory `Y.Doc`
+  regardless of connection state and merges them once the socket
+  reconnects (proven by the reconnect-convergence integration test,
+  Phase 4) — freezing the canvas read-only would have thrown that away
+  for no protective benefit, since the only real risk is a refresh
+  losing the unsynced queue (no local persistence provider — see §5).
+  UI: a small banner (`disconnected` on `ChartDBContext`, set from the
+  `HocuspocusProvider`'s `'status'` event) warns "changes will sync once
+  reconnected, don't refresh yet" and disappears on reconnect. First
+  draft of this decision asked for a hard freeze on a wrong premise
+  (conflating "no persistence" with "no local queue") — caught by the
+  reconnect-convergence test failing when the freeze was wired in,
+  corrected before merging.
 - **Undo semantics across users**: needs a concrete UX decision — does
   "undo" only ever revert your own last change, never someone else's,
   even if it was the most recent edit to the document? (Yjs `UndoManager`
@@ -1504,11 +1521,25 @@ and notes (notes needed a follow-up fix — the note box's
 `overflow-hidden` was clipping the label, see the fix commit). Presence
 sub-part of Phase 5 is fully closed.
 
+**Disconnect/reconnect UX — ✅ Done.** See §9's "Disconnect behavior"
+bullet above for the resolved decision and why (editing stays live,
+banner-only). Implementation: `disconnected` boolean state in
+`chartdb-provider.tsx`, set from `provider.on('status', ...)`
+(`@hocuspocus/provider`'s `WebSocketStatus` enum), reset alongside
+`awareness` on the destroy-before-rebuild path; exposed on
+`ChartDBContext` deliberately separate from `readonly` (folding it in
+was the wrong-premise first draft — see §5's correction note);
+consumed in `canvas.tsx` to show/hide a fixed-position banner. No new
+test — this is a thin UI-only read of already-tested plumbing
+(`provider.on('status', ...)`is exercised indirectly by every
+integration test that connects a client at all; the reconnect-
+convergence test already covers the behavior this banner is describing).
+
 **Not yet done:** the stronger "X is editing this table" indicator (see
 above — different from selection, not yet tracked); `Y.UndoManager`
-swap; the disconnect/reconnect UX open question. This phase's exit
-criterion is only partially met — presence (cursors + selection) is
-done, undo semantics and disconnect UX are still open.
+swap. This phase's exit criterion is now mostly met — presence
+(cursors + selection) and disconnect UX are done; only undo semantics
+across users remains open.
 
 ### Phase 6 — Scale-out (defer until actually needed)
 
