@@ -11,6 +11,14 @@ export const colorOptions = [
     '#9ef07a', // A lime green.
     '#ffe374', // A warm yellow.
     '#ff9f74', // A peachy orange.
+    '#5da9ff', // A medium blue.
+    '#36cfc9', // A teal.
+    '#7bd389', // A sage green.
+    '#c9a227', // A mustard gold.
+    '#a0785a', // A warm brown.
+    '#94a3b8', // A slate gray.
+    '#e857b0', // A magenta.
+    '#f2545b', // A coral red.
 ];
 
 export const randomColor = () => {
