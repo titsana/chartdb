@@ -228,7 +228,7 @@ to whoever owns that pipeline.
 
 Still needs, same as the split setup: `DATABASE_URL` (Postgres, not
 bundled into this container), and `AUTH_MODE`/`ENTRA_TENANT_ID`/
-`ENTRA_API_AUDIENCE`/`WEBSOCKET_ORIGIN_ALLOWLIST` as documented in
+`ENTRA_CLIENT_ID`/`WEBSOCKET_ORIGIN_ALLOWLIST` as documented in
 server/.env.example if opting into Azure AD auth or an origin allowlist.
 
 **`WEBSOCKET_ORIGIN_ALLOWLIST` gotcha, confirmed against a real built
@@ -1727,8 +1727,9 @@ outside Nest's routing/guard pipeline entirely):
   assumed — behind sign-in when `AUTH_MODE=azure-ad`; `public` mode never
   imports/constructs MSAL at all.
 
-Token validation restricts `aud` to the API audience only (`api://
-<client-id>`, matching `VITE_ENTRA_API_SCOPE`'s prefix) and requires the
+Token validation restricts `aud` to the API audience only, derived as
+`api://<client-id>` from `ENTRA_CLIENT_ID` (not a separately-configured
+audience string — see the 2026-08-24 update below) and requires the
 `access_as_user` scope — deliberately NOT accepting the bare client id as
 a valid audience, since an ID token (browser-facing, not a bearer
 credential for this API) also carries `aud === client id`; accepting both
@@ -1741,3 +1742,15 @@ original list — feature-flag rollout (per-diagram opt-in) and turning
 Appendix B into permanent regression tests — are cut from scope by
 explicit decision, not forgotten. Revisit either if a real need for
 per-diagram opt-in or Appendix B automation shows up later.
+
+**`ENTRA_API_AUDIENCE`/`VITE_ENTRA_API_SCOPE` removed, 2026-08-24** —
+both were always exactly `api://<client-id>` (audience) and
+`api://<client-id>/access_as_user` (scope), derivable from the client id
+every deploy already had to set (`ENTRA_CLIENT_ID`/
+`VITE_ENTRA_CLIENT_ID`). Now derived in code
+(`server/src/auth/entra-jwt.ts`, `src/lib/msal-config.ts`) instead of
+configured separately — one fewer place to copy the string right,
+same assumption as before made explicit: the app registration's
+Application ID URI must be left at its default `api://<client-id>`
+shape. A custom Application ID URI would need this reverted back to a
+configured value.

@@ -1,6 +1,6 @@
 # เอกสารโครงการ ChartDB
 
-> สร้างจาก source ณ 2026-08-23T16:44:59.064Z. เอกสารนี้ครอบคลุมไฟล์ TypeScript/TSX ทุกไฟล์ (client `src/` และ server `server/src/`) และ named callable ที่ AST ตรวจพบ; anonymous inline callbacks อธิบายรวมกับ owner/flow เพราะไม่มี public identity.
+> สร้างจาก source ณ 2026-08-23T16:56:23.669Z. เอกสารนี้ครอบคลุมไฟล์ TypeScript/TSX ทุกไฟล์ (client `src/` และ server `server/src/`) และ named callable ที่ AST ตรวจพบ; anonymous inline callbacks อธิบายรวมกับ owner/flow เพราะไม่มี public identity.
 
 ## สรุปเร็ว
 
@@ -62,7 +62,7 @@ NestJS app แยกจาก client repo คนละ package (`server/package.
 
 ## Configuration และ deployment
 
-**Client**: Vite อ่าน build-time `VITE_*` env; `window.env`/`/config.js` (nginx template เดิม หรือ NestJS's `ConfigJsController` ใน single-container setup) รองรับ runtime override สำหรับ OpenAI settings, analytics, `AUTH_MODE`, `ENTRA_TENANT_ID`/`ENTRA_CLIENT_ID`/`ENTRA_API_SCOPE`, `COLLAB_WS_URL`. ไม่ตั้ง `COLLAB_WS_URL` เลย → production build derive เป็น same-origin `wss://<host เดียวกับหน้าเว็บ>` อัตโนมัติ (`wsUrlForOrigin`), dev mode ยัง default `ws://localhost:1234` เหมือนเดิม.
+**Client**: Vite อ่าน build-time `VITE_*` env; `window.env`/`/config.js` (nginx template เดิม หรือ NestJS's `ConfigJsController` ใน single-container setup) รองรับ runtime override สำหรับ OpenAI settings, analytics, `AUTH_MODE`, `ENTRA_TENANT_ID`/`ENTRA_CLIENT_ID`, `COLLAB_WS_URL` — audience/scope string (`api://<client-id>`, `api://<client-id>/access_as_user`) derive จาก `ENTRA_CLIENT_ID` ในโค้ดเอง (`entra-jwt.ts`, `msal-config.ts`) ไม่ต้องตั้งแยก. ไม่ตั้ง `COLLAB_WS_URL` เลย → production build derive เป็น same-origin `wss://<host เดียวกับหน้าเว็บ>` อัตโนมัติ (`wsUrlForOrigin`), dev mode ยัง default `ws://localhost:1234` เหมือนเดิม.
 
 **Deploy มี 2 แบบ**: (1) `Dockerfile` เดิม — nginx serve client เท่านั้น, server แยก process/container ต่างหาก (cross-origin, ต้องตั้ง `WEBSOCKET_ORIGIN_ALLOWLIST`/CORS เอง) — นี่คือ image ที่ CI (`.github/workflows/publish.yaml`) ยัง build/push อยู่ ไม่ถูกแตะ. (2) `Dockerfile.combined` (ใหม่) — NestJS serve client's built `dist/` เอง (`ServeStaticModule`, ทำ 3-stage build) client+API domain เดียวกัน ไม่ต้องมี nginx; ถ้าตั้ง `WEBSOCKET_ORIGIN_ALLOWLIST` ต้องใส่ domain ตัวเองด้วย ไม่งั้น REST ทำงานปกติแต่ WebSocket จะเงียบ ๆ 403 (คนละ error path กับ REST). `docker-compose.yml` (repo root) รวม app (Dockerfile.combined) + Postgres สำหรับ deploy คนเดียว — ตัวแปร config ทั้งหมดผ่าน `.env` (ดู comment หัวไฟล์).
 
@@ -5482,7 +5482,7 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 #### `src/lib/env.ts`
 
-บทบาท: utility และ business logic. Exports: `APP_URL`, `AUTH_MODE`, `COLLAB_API_URL`, `COLLAB_WS_URL`, `DISABLE_ANALYTICS`, `ENTRA_API_SCOPE`, `ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`, `HIDE_CHARTDB_CLOUD`, `HOST_URL`, `IS_CHARTDB_IO`, `LLM_MODEL_NAME`, `OPENAI_API_ENDPOINT`, `OPENAI_API_KEY`, `wsUrlForOrigin`.
+บทบาท: utility และ business logic. Exports: `APP_URL`, `AUTH_MODE`, `COLLAB_API_URL`, `COLLAB_WS_URL`, `DISABLE_ANALYTICS`, `ENTRA_CLIENT_ID`, `ENTRA_TENANT_ID`, `HIDE_CHARTDB_CLOUD`, `HOST_URL`, `IS_CHARTDB_IO`, `LLM_MODEL_NAME`, `OPENAI_API_ENDPOINT`, `OPENAI_API_KEY`, `wsUrlForOrigin`.
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
@@ -7398,8 +7398,8 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 31 | `createEntraVerifier` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createEntraVerifier( tenantId: string, apiAudience: string ): EntraVerifier {` |
-| 41 | `getSigningKey` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `function getSigningKey( header: JwtHeader, callback: SigningKeyCallback ): void {` |
+| 38 | `createEntraVerifier` | function | สร้าง domain value, identifier, output หรือ UI structure ใหม่ | `export function createEntraVerifier( tenantId: string, clientId: string ): EntraVerifier {` |
+| 49 | `getSigningKey` | function | ค้นหา คำนวณ หรือคืนค่าจาก input โดยไม่เป็น UI | `function getSigningKey( header: JwtHeader, callback: SigningKeyCallback ): void {` |
 
 #### `server/src/auth/public.decorator.ts`
 
@@ -7501,7 +7501,7 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 45 | `serve` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Public() @Get('config.js') @Header('Content-Type', 'application/javascript') @Header('Cache-Control', 'no-store') serve(): string {` |
+| 44 | `serve` | method | Method ของ class/object contract; พฤติกรรมตามชื่อและ signature | `@Public() @Get('config.js') @Header('Content-Type', 'application/javascript') @Header('Cache-Control', 'no-store') serve(): string {` |
 
 ### `server/src/config.test.ts`
 
@@ -7519,10 +7519,10 @@ Signature ตัด body และย่อเมื่อยาวเกิน 
 
 | บรรทัด | Symbol | ชนิด | หน้าที่ | Signature |
 |---:|---|---|---|---|
-| 33 | `readAllowlist` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAllowlist(raw: string \| undefined): string[] {` |
-| 41 | `readAuthMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAuthMode(raw: string \| undefined): AuthMode {` |
-| 49 | `loadConfig` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {` |
-| 94 | `isOriginAllowed` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `export function isOriginAllowed( allowlist: string[], origin: string \| undefined ): boolean { if (allowlist.length === 0) return true; if (!origin) return true; return allowlist.includes(origin); }` |
+| 39 | `readAllowlist` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAllowlist(raw: string \| undefined): string[] {` |
+| 47 | `readAuthMode` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `function readAuthMode(raw: string \| undefined): AuthMode {` |
+| 55 | `loadConfig` | function | Function เฉพาะโมดูล; พฤติกรรมหลักตามชื่อและ signature | `export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {` |
+| 100 | `isOriginAllowed` | function | ตรวจเงื่อนไขหรือความถูกต้องแล้วคืนผลตรวจ | `export function isOriginAllowed( allowlist: string[], origin: string \| undefined ): boolean { if (allowlist.length === 0) return true; if (!origin) return true; return allowlist.includes(origin); }` |
 
 ### `server/src/db`
 
