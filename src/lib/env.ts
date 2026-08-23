@@ -15,16 +15,42 @@ export const DISABLE_ANALYTICS: boolean =
 
 // Phase 4 (docs/design/realtime-collaboration.md §10): the Phase 3
 // collaboration server's WebSocket URL. Connecting is on by default (every
-// diagram) — falls back to the Phase 3 server's own default local port
-// (`server/src/config.ts`'s `port: ... ?? 1234`) so a local `npm run dev`
-// against a locally-running `server/` just works with no extra
-// configuration; a real deployment must set this explicitly (window.env,
-// via public/config.js — see default.conf.template/entrypoint.sh — or
-// VITE_COLLAB_WS_URL at build time) the same way OPENAI_API_KEY etc. do.
+// diagram). window.env (via /config.js — see config-js.controller.ts in a
+// single-container deploy, or the older nginx default.conf.template/
+// entrypoint.sh) and VITE_COLLAB_WS_URL both still override this
+// explicitly, same as OPENAI_API_KEY etc.
+//
+// Phase 7 (single-container deploy): with no override at all, the default
+// depends on how this bundle is being served. Vite's own dev server runs
+// on a different port than the standalone collab server (default 1234) —
+// `npm run dev` against a locally-running `server/` needs that literal
+// address to find it. A production build has no such thing: NestJS now
+// serves this same bundle itself (ServeStaticModule, server/src/
+// app.module.ts) on whatever single origin the browser already loaded the
+// page from, so deriving the collab URL from that origin needs no
+// configuration at all for the common "one container, one domain" case —
+// unlike the old default (`ws://localhost:1234`), which only ever made
+// sense on the machine actually running `server/` locally, never in any
+// real deployment.
+// Extracted (rather than inlined below) so the actual protocol-mapping
+// logic is testable without stubbing import.meta.env.DEV — a Vite-derived
+// flag that isn't reliably mockable per-test.
+export function wsUrlForOrigin(
+    location: Pick<Location, 'protocol' | 'host'>
+): string {
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${location.host}`;
+}
+
+function defaultCollabWsUrl(): string {
+    if (import.meta.env.DEV) return 'ws://localhost:1234';
+    return wsUrlForOrigin(window.location);
+}
+
 export const COLLAB_WS_URL: string =
     window?.env?.COLLAB_WS_URL ||
     import.meta.env.VITE_COLLAB_WS_URL ||
-    'ws://localhost:1234';
+    defaultCollabWsUrl();
 
 // Phase 4.5 (docs/design/realtime-collaboration.md §10): the same Phase
 // 3/4 collab server also exposes a plain REST API (GET/POST/PATCH/DELETE
