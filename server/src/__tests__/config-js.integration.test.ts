@@ -87,6 +87,12 @@ describe.skipIf(!databaseReachable)('GET /config.js', () => {
             expect(res.headers.get('content-type')).toContain(
                 'application/javascript'
             );
+            // Hit in a real Cloudflare-fronted deploy: the .js extension
+            // is a strong "cache this" signal to CDNs/browsers by
+            // default, and this endpoint's whole reason to exist is
+            // "reconfigurable without a rebuild" — caching it defeats
+            // that on arrival.
+            expect(res.headers.get('cache-control')).toBe('no-store');
             const body = await res.text();
             expect(body).toContain('window.env = ');
             expect(body).toContain('"HIDE_CHARTDB_CLOUD":"true"');
