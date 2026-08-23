@@ -14,7 +14,12 @@
 # AUTH_MODE=public
 # # AUTH_MODE=azure-ad
 # # ENTRA_TENANT_ID=
-# # ENTRA_API_AUDIENCE=
+# # ENTRA_API_AUDIENCE=       # server-side: expected `aud` claim, e.g. api://<client-id>
+# # ENTRA_CLIENT_ID=          # client-side: MSAL's clientId (same app registration)
+# # ENTRA_API_SCOPE=          # client-side: e.g. api://<client-id>/access_as_user
+# # All four must be set together for azure-ad mode — missing
+# # ENTRA_CLIENT_ID/ENTRA_API_SCOPE specifically shows a "Sign-in is
+# # misconfigured" page (src/auth-gate.tsx) rather than the app.
 # # WEBSOCKET_ORIGIN_ALLOWLIST=
 # # See Dockerfile.combined's header comment before setting this one —
 # # it must include this app's own public origin, or the client+API
@@ -39,6 +44,8 @@ services:
       AUTH_MODE: ${AUTH_MODE:-public}
       ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
       ENTRA_API_AUDIENCE: ${ENTRA_API_AUDIENCE:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      ENTRA_API_SCOPE: ${ENTRA_API_SCOPE:-}
       WEBSOCKET_ORIGIN_ALLOWLIST: ${WEBSOCKET_ORIGIN_ALLOWLIST:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_ENDPOINT: ${OPENAI_API_ENDPOINT:-}
