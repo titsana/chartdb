@@ -365,11 +365,22 @@ export const ko_KR: LanguageTranslation = {
             cancel: '취소',
             open: '열기',
             new_database: '새 데이터베이스',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: '열기',
                 duplicate: '복제',
                 delete: '삭제',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

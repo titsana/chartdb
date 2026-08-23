@@ -369,11 +369,22 @@ export const de: LanguageTranslation = {
             cancel: 'Abbrechen',
             open: 'Öffnen',
             new_database: 'Neue Datenbank',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'Öffnen',
                 duplicate: 'Duplizieren',
                 delete: 'Löschen',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

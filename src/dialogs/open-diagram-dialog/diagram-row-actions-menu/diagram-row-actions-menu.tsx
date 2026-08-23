@@ -4,12 +4,22 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/dropdown-menu/dropdown-menu';
 import { Button } from '@/components/button/button';
-import { Ellipsis, Layers2, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
+import {
+    Ellipsis,
+    FolderMinus,
+    Layers2,
+    SquareArrowOutUpRight,
+    Trash2,
+} from 'lucide-react';
 import { useChartDB } from '@/hooks/use-chartdb';
 import type { Diagram } from '@/lib/domain';
+import type { DiagramGroup } from '@/lib/domain/diagram-group';
 import { useStorage } from '@/hooks/use-storage';
 import { seedDiagramRoom } from '@/lib/collab/seed-diagram-room';
 import { cloneDiagram } from '@/lib/clone';
@@ -20,6 +30,7 @@ interface DiagramRowActionsMenuProps {
     onOpen: () => void;
     refetch: () => void;
     numberOfDiagrams: number;
+    groups: DiagramGroup[];
 }
 
 export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
@@ -27,10 +38,19 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
     onOpen,
     refetch,
     numberOfDiagrams,
+    groups,
 }) => {
     const { diagramId } = useChartDB();
-    const { deleteDiagram, addDiagram } = useStorage();
+    const { deleteDiagram, addDiagram, updateDiagram } = useStorage();
     const { t } = useTranslation();
+
+    const moveToGroup = useCallback(
+        async (groupId: string | null) => {
+            await updateDiagram({ id: diagram.id, attributes: { groupId } });
+            refetch();
+        },
+        [updateDiagram, diagram.id, refetch]
+    );
 
     const onDelete = useCallback(async () => {
         deleteDiagram(diagram.id);
@@ -91,6 +111,41 @@ export const DiagramRowActionsMenu: React.FC<DiagramRowActionsMenuProps> = ({
                     {t('open_diagram_dialog.diagram_actions.duplicate')}
                     <Layers2 className="size-3.5" />
                 </DropdownMenuItem>
+
+                {groups.length > 0 ? (
+                    <DropdownMenuSub>
+                        <DropdownMenuSubTrigger>
+                            {t(
+                                'open_diagram_dialog.diagram_actions.move_to_group'
+                            )}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                            {groups.map((group) => (
+                                <DropdownMenuItem
+                                    key={group.id}
+                                    disabled={diagram.groupId === group.id}
+                                    onClick={() => moveToGroup(group.id)}
+                                >
+                                    {group.name}
+                                </DropdownMenuItem>
+                            ))}
+                            {diagram.groupId ? (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onClick={() => moveToGroup(null)}
+                                        className="flex justify-between gap-4"
+                                    >
+                                        {t(
+                                            'open_diagram_dialog.diagram_actions.remove_from_group'
+                                        )}
+                                        <FolderMinus className="size-3.5" />
+                                    </DropdownMenuItem>
+                                </>
+                            ) : null}
+                        </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                ) : null}
 
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

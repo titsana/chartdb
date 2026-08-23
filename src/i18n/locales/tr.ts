@@ -361,11 +361,22 @@ export const tr: LanguageTranslation = {
             cancel: 'İptal',
             open: 'Aç',
             new_database: 'Yeni Veritabanı',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'Aç',
                 duplicate: 'Kopyala',
                 delete: 'Sil',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

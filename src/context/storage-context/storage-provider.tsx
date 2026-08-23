@@ -2,9 +2,11 @@ import React, { useCallback } from 'react';
 import type { StorageContext } from './storage-context';
 import { storageContext } from './storage-context';
 import type { Diagram } from '@/lib/domain/diagram';
+import type { DiagramGroup } from '@/lib/domain/diagram-group';
 import type { ChartDBConfig } from '@/lib/domain/config';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import { COLLAB_API_URL } from '@/lib/env';
+import { generateId } from '@/lib/utils';
 
 /**
  * Phase 4.5 (docs/design/realtime-collaboration.md §10): Dexie removed
@@ -77,6 +79,7 @@ interface DiagramMetadataDTO {
     name: string;
     databaseType: string;
     databaseEdition: string | null;
+    groupId: string | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -88,6 +91,7 @@ function fromDTO(dto: DiagramMetadataDTO): Diagram {
         databaseType: dto.databaseType as Diagram['databaseType'],
         databaseEdition: (dto.databaseEdition ??
             undefined) as Diagram['databaseEdition'],
+        groupId: dto.groupId,
         createdAt: new Date(dto.createdAt),
         updatedAt: new Date(dto.updatedAt),
         // No server endpoint returns content for a list/single metadata
@@ -96,6 +100,22 @@ function fromDTO(dto: DiagramMetadataDTO): Diagram {
         // chartdb-provider.tsx's loadDiagramFromData/reconcileWithRoom).
         // Left undefined rather than `[]` so callers can tell "not fetched"
         // apart from "genuinely empty" if that distinction ever matters.
+    };
+}
+
+interface DiagramGroupDTO {
+    id: string;
+    name: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+function fromGroupDTO(dto: DiagramGroupDTO): DiagramGroup {
+    return {
+        id: dto.id,
+        name: dto.name,
+        createdAt: new Date(dto.createdAt),
+        updatedAt: new Date(dto.updatedAt),
     };
 }
 
@@ -214,21 +234,38 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
     const updateDiagram: StorageContext['updateDiagram'] = useCallback(
         async ({ id, attributes }) => {
             if (!COLLAB_API_URL) return;
-            // Only name/databaseType/databaseEdition have a server-side
-            // home (see db/diagrams.ts's UpdateDiagramInput) — an empty
-            // patch is still a legitimate call (updateDiagramUpdatedAt
-            // uses one to bump `updated_at` with no other change).
-            // `attributes.id` (rename) isn't supported at all — see
-            // chartdb-provider.tsx's updateDiagramId, which refuses before
-            // ever reaching here.
-            await apiFetch(`/diagrams/${id}`, {
-                method: 'PATCH',
-                body: JSON.stringify({
-                    name: attributes.name,
-                    databaseType: attributes.databaseType,
-                    databaseEdition: attributes.databaseEdition,
-                }),
-            });
+            // Only name/databaseType/databaseEdition/groupId have a
+            // server-side home (see db/diagrams.ts's UpdateDiagramInput) —
+            // an empty patch is still a legitimate call
+            // (updateDiagramUpdatedAt uses one to bump `updated_at` with
+            // no other change). `attributes.id` (rename) isn't supported
+            // at all — see chartdb-provider.tsx's updateDiagramId, which
+            // refuses before ever reaching here.
+            //
+            // `groupId: attributes.groupId` deliberately left as-is, not
+            // defaulted — omitting it when the caller didn't pass it
+            // means JSON.stringify drops the key entirely (undefined
+            // serializes to nothing), which is what tells the server "not
+            // provided, don't touch" apart from "explicitly null, clear
+            // it" (see db/diagrams.ts's `'groupId' in input` check —
+            // same convention already used for databaseEdition here).
+            const res = await apiFetch<{ message?: string }>(
+                `/diagrams/${id}`,
+                {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        name: attributes.name,
+                        databaseType: attributes.databaseType,
+                        databaseEdition: attributes.databaseEdition,
+                        groupId: attributes.groupId,
+                    }),
+                }
+            );
+            if (res.status === 400) {
+                throw new Error(
+                    res.body?.message ?? `Failed to update diagram ${id}`
+                );
+            }
         },
         []
     );
@@ -251,6 +288,59 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
         []
     );
 
+    // --- Diagram groups (Phase 7 — folder-style grouping) -----------------
+
+    const listDiagramGroups: StorageContext['listDiagramGroups'] =
+        useCallback(async () => {
+            if (!COLLAB_API_URL) return [];
+            const { body } =
+                await apiFetch<DiagramGroupDTO[]>('/diagram-groups');
+            return (body ?? []).map(fromGroupDTO);
+        }, []);
+
+    const createDiagramGroup: StorageContext['createDiagramGroup'] =
+        useCallback(async ({ name }) => {
+            if (!COLLAB_API_URL) {
+                throw new Error(
+                    'Cannot create a diagram group: no collab API configured'
+                );
+            }
+            const id = generateId();
+            const { status, body } = await apiFetch<DiagramGroupDTO>(
+                '/diagram-groups',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({ id, name }),
+                }
+            );
+            if (status !== 201 || !body) {
+                throw new Error(`Failed to create group "${name}"`);
+            }
+            return fromGroupDTO(body);
+        }, []);
+
+    const updateDiagramGroup: StorageContext['updateDiagramGroup'] =
+        useCallback(async ({ id, name }) => {
+            if (!COLLAB_API_URL) return;
+            await apiFetch(`/diagram-groups/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name }),
+            });
+        }, []);
+
+    const deleteDiagramGroup: StorageContext['deleteDiagramGroup'] =
+        useCallback(async (id) => {
+            if (!COLLAB_API_URL) return;
+            // Idempotent, same convention as deleteDiagram — deleting an
+            // already-gone group counts as success, not an error.
+            const { status } = await apiFetch(`/diagram-groups/${id}`, {
+                method: 'DELETE',
+            });
+            if (status !== 200 && status !== 404) {
+                throw new Error(`Failed to delete group ${id}: ${status}`);
+            }
+        }, []);
+
     return (
         <storageContext.Provider
             value={{
@@ -261,6 +351,10 @@ export const StorageProvider: React.FC<React.PropsWithChildren> = ({
                 getDiagram,
                 updateDiagram,
                 deleteDiagram,
+                listDiagramGroups,
+                createDiagramGroup,
+                updateDiagramGroup,
+                deleteDiagramGroup,
                 addTable: noopVoid,
                 getTable: noopUndefined,
                 updateTable: noopVoid,

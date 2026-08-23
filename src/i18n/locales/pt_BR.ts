@@ -368,11 +368,22 @@ export const pt_BR: LanguageTranslation = {
             cancel: 'Cancelar',
             open: 'Abrir',
             new_database: 'Novo Banco de Dados',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'Abrir',
                 duplicate: 'Duplicar',
                 delete: 'Excluir',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

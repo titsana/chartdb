@@ -359,11 +359,22 @@ export const zh_CN: LanguageTranslation = {
             cancel: '取消',
             open: '打开',
             new_database: '新建数据库',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: '打开',
                 duplicate: '复制',
                 delete: '删除',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

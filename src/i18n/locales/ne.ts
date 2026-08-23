@@ -368,11 +368,22 @@ export const ne: LanguageTranslation = {
             cancel: 'रद्द गर्नुहोस्',
             open: 'खोल्नुहोस्',
             new_database: 'नयाँ डाटाबेस',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'खोल्नुहोस्',
                 duplicate: 'डुप्लिकेट',
                 delete: 'मेटाउनुहोस्',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

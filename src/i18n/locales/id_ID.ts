@@ -365,11 +365,22 @@ export const id_ID: LanguageTranslation = {
             cancel: 'Batal',
             open: 'Buka',
             new_database: 'Database Baru',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'Buka',
                 duplicate: 'Duplikat',
                 delete: 'Hapus',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

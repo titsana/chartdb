@@ -9,6 +9,7 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { DiagramFilter } from '@/lib/domain/diagram-filter/diagram-filter';
 import type { Note } from '@/lib/domain/note';
+import type { DiagramGroup } from '@/lib/domain/diagram-group';
 
 export interface StorageContext {
     // Config operations
@@ -49,6 +50,12 @@ export interface StorageContext {
         attributes: Partial<Diagram>;
     }) => Promise<void>;
     deleteDiagram: (id: string) => Promise<void>;
+
+    // Diagram group operations (Phase 7 — folder-style grouping)
+    listDiagramGroups: () => Promise<DiagramGroup[]>;
+    createDiagramGroup: (params: { name: string }) => Promise<DiagramGroup>;
+    updateDiagramGroup: (params: { id: string; name: string }) => Promise<void>;
+    deleteDiagramGroup: (id: string) => Promise<void>;
 
     // Table operations
     addTable: (params: { diagramId: string; table: DBTable }) => Promise<void>;
@@ -167,6 +174,11 @@ export const storageInitialValue: StorageContext = {
     getDiagram: emptyFn,
     updateDiagram: emptyFn,
     deleteDiagram: emptyFn,
+
+    listDiagramGroups: emptyFn,
+    createDiagramGroup: emptyFn,
+    updateDiagramGroup: emptyFn,
+    deleteDiagramGroup: emptyFn,
 
     addTable: emptyFn,
     getTable: emptyFn,

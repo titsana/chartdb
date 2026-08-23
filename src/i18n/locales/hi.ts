@@ -369,11 +369,22 @@ export const hi: LanguageTranslation = {
             cancel: 'रद्द करें',
             open: 'खोलें',
             new_database: 'नया डेटाबेस',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: 'खोलें',
                 duplicate: 'डुप्लिकेट',
                 delete: 'हटाएं',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

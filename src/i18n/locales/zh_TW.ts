@@ -358,11 +358,22 @@ export const zh_TW: LanguageTranslation = {
             cancel: '取消',
             open: '開啟',
             new_database: '新建資料庫',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: '開啟',
                 duplicate: '複製',
                 delete: '刪除',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 

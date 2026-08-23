@@ -18,6 +18,12 @@ export interface Diagram {
     name: string;
     databaseType: DatabaseType;
     databaseEdition?: DatabaseEdition;
+    // Phase 7 (folder-style grouping, docs/design/realtime-collaboration.md
+    // §10): which DiagramGroup (diagram-group.ts) this diagram belongs to,
+    // or null/undefined for ungrouped. Server-side, shared with everyone
+    // who sees the diagram list — same "no auth, everyone sees everything"
+    // model as the diagram's other metadata.
+    groupId?: string | null;
     tables?: DBTable[];
     relationships?: DBRelationship[];
     dependencies?: DBDependency[];
@@ -33,6 +39,7 @@ export const diagramSchema: z.ZodType<Diagram> = z.object({
     name: z.string(),
     databaseType: z.nativeEnum(DatabaseType),
     databaseEdition: z.nativeEnum(DatabaseEdition).optional(),
+    groupId: z.string().or(z.null()).optional(),
     tables: z.array(dbTableSchema).optional(),
     relationships: z.array(dbRelationshipSchema).optional(),
     dependencies: z.array(dbDependencySchema).optional(),

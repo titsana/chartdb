@@ -369,11 +369,22 @@ export const ja: LanguageTranslation = {
             cancel: 'キャンセル',
             open: '開く',
             new_database: '新しいデータベース',
+            new_group: 'New Group',
+            new_group_name_placeholder: 'Group name',
+            create_group: 'Create',
+            ungrouped: 'Ungrouped',
 
             diagram_actions: {
                 open: '開く',
                 duplicate: '複製',
                 delete: '削除',
+                move_to_group: 'Move to group',
+                remove_from_group: 'Remove from group',
+            },
+
+            group_actions: {
+                rename: 'Rename',
+                delete: 'Delete group',
             },
         },
 
