@@ -1597,7 +1597,8 @@ part of building it, not after.
   REST-backed per Phase 4.5) — the old dispatch table tracked it anyway
   via its own bookkeeping, but `Y.UndoManager` has nothing to hook a
   non-doc write into without a separate mechanism this phase didn't
-  build. Worth knowing if anyone relied on undoing a rename.
+  build. Surfaced to the user rather than shipped silently — confirmed
+  2026-08-23: leave it as-is, no separate mechanism to restore it.
 - `history-context/__tests__/history-provider.test.tsx` deleted outright
   rather than patched — every test in it mocked the old dispatch table
   and asserted on APIs (`addUndoAction`, per-action handlers,
