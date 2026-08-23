@@ -1535,6 +1535,15 @@ test — this is a thin UI-only read of already-tested plumbing
 integration test that connects a client at all; the reconnect-
 convergence test already covers the behavior this banner is describing).
 
+Manually confirmed, 2026-08-23: killing the collab server process shows
+the banner, editing keeps working (no freeze), reconnecting makes the
+banner disappear. This same manual pass also caught a separate,
+pre-existing bug — a killed server left the app's full-screen loading
+dialog stuck open (no timeout on the REST fetch, no `finally` around
+`hideLoader()`) — fixed and covered by a new sabotage-verified test
+(`storage-provider.test.tsx`); see that commit. Disconnect/reconnect UX
+sub-part of Phase 5 is fully closed.
+
 **Not yet done:** the stronger "X is editing this table" indicator (see
 above — different from selection, not yet tracked); `Y.UndoManager`
 swap. This phase's exit criterion is now mostly met — presence
