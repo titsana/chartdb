@@ -1420,7 +1420,7 @@ and tested server-side in the earlier commit).
 
 Phase 4.5 is fully closed.
 
-### Phase 5 — Presence, undo, and disconnect UX
+### Phase 5 — Presence, undo, and disconnect UX — ✅ Done
 
 **Goal:** the parts of the design that are about the *experience* of
 multiplayer, not just correctness.
@@ -1607,13 +1607,28 @@ part of building it, not after.
   `redo-undo-stack-context.tsx`, `use-redo-undo-stack.ts` are now dead
   code (confirmed via repo-wide grep) and deleted with it.
 
-Manually confirmed two-browser, 2026-08-23: [pending — ask before
-closing this sub-part].
+Manually confirmed two-browser, 2026-08-23: editing different fields in
+two tabs, Ctrl+Z in each only ever reverted that tab's own edit, never
+the other tab's. Undo-scoping sub-part of Phase 5 is fully closed.
 
 **Not yet done:** the stronger "X is editing this table" indicator (see
-above — different from selection, not yet tracked). This phase's exit
-criterion is now met on all three fronts (presence, undo scoping,
-disconnect UX) pending the manual two-browser undo check above.
+above — different from selection, not yet tracked; not part of this
+phase's exit criteria). Everything else in this phase's exit criterion
+is met and manually confirmed — presence (cursors + selection),
+disconnect UX, and undo scoping. **Phase 5 is closed.**
+
+**Follow-on work added during this phase, outside its original
+scope:** a Figma-style "follow this peer's viewport" feature (§10 has
+no mention of it — added on direct user request after Phase 5's
+planned scope was already done). See `PresenceState.viewportCenter`/
+`following` (use-presence.ts), `resolve-follow-viewport.ts`, and
+`presence-avatar-bar.tsx`/top-navbar.tsx for the implementation:
+window-size-independent center-point broadcast (a first version
+broadcast the raw camera transform, which is wrong — caught by manual
+testing, not upfront design), and a follow-loop guard
+(`wouldCreateFollowCycle`) for two or more clients following each
+other. Manually confirmed working across two different screen
+resolutions.
 
 ### Phase 6 — Scale-out (defer until actually needed)
 
