@@ -202,6 +202,35 @@ online-only: a refresh means reconnect + resync a fresh Y.Doc anyway).
 - Existing `public/config.js` runtime-override pattern is extended with a
   new collaboration server URL (e.g. `COLLAB_WS_URL`).
 
+**Single-container option, 2026-08-23** — `Dockerfile.combined` (repo
+root), added alongside the plan above rather than replacing it. Builds
+the client and the server in separate stages, then runs the server —
+NestJS serves the client's built assets itself (`ServeStaticModule`,
+server/src/app.module.ts) and a dynamic `/config.js`
+(server/src/config-js.controller.ts) that reproduces the old nginx
+image's env-var runtime-override behavior (one built image,
+reconfigurable per environment via container env, no rebuild).
+
+Client+API on one origin means `COLLAB_WS_URL` needs no configuration
+at all for this case: with nothing set, the client derives it from the
+page's own origin (`wsUrlForOrigin`, src/lib/env.ts) instead of the old
+hardcoded `ws://localhost:1234` default, which never made sense outside
+a machine running `server/` locally. Set it explicitly only when
+fronting this with something that changes what origin the browser sees
+(a reverse proxy terminating TLS on a different host, etc).
+
+Deliberately does NOT touch the existing root `Dockerfile` or CI's
+publish workflow (`.github/workflows/publish.yaml`) — that pipeline
+still builds/publishes the client-only nginx image exactly as before.
+Wiring an actual deploy pipeline around `Dockerfile.combined` (or
+retiring the split setup in favor of it) is a separate decision, left
+to whoever owns that pipeline.
+
+Still needs, same as the split setup: `DATABASE_URL` (Postgres, not
+bundled into this container), and `AUTH_MODE`/`ENTRA_TENANT_ID`/
+`ENTRA_API_AUDIENCE`/`WEBSOCKET_ORIGIN_ALLOWLIST` as documented in
+server/.env.example if opting into Azure AD auth or an origin allowlist.
+
 ## 8. Migration / rollout plan
 
 Once enabled, a diagram is fully online-only (no fallback to today's

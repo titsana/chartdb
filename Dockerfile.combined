@@ -1,0 +1,51 @@
+# Single-container deploy (docs/design/realtime-collaboration.md §7):
+# NestJS (server/) serves both the collab API/WebSocket AND this client's
+# built assets, so client+API share one origin/domain — no CORS, no second
+# container, no nginx. The existing root `Dockerfile` (nginx, client-only)
+# is untouched and still what CI's publish workflow builds; this is a
+# separate, explicitly-named file so nothing about that pipeline changes
+# just by this file existing.
+#
+# Runtime config (OPENAI_API_KEY, AUTH_MODE, ENTRA_*, etc.) still works the
+# same way the old nginx image's config.js did — reconfigurable via
+# container env vars with no rebuild — just served by NestJS itself now
+# (see server/src/config-js.controller.ts) instead of nginx's envsubst.
+#
+# COLLAB_WS_URL needs no configuration for this deploy shape at all: with
+# nothing set, the client defaults to same-origin (src/lib/env.ts's
+# defaultCollabWsUrl), which is correct exactly because this Dockerfile
+# puts client+API on the same origin. Set it explicitly only if fronting
+# this with a reverse proxy that changes what origin the browser sees.
+
+# --- Stage 1: build the client (Vite/React) --------------------------------
+FROM node:24-alpine AS client-builder
+WORKDIR /usr/src/app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+# -> /usr/src/app/dist
+
+# --- Stage 2: build the server (NestJS) ------------------------------------
+FROM node:24-alpine AS server-builder
+WORKDIR /usr/src/app/server
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
+COPY server/ .
+RUN npm run build
+# -> /usr/src/app/server/dist
+
+# --- Stage 3: production runtime -------------------------------------------
+FROM node:24-alpine AS production
+WORKDIR /usr/src/app
+COPY server/package.json server/package-lock.json ./
+RUN npm ci --omit=dev
+COPY --from=server-builder /usr/src/app/server/dist ./dist
+# ServeStaticModule (server/src/app.module.ts) serves this directory —
+# `public`, matching its `rootPath: join(process.cwd(), 'public')`.
+COPY --from=client-builder /usr/src/app/dist ./public
+
+EXPOSE 3001
+ENV PORT=3001
+
+CMD ["node", "dist/main.js"]
