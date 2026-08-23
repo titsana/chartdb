@@ -1695,3 +1695,11 @@ Token validation restricts `aud` to the API audience only (`api://
 a valid audience, since an ID token (browser-facing, not a bearer
 credential for this API) also carries `aud === client id`; accepting both
 would let a client swap an ID token in past the guard.
+
+**Phase 7 closed, 2026-08-23** — auth (above) is done and manually
+verified end-to-end (sign-in, REST+WS enforcement, presence avatar
+showing the real signed-in name). The other two items on this phase's
+original list — feature-flag rollout (per-diagram opt-in) and turning
+Appendix B into permanent regression tests — are cut from scope by
+explicit decision, not forgotten. Revisit either if a real need for
+per-diagram opt-in or Appendix B automation shows up later.
