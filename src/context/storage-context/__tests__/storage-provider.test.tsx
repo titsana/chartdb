@@ -67,11 +67,17 @@ describe('StorageProvider — apiFetch timeout', () => {
         });
 
         const pending = result.current.getDiagram('some-diagram-id');
-        // Let getDiagram's synchronous-until-the-fetch-call code run
-        // before advancing the fake clock the timeout is scheduled on.
+        // Attach the rejection assertion BEFORE advancing the fake clock —
+        // `.rejects` subscribes to `pending` synchronously, right here.
+        // Attaching it only after advanceTimersByTimeAsync (as this used
+        // to) left a window, under fake timers, where the mock's reject()
+        // fires before any handler further up the chain than apiFetch's
+        // own `await` is on record — which vitest's fake-timer bookkeeping
+        // read as unhandled, even though the real `pending` chain was
+        // never actually dropped.
+        const assertion = expect(pending).rejects.toThrow();
         await vi.advanceTimersByTimeAsync(10_000);
-
-        await expect(pending).rejects.toThrow();
+        await assertion;
     });
 
     it('does not time out a request that resolves well within the window', async () => {

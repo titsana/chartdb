@@ -9,7 +9,6 @@ import { loadDatabaseMetadata } from '@/lib/data/import-metadata/metadata-types/
 import type { Diagram } from '@/lib/domain/diagram';
 import { loadFromDatabaseMetadata } from '@/lib/data/import-metadata/import';
 import { useChartDB } from '@/hooks/use-chartdb';
-import { useRedoUndoStack } from '@/hooks/use-redo-undo-stack';
 import { useTranslation } from 'react-i18next';
 import type { BaseDialogProps } from '../common/base-dialog-props';
 import { sqlImportToDiagram } from '@/lib/data/sql-import';
@@ -41,9 +40,9 @@ export const ImportDatabaseDialog: React.FC<ImportDatabaseDialogProps> = ({
         databaseType: currentDatabaseType,
         updateDatabaseType,
         tables: existingTables,
+        undoManager,
     } = useChartDB();
     const [scriptResult, setScriptResult] = useState('');
-    const { resetRedoStack, resetUndoStack } = useRedoUndoStack();
     const { t } = useTranslation();
     const [databaseEdition, setDatabaseEdition] = useState<
         DatabaseEdition | undefined
@@ -131,9 +130,10 @@ export const ImportDatabaseDialog: React.FC<ImportDatabaseDialogProps> = ({
                 await updateDatabaseType(databaseType);
             }
 
-            // Reset undo/redo stacks
-            resetRedoStack();
-            resetUndoStack();
+            // Reset undo/redo stacks — a big import shouldn't leave
+            // pre-import edits sitting on the stack under the imported
+            // content's now-different state.
+            undoManager?.clear();
         });
     }, [
         importMethod,
@@ -144,8 +144,7 @@ export const ImportDatabaseDialog: React.FC<ImportDatabaseDialogProps> = ({
         scriptResult,
         addRelationships,
         addTables,
-        resetRedoStack,
-        resetUndoStack,
+        undoManager,
         closeImportDatabaseDialog,
         existingTables,
     ]);

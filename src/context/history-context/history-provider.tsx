@@ -1,457 +1,114 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import type * as Y from 'yjs';
 import { historyContext } from './history-context';
 import { useChartDB } from '@/hooks/use-chartdb';
-import { useRedoUndoStack } from '@/hooks/use-redo-undo-stack';
-import type { RedoUndoActionHandlers } from './redo-undo-action';
+import { useToast } from '@/components/toast/use-toast';
+
+// Phase 5 (docs/design/realtime-collaboration.md §10): every collection
+// chartdb-provider.tsx's Y.UndoManager is scoped to — see its own
+// `undoManagerRef` doc comment. Kept as a plain list here (not imported
+// from chartdb-provider.tsx, which doesn't export one) since this is the
+// only place that needs to enumerate them for a snapshot, not to mutate
+// them.
+const COLLECTION_NAMES = [
+    'tables',
+    'relationships',
+    'dependencies',
+    'areas',
+    'customTypes',
+    'notes',
+] as const;
+
+// Cheap content signature for "did undo()/redo() actually change
+// anything" — deliberately NOT a diff of React `tables`/`relationships`
+// state (see the doc comment on `runWithStaleCheck` below for why that
+// would be unreliable here), and deliberately NOT `Y.encodeStateAsUpdate`
+// (that changes on every transaction regardless of content, via Yjs's own
+// clock/state-vector bookkeeping — useless for a content comparison).
+// `Y.Map.toJSON()` recursively serializes nested shared types, so this
+// captures the actual domain content of all six collections.
+function snapshotDoc(doc: Y.Doc): string {
+    return JSON.stringify(
+        COLLECTION_NAMES.map((name) => doc.getMap(name).toJSON())
+    );
+}
 
 export const HistoryProvider: React.FC<React.PropsWithChildren> = ({
     children,
 }) => {
-    const {
-        addRedoAction,
-        addUndoAction,
-        undoStack,
-        redoStack,
-        hasRedo,
-        hasUndo,
-    } = useRedoUndoStack();
-    const {
-        addTables,
-        removeTables,
-        updateTable,
-        updateDiagramName,
-        removeField,
-        addField,
-        updateField,
-        addRelationships,
-        addDependencies,
-        removeDependencies,
-        updateDependency,
-        updateRelationship,
-        updateTablesState,
-        addIndex,
-        removeIndex,
-        updateIndex,
-        addCheckConstraint,
-        removeCheckConstraint,
-        updateCheckConstraint,
-        removeRelationships,
-        addAreas,
-        removeAreas,
-        updateArea,
-        addCustomTypes,
-        removeCustomTypes,
-        updateCustomType,
-        addNotes,
-        removeNotes,
-        updateNote,
-    } = useChartDB();
+    const { undoManager } = useChartDB();
+    const { toast } = useToast();
+    const [hasUndo, setHasUndo] = useState(false);
+    const [hasRedo, setHasRedo] = useState(false);
 
-    const redoActionHandlers = useMemo(
-        (): RedoUndoActionHandlers => ({
-            updateDiagramName: ({ redoData: { name } }) => {
-                return updateDiagramName(name, { updateHistory: false });
-            },
-            addTables: ({ redoData: { tables } }) => {
-                return addTables(tables, { updateHistory: false });
-            },
-            removeTables: ({ redoData: { tableIds } }) => {
-                return removeTables(tableIds, { updateHistory: false });
-            },
-            updateTable: ({ redoData: { tableId, table } }) => {
-                return updateTable(tableId, table, { updateHistory: false });
-            },
-            updateTablesState: ({ redoData: { tables, deletedTableIds } }) => {
-                // fix for appendix-b:1 — reconstruct the next state FROM the
-                // live `currentTables` argument (concurrent edits/additions
-                // pass through untouched) instead of returning the captured
-                // snapshot verbatim regardless of what's live. forceOverride
-                // is still needed here (the merge branch can only patch/drop
-                // existing entries, never add — irrelevant on redo since we
-                // only ever remove/patch, but kept symmetric with undo below).
-                return updateTablesState(
-                    (currentTables) =>
-                        currentTables
-                            .filter((t) => !deletedTableIds.includes(t.id))
-                            .map((t) => {
-                                const redone = tables.find(
-                                    (rt) => rt.id === t.id
-                                );
-                                return redone ? { ...t, ...redone } : t;
-                            }),
-                    { updateHistory: false, forceOverride: true }
-                );
-            },
-            addField: ({ redoData: { tableId, field } }) => {
-                return addField(tableId, field, { updateHistory: false });
-            },
-            removeField: ({ redoData: { tableId, fieldId } }) => {
-                return removeField(tableId, fieldId, { updateHistory: false });
-            },
-            updateField: ({ redoData: { tableId, fieldId, field } }) => {
-                return updateField(tableId, fieldId, field, {
-                    updateHistory: false,
-                });
-            },
-            addRelationships: ({ redoData: { relationships } }) => {
-                return addRelationships(relationships, {
-                    updateHistory: false,
-                });
-            },
-            updateRelationship: ({
-                redoData: { relationshipId, relationship },
-            }) => {
-                return updateRelationship(relationshipId, relationship, {
-                    updateHistory: false,
-                });
-            },
-            removeRelationships: ({ redoData: { relationshipsIds } }) => {
-                return removeRelationships(relationshipsIds, {
-                    updateHistory: false,
-                });
-            },
-            addDependencies: ({ redoData: { dependencies } }) => {
-                return addDependencies(dependencies, { updateHistory: false });
-            },
-            removeDependencies: ({ redoData: { dependenciesIds } }) => {
-                return removeDependencies(dependenciesIds, {
-                    updateHistory: false,
-                });
-            },
-            updateDependency: ({ redoData: { dependencyId, dependency } }) => {
-                return updateDependency(dependencyId, dependency, {
-                    updateHistory: false,
-                });
-            },
-            addIndex: ({ redoData: { tableId, index } }) => {
-                return addIndex(tableId, index, { updateHistory: false });
-            },
-            removeIndex: ({ redoData: { tableId, indexId } }) => {
-                return removeIndex(tableId, indexId, { updateHistory: false });
-            },
-            updateIndex: ({ redoData: { tableId, indexId, index } }) => {
-                return updateIndex(tableId, indexId, index, {
-                    updateHistory: false,
-                });
-            },
-            addCheckConstraint: ({ redoData: { tableId, constraint } }) => {
-                return addCheckConstraint(tableId, constraint, {
-                    updateHistory: false,
-                });
-            },
-            removeCheckConstraint: ({
-                redoData: { tableId, constraintId },
-            }) => {
-                return removeCheckConstraint(tableId, constraintId, {
-                    updateHistory: false,
-                });
-            },
-            updateCheckConstraint: ({
-                redoData: { tableId, constraintId, constraint },
-            }) => {
-                return updateCheckConstraint(
-                    tableId,
-                    constraintId,
-                    constraint,
-                    {
-                        updateHistory: false,
-                    }
-                );
-            },
-            addAreas: ({ redoData: { areas } }) => {
-                return addAreas(areas, { updateHistory: false });
-            },
-            removeAreas: ({ redoData: { areaIds } }) => {
-                return removeAreas(areaIds, { updateHistory: false });
-            },
-            updateArea: ({ redoData: { areaId, area } }) => {
-                return updateArea(areaId, area, { updateHistory: false });
-            },
-            addCustomTypes: ({ redoData: { customTypes } }) => {
-                return addCustomTypes(customTypes, { updateHistory: false });
-            },
-            removeCustomTypes: ({ redoData: { customTypeIds } }) => {
-                return removeCustomTypes(customTypeIds, {
-                    updateHistory: false,
-                });
-            },
-            updateCustomType: ({ redoData: { customTypeId, customType } }) => {
-                return updateCustomType(customTypeId, customType, {
-                    updateHistory: false,
-                });
-            },
-            addNotes: ({ redoData: { notes } }) => {
-                return addNotes(notes, { updateHistory: false });
-            },
-            removeNotes: ({ redoData: { noteIds } }) => {
-                return removeNotes(noteIds, { updateHistory: false });
-            },
-            updateNote: ({ redoData: { noteId, note } }) => {
-                return updateNote(noteId, note, { updateHistory: false });
-            },
-        }),
-        [
-            addTables,
-            removeTables,
-            updateTable,
-            updateDiagramName,
-            removeField,
-            addField,
-            updateField,
-            addRelationships,
-            updateRelationship,
-            updateTablesState,
-            addIndex,
-            removeIndex,
-            updateIndex,
-            addCheckConstraint,
-            removeCheckConstraint,
-            updateCheckConstraint,
-            removeRelationships,
-            addDependencies,
-            removeDependencies,
-            updateDependency,
-            addAreas,
-            removeAreas,
-            updateArea,
-            addCustomTypes,
-            removeCustomTypes,
-            updateCustomType,
-            addNotes,
-            removeNotes,
-            updateNote,
-        ]
-    );
-
-    const undoActionHandlers = useMemo(
-        (): RedoUndoActionHandlers => ({
-            updateDiagramName: ({ undoData: { name } }) => {
-                return updateDiagramName(name, { updateHistory: false });
-            },
-            addTables: ({ undoData: { tableIds } }) => {
-                return removeTables(tableIds, { updateHistory: false });
-            },
-            removeTables: async ({
-                undoData: { tables, relationships, dependencies },
-            }) => {
-                await Promise.all([
-                    addTables(tables, { updateHistory: false }),
-                    addRelationships(relationships, { updateHistory: false }),
-                    addDependencies(dependencies, { updateHistory: false }),
-                ]);
-            },
-            updateTable: ({ undoData: { tableId, table } }) => {
-                return updateTable(tableId, table, { updateHistory: false });
-            },
-            addField: ({ undoData: { fieldId, tableId } }) => {
-                return removeField(tableId, fieldId, { updateHistory: false });
-            },
-            removeField: ({ undoData: { tableId, field } }) => {
-                return addField(tableId, field, { updateHistory: false });
-            },
-            updateField: ({ undoData: { tableId, fieldId, field } }) => {
-                return updateField(tableId, fieldId, field, {
-                    updateHistory: false,
-                });
-            },
-            addRelationships: ({ undoData: { relationshipIds } }) => {
-                return removeRelationships(relationshipIds, {
-                    updateHistory: false,
-                });
-            },
-            removeRelationships: ({ undoData: { relationships } }) => {
-                return addRelationships(relationships, {
-                    updateHistory: false,
-                });
-            },
-            updateRelationship: ({
-                undoData: { relationshipId, relationship },
-            }) => {
-                return updateRelationship(relationshipId, relationship, {
-                    updateHistory: false,
-                });
-            },
-            addDependencies: ({ undoData: { dependenciesIds } }) => {
-                return removeDependencies(dependenciesIds, {
-                    updateHistory: false,
-                });
-            },
-            removeDependencies: ({ undoData: { dependencies } }) => {
-                return addDependencies(dependencies, {
-                    updateHistory: false,
-                });
-            },
-            updateDependency: ({ undoData: { dependencyId, dependency } }) => {
-                return updateDependency(dependencyId, dependency, {
-                    updateHistory: false,
-                });
-            },
-            updateTablesState: async ({
-                undoData: { tables, relationships, dependencies },
-            }) => {
-                // fix for appendix-b:1 — reconstruct FROM the live
-                // `currentTables` argument: patch tables this action
-                // modified back to their pre-action values, re-add tables
-                // this action deleted (present in the snapshot but missing
-                // from currentTables), and leave every other live table —
-                // including one a concurrent peer added since — untouched.
-                // Previously this replayed `tables` (the full pre-action
-                // snapshot) verbatim via forceOverride, ignoring
-                // `currentTables` entirely and silently dropping any table
-                // added after the snapshot was captured.
-                await Promise.all([
-                    updateTablesState(
-                        (currentTables) => {
-                            const liveIds = new Set(
-                                currentTables.map((t) => t.id)
-                            );
-                            const patched = currentTables.map((t) => {
-                                const prior = tables.find(
-                                    (pt) => pt.id === t.id
-                                );
-                                return prior ? { ...t, ...prior } : t;
-                            });
-                            const restored = tables.filter(
-                                (pt) => !liveIds.has(pt.id)
-                            );
-                            return [...patched, ...restored];
-                        },
-                        { updateHistory: false, forceOverride: true }
-                    ),
-                    addRelationships(relationships, { updateHistory: false }),
-                    addDependencies(dependencies, { updateHistory: false }),
-                ]);
-            },
-            addIndex: ({ undoData: { tableId, indexId } }) => {
-                return removeIndex(tableId, indexId, { updateHistory: false });
-            },
-            removeIndex: ({ undoData: { tableId, index } }) => {
-                return addIndex(tableId, index, { updateHistory: false });
-            },
-            updateIndex: ({ undoData: { tableId, indexId, index } }) => {
-                return updateIndex(tableId, indexId, index, {
-                    updateHistory: false,
-                });
-            },
-            addCheckConstraint: ({ undoData: { tableId, constraintId } }) => {
-                return removeCheckConstraint(tableId, constraintId, {
-                    updateHistory: false,
-                });
-            },
-            removeCheckConstraint: ({ undoData: { tableId, constraint } }) => {
-                return addCheckConstraint(tableId, constraint, {
-                    updateHistory: false,
-                });
-            },
-            updateCheckConstraint: ({
-                undoData: { tableId, constraintId, constraint },
-            }) => {
-                return updateCheckConstraint(
-                    tableId,
-                    constraintId,
-                    constraint,
-                    {
-                        updateHistory: false,
-                    }
-                );
-            },
-            addAreas: ({ undoData: { areaIds } }) => {
-                return removeAreas(areaIds, { updateHistory: false });
-            },
-            removeAreas: ({ undoData: { areas } }) => {
-                return addAreas(areas, { updateHistory: false });
-            },
-            updateArea: ({ undoData: { areaId, area } }) => {
-                return updateArea(areaId, area, { updateHistory: false });
-            },
-            addCustomTypes: ({ undoData: { customTypeIds } }) => {
-                return removeCustomTypes(customTypeIds, {
-                    updateHistory: false,
-                });
-            },
-            removeCustomTypes: ({ undoData: { customTypes } }) => {
-                return addCustomTypes(customTypes, { updateHistory: false });
-            },
-            updateCustomType: ({ undoData: { customTypeId, customType } }) => {
-                return updateCustomType(customTypeId, customType, {
-                    updateHistory: false,
-                });
-            },
-            addNotes: ({ undoData: { noteIds } }) => {
-                return removeNotes(noteIds, { updateHistory: false });
-            },
-            removeNotes: ({ undoData: { notes } }) => {
-                return addNotes(notes, { updateHistory: false });
-            },
-            updateNote: ({ undoData: { noteId, note } }) => {
-                return updateNote(noteId, note, { updateHistory: false });
-            },
-        }),
-        [
-            addTables,
-            removeTables,
-            updateTable,
-            updateDiagramName,
-            removeField,
-            addField,
-            updateField,
-            addRelationships,
-            updateRelationship,
-            updateTablesState,
-            addIndex,
-            removeIndex,
-            updateIndex,
-            addCheckConstraint,
-            removeCheckConstraint,
-            updateCheckConstraint,
-            removeRelationships,
-            addDependencies,
-            removeDependencies,
-            updateDependency,
-            addAreas,
-            removeAreas,
-            updateArea,
-            addCustomTypes,
-            removeCustomTypes,
-            updateCustomType,
-            addNotes,
-            removeNotes,
-            updateNote,
-        ]
-    );
-
-    const undo = async () => {
-        const action = undoStack.pop();
-        if (!action) {
+    // Mirrors undoManager.canUndo()/canRedo() into React state — the
+    // manager itself is a plain Yjs EventEmitter, not something React
+    // re-renders on.
+    useEffect(() => {
+        if (!undoManager) {
+            setHasUndo(false);
+            setHasRedo(false);
             return;
         }
 
-        const handler = undoActionHandlers[action.action];
-        addRedoAction(action);
+        const update = () => {
+            setHasUndo(undoManager.canUndo());
+            setHasRedo(undoManager.canRedo());
+        };
+        update();
+        undoManager.on('stack-item-added', update);
+        undoManager.on('stack-item-popped', update);
+        undoManager.on('stack-cleared', update);
+        return () => {
+            undoManager.off('stack-item-added', update);
+            undoManager.off('stack-item-popped', update);
+            undoManager.off('stack-cleared', update);
+        };
+    }, [undoManager]);
 
-        await handler?.({
-            undoData: action.undoData,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
-    };
+    // §9's "undo stack stale references" question — resolved: toast, not
+    // a silent no-op. Y.UndoManager's undo()/redo() return a truthy
+    // StackItem whenever one was popped, even if applying it against the
+    // CURRENT doc produced no visible change (e.g. the table it targeted
+    // was deleted by another peer since this entry was pushed — Yjs turns
+    // that into a safe no-op rather than erroring, but "I hit Ctrl+Z and
+    // nothing happened" still needs an explanation for the user).
+    //
+    // Detected with a before/after snapshot read straight off the live
+    // Y.Doc (`undoManager.doc`) — NOT by re-reading `tables`/
+    // `relationships` from useChartDB(): React 18 batches the setState
+    // calls useYCollectionSync's observers make inside undoManager.undo()
+    // 's own synchronous call, so a closure-captured React state variable
+    // is still the pre-undo value at this point in the same event
+    // handler. The Y.Doc itself has no such lag.
+    const runWithStaleCheck = useCallback(
+        (pop: () => unknown, title: string) => {
+            if (!undoManager) return;
+            const doc = undoManager.doc;
+            const before = snapshotDoc(doc);
+            const popped = pop();
+            if (popped && snapshotDoc(doc) === before) {
+                toast({
+                    title,
+                    description:
+                        "That change no longer applies — it's likely been removed since.",
+                    variant: 'destructive',
+                });
+            }
+        },
+        [undoManager, toast]
+    );
 
-    const redo = async () => {
-        const action = redoStack.pop();
-        if (!action) {
-            return;
-        }
+    const undo = useCallback(() => {
+        runWithStaleCheck(() => undoManager?.undo(), "Can't undo");
+    }, [runWithStaleCheck, undoManager]);
 
-        const handler = redoActionHandlers[action.action];
-        addUndoAction(action);
-
-        await handler?.({
-            redoData: action.redoData,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
-    };
+    const redo = useCallback(() => {
+        runWithStaleCheck(() => undoManager?.redo(), "Can't redo");
+    }, [runWithStaleCheck, undoManager]);
 
     return (
-        <historyContext.Provider value={{ undo, redo, hasRedo, hasUndo }}>
+        <historyContext.Provider value={{ undo, redo, hasUndo, hasRedo }}>
             {children}
         </historyContext.Provider>
     );

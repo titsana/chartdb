@@ -4,7 +4,6 @@ import { act, renderHook } from '@testing-library/react';
 import { EventEmitter } from 'ahooks/lib/useEventEmitter';
 import { ChartDBProvider } from '../chartdb-provider';
 import { useChartDB } from '@/hooks/use-chartdb';
-import { RedoUndoStackProvider } from '@/context/history-context/redo-undo-stack-provider';
 import { HistoryProvider } from '@/context/history-context/history-provider';
 import { historyContext } from '@/context/history-context/history-context';
 import { diffContext } from '@/context/diff-context/diff-context';
@@ -72,9 +71,7 @@ function renderChartDB(storage: StorageContext, diff = makeMockDiff()) {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
         <diffContext.Provider value={diff}>
             <storageContext.Provider value={storage}>
-                <RedoUndoStackProvider>
-                    <ChartDBProvider>{children}</ChartDBProvider>
-                </RedoUndoStackProvider>
+                <ChartDBProvider>{children}</ChartDBProvider>
             </storageContext.Provider>
         </diffContext.Provider>
     );
@@ -89,11 +86,9 @@ function renderChartDBWithHistory(
     const wrapper = ({ children }: { children: React.ReactNode }) => (
         <diffContext.Provider value={diff}>
             <storageContext.Provider value={storage}>
-                <RedoUndoStackProvider>
-                    <ChartDBProvider>
-                        <HistoryProvider>{children}</HistoryProvider>
-                    </ChartDBProvider>
-                </RedoUndoStackProvider>
+                <ChartDBProvider>
+                    <HistoryProvider>{children}</HistoryProvider>
+                </ChartDBProvider>
             </storageContext.Provider>
         </diffContext.Provider>
     );
@@ -170,6 +165,58 @@ describe('ChartDBProvider', () => {
             await result.current.removeTables(['table-1']);
         });
         expect(result.current.tables).toEqual([]);
+    });
+
+    // Ported from the now-deleted history-context/__tests__/history-provider
+    // .test.tsx ("removeTables undo applies addTables/addRelationships/
+    // addDependencies concurrently, not sequentially") — that test pinned
+    // the old dispatch-table's Promise.all shape, which no longer exists:
+    // Y.UndoManager reverts removeTables' single doc.transact() as one
+    // atomic pop, not three separate replayed writes. The invariant worth
+    // keeping — a table and everything it cascade-deleted come back
+    // together in one undo — is what this test proves against the new
+    // mechanism instead.
+    it('undo of removeTables restores the table, its relationship, and its dependency together in one step', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        await act(async () => {
+            await result.current.chartdb.addTables([
+                baseTable({ id: 'table-a', name: 'table_a' }),
+                baseTable({ id: 'table-b', name: 'table_b' }),
+            ]);
+            await result.current.chartdb.addRelationships([
+                baseRelationship({}),
+            ]);
+            await result.current.chartdb.addDependencies([baseDependency({})]);
+        });
+
+        // updateHistory defaults to true on addTables/addRelationships/
+        // addDependencies but NOT on removeTables (no default in its own
+        // signature) — pass it explicitly so this removal itself lands on
+        // the undo stack, same as a real Ctrl+Z-able delete would.
+        await act(async () => {
+            await result.current.chartdb.removeTables(['table-a'], {
+                updateHistory: true,
+            });
+        });
+        expect(
+            result.current.chartdb.tables.find((t) => t.id === 'table-a')
+        ).toBeUndefined();
+        expect(result.current.chartdb.relationships).toEqual([]);
+        expect(result.current.chartdb.dependencies).toEqual([]);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(
+            result.current.chartdb.tables.find((t) => t.id === 'table-a')
+        ).toBeDefined();
+        expect(result.current.chartdb.relationships.map((r) => r.id)).toEqual([
+            'rel-1',
+        ]);
+        expect(result.current.chartdb.dependencies.map((d) => d.id)).toEqual([
+            'dep-1',
+        ]);
     });
 
     it('fix for appendix-b:3 — removeTables drops a relationship added to the deleted table in the same tick, not just ones in its precomputed removal list', async () => {
@@ -695,6 +742,33 @@ describe('Phase 2 (docs/design/realtime-collaboration.md §10) — tables/relati
         // not the pre-rename snapshot — proves undo restored the doc entry
         // removeRelationships actually deleted, not a stale re-add.
         expect(result.current.chartdb.relationships[0].name).toBe('renamed');
+    });
+
+    it('redo: reverts an undo — hasRedo flips on after undo, redo re-applies the undone edit, and hasRedo flips off again', async () => {
+        const { result } = renderChartDBWithHistory({ ...storageInitialValue });
+
+        const table = await act(async () =>
+            result.current.chartdb.createTable()
+        );
+        await act(async () => {
+            await result.current.chartdb.updateTable(table.id, {
+                name: 'renamed',
+            });
+        });
+        expect(result.current.chartdb.tables[0].name).toBe('renamed');
+        expect(result.current.history.hasRedo).toBe(false);
+
+        await act(async () => {
+            await result.current.history.undo();
+        });
+        expect(result.current.chartdb.tables[0].name).toBe(table.name);
+        expect(result.current.history.hasRedo).toBe(true);
+
+        await act(async () => {
+            await result.current.history.redo();
+        });
+        expect(result.current.chartdb.tables[0].name).toBe('renamed');
+        expect(result.current.history.hasRedo).toBe(false);
     });
 
     it('dependencies: add, update, remove-then-undo all round-trip through the doc', async () => {

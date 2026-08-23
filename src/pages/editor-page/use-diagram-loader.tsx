@@ -2,7 +2,6 @@ import { useChartDB } from '@/hooks/use-chartdb';
 import { useConfig } from '@/hooks/use-config';
 import { useDialog } from '@/hooks/use-dialog';
 import { useFullScreenLoader } from '@/hooks/use-full-screen-spinner';
-import { useRedoUndoStack } from '@/hooks/use-redo-undo-stack';
 import { useStorage } from '@/hooks/use-storage';
 import { useToast } from '@/components/toast/use-toast';
 import type { Diagram } from '@/lib/domain/diagram';
@@ -14,7 +13,6 @@ export const useDiagramLoader = () => {
     const { diagramId } = useParams<{ diagramId: string }>();
     const { config } = useConfig();
     const { loadDiagram, currentDiagram } = useChartDB();
-    const { resetRedoStack, resetUndoStack } = useRedoUndoStack();
     const { showLoader, hideLoader } = useFullScreenLoader();
     const { openCreateDiagramDialog, openOpenDiagramDialog } = useDialog();
     const navigate = useNavigate();
@@ -46,8 +44,10 @@ export const useDiagramLoader = () => {
                 if (diagramId) {
                     setInitialDiagram(undefined);
                     showLoader();
-                    resetRedoStack();
-                    resetUndoStack();
+                    // No resetRedoStack()/resetUndoStack() needed —
+                    // loadDiagram below ends up in loadDiagramFromData,
+                    // which builds a fresh Y.UndoManager with empty
+                    // stacks for every diagram it loads.
                     const diagram = await loadDiagram(diagramId);
                     if (!diagram) {
                         openOpenDiagramDialog({ canClose: false });
@@ -100,8 +100,6 @@ export const useDiagramLoader = () => {
         navigate,
         listDiagrams,
         loadDiagram,
-        resetRedoStack,
-        resetUndoStack,
         hideLoader,
         showLoader,
         currentDiagram?.id,

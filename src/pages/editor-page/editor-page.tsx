@@ -9,7 +9,6 @@ import { LayoutProvider } from '@/context/layout-context/layout-provider';
 import { LocalConfigProvider } from '@/context/local-config-context/local-config-provider';
 import { StorageProvider } from '@/context/storage-context/storage-provider';
 import { ConfigProvider } from '@/context/config-context/config-provider';
-import { RedoUndoStackProvider } from '@/context/history-context/redo-undo-stack-provider';
 import { ChartDBProvider } from '@/context/chartdb-context/chartdb-provider';
 import { HistoryProvider } from '@/context/history-context/history-provider';
 import { ThemeProvider } from '@/context/theme-context/theme-provider';
@@ -118,29 +117,27 @@ export const EditorPage: React.FC = () => (
                 <LayoutProvider>
                     <StorageProvider>
                         <ConfigProvider>
-                            <RedoUndoStackProvider>
-                                <DiffProvider>
-                                    <ChartDBProvider>
-                                        <DiagramFilterProvider>
-                                            <HistoryProvider>
-                                                <ReactFlowProvider>
-                                                    <CanvasProvider>
-                                                        <ExportImageProvider>
-                                                            <AlertProvider>
-                                                                <DialogProvider>
-                                                                    <KeyboardShortcutsProvider>
-                                                                        <EditorPageComponent />
-                                                                    </KeyboardShortcutsProvider>
-                                                                </DialogProvider>
-                                                            </AlertProvider>
-                                                        </ExportImageProvider>
-                                                    </CanvasProvider>
-                                                </ReactFlowProvider>
-                                            </HistoryProvider>
-                                        </DiagramFilterProvider>
-                                    </ChartDBProvider>
-                                </DiffProvider>
-                            </RedoUndoStackProvider>
+                            <DiffProvider>
+                                <ChartDBProvider>
+                                    <DiagramFilterProvider>
+                                        <HistoryProvider>
+                                            <ReactFlowProvider>
+                                                <CanvasProvider>
+                                                    <ExportImageProvider>
+                                                        <AlertProvider>
+                                                            <DialogProvider>
+                                                                <KeyboardShortcutsProvider>
+                                                                    <EditorPageComponent />
+                                                                </KeyboardShortcutsProvider>
+                                                            </DialogProvider>
+                                                        </AlertProvider>
+                                                    </ExportImageProvider>
+                                                </CanvasProvider>
+                                            </ReactFlowProvider>
+                                        </HistoryProvider>
+                                    </DiagramFilterProvider>
+                                </ChartDBProvider>
+                            </DiffProvider>
                         </ConfigProvider>
                     </StorageProvider>
                 </LayoutProvider>

@@ -7,7 +7,6 @@ import { HocuspocusProvider } from '@hocuspocus/provider';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
-import { RedoUndoStackProvider } from '@/context/history-context/redo-undo-stack-provider';
 import { diffContext } from '@/context/diff-context/diff-context';
 import type { DiffContext } from '@/context/diff-context/diff-context';
 import { EventEmitter } from 'ahooks/lib/useEventEmitter';
@@ -209,9 +208,7 @@ function renderClient() {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
         <diffContext.Provider value={makeMockDiff()}>
             <storageContext.Provider value={{ ...storageInitialValue }}>
-                <RedoUndoStackProvider>
-                    <ChartDBProvider>{children}</ChartDBProvider>
-                </RedoUndoStackProvider>
+                <ChartDBProvider>{children}</ChartDBProvider>
             </storageContext.Provider>
         </diffContext.Provider>
     );
@@ -455,6 +452,129 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
                 { timeout: 8_000 }
             );
         }
+    }, 20_000);
+
+    it("Phase 5 — undo scoping: client A's undo of its own field-rename does not clobber client B's later edit to that same field, over the real network", async () => {
+        if (!server) return;
+
+        // This is the one claim §9's "undo per client" decision actually
+        // rests on, and it was only ever backed by a doc comment
+        // (`ignoreRemoteMapChanges`'s default) — not exercised against the
+        // real HocuspocusProvider/Y.UndoManager pairing until this test.
+        // Two SEPARATE Y.UndoManager instances are involved here (one per
+        // renderClient() tree, each with its own localOrigin symbol) — this
+        // is a materially different scenario from the single-doc
+        // `updateHistory: false` tests in chartdb-provider.test.tsx, which
+        // never touch trackedOrigins-based cross-client scoping at all.
+        const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
+        const field = {
+            id: 'field-1',
+            name: 'original_name',
+            type: { id: 'integer', name: 'integer' },
+            primaryKey: false,
+            nullable: true,
+            unique: false,
+            createdAt: Date.now(),
+        };
+
+        const clientA = renderClient();
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [baseTable({ fields: [field] })],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        const clientB = renderClient();
+        await act(async () => {
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+        await waitFor(
+            () =>
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )
+                ).toBeTruthy(),
+            { timeout: 8_000 }
+        );
+
+        // A renames the field — this is the transaction A's undo stack will
+        // target. Wait for it to actually land on B before B edits the same
+        // key, so B's edit is genuinely "after A's", not a race.
+        await act(async () => {
+            await clientA.result.current.updateField('table-1', 'field-1', {
+                name: 'a-edit',
+            });
+        });
+        await waitFor(
+            () =>
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )?.fields?.[0]?.name
+                ).toBe('a-edit'),
+            { timeout: 8_000 }
+        );
+
+        // B overwrites the same field's name. Wait for it to reach A before
+        // A undoes — otherwise A's undo could race ahead of B's edit and
+        // this would test nothing.
+        await act(async () => {
+            await clientB.result.current.updateField('table-1', 'field-1', {
+                name: 'b-edit',
+            });
+        });
+        await waitFor(
+            () =>
+                expect(
+                    clientA.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )?.fields?.[0]?.name
+                ).toBe('b-edit'),
+            { timeout: 8_000 }
+        );
+
+        // A undoes its OWN rename — the one that set 'a-edit'. If undo
+        // scoping/conflict-avoidance works as documented, this must not
+        // revert the field past B's 'b-edit', which is the current value A
+        // never touched.
+        act(() => {
+            clientA.result.current.undoManager?.undo();
+        });
+
+        // Give the (local, synchronous) undo a moment, then assert on BOTH
+        // clients: B's edit must survive, on A's own doc and once it
+        // crosses the network to B.
+        await waitFor(() => {
+            expect(
+                clientA.result.current.tables.find(
+                    (t: DBTable) => t.id === 'table-1'
+                )?.fields?.[0]?.name
+            ).toBe('b-edit');
+        });
+        await waitFor(
+            () => {
+                expect(
+                    clientB.result.current.tables.find(
+                        (t: DBTable) => t.id === 'table-1'
+                    )?.fields?.[0]?.name
+                ).toBe('b-edit');
+            },
+            { timeout: 8_000 }
+        );
     }, 20_000);
 
     it('appendix-b:3 cascade delete, across the real network: removing a table on one client removes the relationships referencing it on the other client too', async () => {

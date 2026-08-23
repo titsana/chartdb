@@ -15,6 +15,7 @@ import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { Note } from '@/lib/domain/note';
 import type { Awareness } from 'y-protocols/awareness';
+import type { UndoManager } from 'yjs';
 
 export type ChartDBEventType =
     | 'add_tables'
@@ -93,6 +94,12 @@ export interface ChartDBContext {
     // Exposed only so the UI can show a "you're offline, changes will
     // sync" banner.
     disconnected: boolean;
+    // Phase 5: the CRDT-native undo/redo manager for the current room's
+    // Y.Doc — HistoryProvider delegates to this instead of maintaining
+    // its own action-replay stack. Null for a readonly session (template
+    // preview — nothing there is undoable) or before a diagram has
+    // loaded. See chartdb-provider.tsx's `undoManagerRef` doc comment.
+    undoManager: UndoManager | null;
 
     highlightedCustomType?: DBCustomType;
     highlightCustomTypeId: (id?: string) => void;
@@ -365,6 +372,7 @@ export const chartDBContext = createContext<ChartDBContext>({
     events: new EventEmitter(),
     awareness: null,
     disconnected: false,
+    undoManager: null,
 
     // General operations
     updateDiagramId: emptyFn,
