@@ -62,6 +62,8 @@ import { useTranslation } from 'react-i18next';
 import type { DBTable } from '@/lib/domain/db-table';
 import { MIN_TABLE_SIZE } from '@/lib/domain/db-table';
 import { useLocalConfig } from '@/hooks/use-local-config';
+import { usePresence } from '@/hooks/use-presence';
+import { RemoteCursors } from './remote-cursors/remote-cursors';
 import {
     Tooltip,
     TooltipTrigger,
@@ -308,10 +310,18 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         updateNote,
         highlightedCustomType,
         highlightCustomTypeId,
+        awareness,
     } = useChartDB();
     const { showSidePanel } = useLayout();
     const { effectiveTheme } = useTheme();
-    const { scrollAction, showDBViews, showMiniMapOnCanvas } = useLocalConfig();
+    const {
+        scrollAction,
+        showDBViews,
+        showMiniMapOnCanvas,
+        displayName,
+        presenceColor,
+    } = useLocalConfig();
+    const presencePeers = usePresence(awareness);
     const { isMd: isDesktop } = useBreakpoint('md');
     const [highlightOverlappingTables, setHighlightOverlappingTables] =
         useState(false);
@@ -1543,6 +1553,16 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     // Handle mouse move to update cursor position for floating edge
     const { screenToFlowPosition } = useReactFlow();
     const rafIdRef = useRef<number>();
+    // Phase 5: broadcasts this client's cursor position via awareness, on
+    // its own rAF throttle (kept separate from `rafIdRef` above —
+    // presence broadcast and the floating-edge cursor are unrelated
+    // concerns that happen to share a mouse-move source; coupling their
+    // throttling would make one's timing depend on the other's state).
+    // `setLocalStateField`, not `setLocalState` — the latter replaces the
+    // whole local-state object, which would race the identity-broadcast
+    // effect below and whichever one ran last would clobber the other's
+    // field (same class of bug `setIfChanged` fixed for the Y.Doc side).
+    const presenceRafIdRef = useRef<number>();
     const handleMouseMove = useCallback(
         (event: React.MouseEvent) => {
             if (tempFloatingEdge) {
@@ -1560,15 +1580,40 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     rafIdRef.current = undefined;
                 });
             }
+
+            if (awareness && !presenceRafIdRef.current) {
+                const clientX = event.clientX;
+                const clientY = event.clientY;
+                presenceRafIdRef.current = requestAnimationFrame(() => {
+                    awareness.setLocalStateField(
+                        'cursor',
+                        screenToFlowPosition({ x: clientX, y: clientY })
+                    );
+                    presenceRafIdRef.current = undefined;
+                });
+            }
         },
-        [tempFloatingEdge, screenToFlowPosition]
+        [tempFloatingEdge, screenToFlowPosition, awareness]
     );
+
+    // Phase 5: identity (display name/color, from LocalConfigProvider —
+    // per-browser preferences, no auth) — kept as its own effect/field
+    // write rather than folded into the mousemove handler above, since it
+    // changes far less often and has nothing to do with mouse events.
+    useEffect(() => {
+        if (!awareness) return;
+        awareness.setLocalStateField('displayName', displayName);
+        awareness.setLocalStateField('color', presenceColor);
+    }, [awareness, displayName, presenceColor]);
 
     // Cleanup RAF on unmount
     useEffect(() => {
         return () => {
             if (rafIdRef.current) {
                 cancelAnimationFrame(rafIdRef.current);
+            }
+            if (presenceRafIdRef.current) {
+                cancelAnimationFrame(presenceRafIdRef.current);
             }
         };
     }, []);
@@ -1921,6 +1966,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     ) : null}
                 </ReactFlow>
                 <MarkerDefinitions />
+                <RemoteCursors peers={presencePeers} />
             </div>
         </CanvasContextMenu>
     );

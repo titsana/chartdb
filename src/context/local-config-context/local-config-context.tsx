@@ -28,6 +28,16 @@ export interface LocalConfigContext {
 
     showMiniMapOnCanvas: boolean;
     setShowMiniMapOnCanvas: (showMiniMapOnCanvas: boolean) => void;
+
+    // Phase 5 (docs/design/realtime-collaboration.md §10): presence
+    // display identity — a per-browser preference with no server-side
+    // owner, same reasoning as everything else in this context (and as
+    // config/diagram_filters post-Phase-4.5: no auth means no per-user
+    // account to hang this off server-side).
+    displayName: string;
+    setDisplayName: (displayName: string) => void;
+    presenceColor: string;
+    setPresenceColor: (color: string) => void;
 }
 
 export const LocalConfigContext = createContext<LocalConfigContext>({
@@ -54,4 +64,9 @@ export const LocalConfigContext = createContext<LocalConfigContext>({
 
     showMiniMapOnCanvas: false,
     setShowMiniMapOnCanvas: emptyFn,
+
+    displayName: '',
+    setDisplayName: emptyFn,
+    presenceColor: '',
+    setPresenceColor: emptyFn,
 });

@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import type { Awareness } from 'y-protocols/awareness';
 import { COLLAB_WS_URL } from '@/lib/env';
 import { seedWhenDecided } from '@/lib/collab/seed-gate';
 import {
@@ -120,6 +121,16 @@ export const ChartDBProvider: React.FC<
     // which has no business opening a live collaboration room for
     // whatever id a template happens to carry.
     const providerRef = useRef<HocuspocusProvider | null>(null);
+    // Phase 5 (docs/design/realtime-collaboration.md §10): exposed on the
+    // context value as real state, not a `providerRef.current?.awareness`
+    // read taken fresh in the render body — a render can happen without
+    // `loadDiagramFromData` having (re)run, or without any of its setState
+    // calls actually changing a value (e.g. loading the same diagram id
+    // twice), so a ref alone isn't guaranteed to reach consumers on every
+    // render that needs it. Set alongside `providerRef.current` in
+    // loadDiagramFromData, both on creation and on the destroy-before-
+    // rebuild path.
+    const [awareness, setAwareness] = useState<Awareness | null>(null);
     // Phase 4 ready-gate (docs/design/realtime-collaboration.md's Phase 4
     // section has the full writeup of the bug this closes): on the
     // collab-connect path, `loadDiagramFromData` sets React state
@@ -2026,6 +2037,17 @@ export const ChartDBProvider: React.FC<
                 collabDocRef.current?.destroy();
                 providerRef.current?.destroy();
                 providerRef.current = null;
+                // Phase 5: `awareness` on the context value is sourced from
+                // this state, not a fresh `providerRef.current?.awareness`
+                // read in the render body — a render can happen without
+                // this function having run again (or without any of the
+                // setState calls below actually changing a value, e.g.
+                // loading the same diagram id twice), so a ref-read alone
+                // isn't guaranteed to reach consumers. Cleared here so a
+                // readonly/local-only reload (no provider at all) doesn't
+                // leave stale presence data from a previous diagram
+                // visible.
+                setAwareness(null);
                 const newDoc = new Y.Doc();
                 collabDocRef.current = newDoc;
                 // Opens the ready-gate window (see gateWrite's doc comment
@@ -2129,6 +2151,7 @@ export const ChartDBProvider: React.FC<
                         document: newDoc,
                     });
                     providerRef.current = provider;
+                    setAwareness(provider.awareness);
                     seedWhenDecided(provider, reconcileWithRoom);
                 } else {
                     // Readonly (template preview) or no collab server
@@ -2356,6 +2379,7 @@ export const ChartDBProvider: React.FC<
                 schemas,
                 events,
                 readonly,
+                awareness,
                 updateDiagramData,
                 updateDiagramId,
                 updateDiagramName,

@@ -802,4 +802,72 @@ describe('Phase 4 — ChartDBProvider reaches the real Hocuspocus server', () =>
             checkerProvider.destroy();
         }
     }, 20_000);
+
+    it("Phase 5: awareness — one client's presence state reaches an independent client in the same room", async () => {
+        if (!server) return;
+
+        const diagramId = `test-diagram-${randomUUID()}`;
+        await registerTestDiagram(server.port, diagramId);
+
+        const clientA = renderClient();
+        const clientB = renderClient();
+
+        await act(async () => {
+            clientA.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+            clientB.result.current.loadDiagramFromData({
+                id: diagramId,
+                name: 'Test',
+                databaseType: DatabaseType.GENERIC,
+                tables: [],
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+            });
+        });
+
+        await waitFor(() => {
+            expect(clientA.result.current.awareness).toBeTruthy();
+            expect(clientB.result.current.awareness).toBeTruthy();
+        });
+
+        act(() => {
+            clientA.result.current.awareness!.setLocalStateField(
+                'displayName',
+                'Alice'
+            );
+            clientA.result.current.awareness!.setLocalStateField('cursor', {
+                x: 42,
+                y: 7,
+            });
+        });
+
+        // Real proof this crossed the network, not an in-process
+        // shortcut: client B's Awareness instance is its own room
+        // connection's, entirely independent of client A's — it only
+        // ever learns about A's state via the server relaying it.
+        await waitFor(
+            () => {
+                const clientAId = clientA.result.current.awareness!.clientID;
+                const states = clientB.result.current.awareness!.getStates();
+                expect(states.get(clientAId)).toMatchObject({
+                    displayName: 'Alice',
+                    cursor: { x: 42, y: 7 },
+                });
+            },
+            { timeout: 8_000 }
+        );
+
+        // And B never sees itself in its own presence list — usePresence
+        // filters this, but assert it at the awareness-state level too:
+        // A's clientID must differ from B's.
+        expect(clientA.result.current.awareness!.clientID).not.toBe(
+            clientB.result.current.awareness!.clientID
+        );
+    }, 20_000);
 });

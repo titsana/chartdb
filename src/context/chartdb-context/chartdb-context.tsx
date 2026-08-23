@@ -14,6 +14,7 @@ import { EventEmitter } from 'ahooks/lib/useEventEmitter';
 import type { Area } from '@/lib/domain/area';
 import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import type { Note } from '@/lib/domain/note';
+import type { Awareness } from 'y-protocols/awareness';
 
 export type ChartDBEventType =
     | 'add_tables'
@@ -80,6 +81,12 @@ export interface ChartDBContext {
     currentDiagram: Diagram;
     events: EventEmitter<ChartDBEvent>;
     readonly?: boolean;
+    // Phase 5 (docs/design/realtime-collaboration.md §10): the live room's
+    // presence channel — null whenever there's no live collab connection
+    // (readonly template preview, COLLAB_WS_URL unset, or no diagram
+    // loaded yet). See chartdb-provider.tsx's `awareness` state for why
+    // this is real state, not a ref read.
+    awareness: Awareness | null;
 
     highlightedCustomType?: DBCustomType;
     highlightCustomTypeId: (id?: string) => void;
@@ -350,6 +357,7 @@ export const chartDBContext = createContext<ChartDBContext>({
         updatedAt: new Date(),
     },
     events: new EventEmitter(),
+    awareness: null,
 
     // General operations
     updateDiagramId: emptyFn,

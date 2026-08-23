@@ -1413,6 +1413,75 @@ multiplayer, not just correctness.
 doing; undoing your own action never reverts someone else's; losing
 connection has a defined, non-silent UX.
 
+**Remote cursors + display name — ✅ Done.** Scoped down from the full
+presence bullet above on purpose: per-user selection highlight and "X is
+editing this table" need a new `CanvasContext` field or canvas event to
+carry the currently-selected table id out of `canvas.tsx` (today it's
+only React Flow's own internal `node.selected`, projected locally — see
+the scoping pass before this landed), and neither is needed to meet this
+phase's own exit criterion ("a user can tell who else is present and what
+they're doing") — cursors with name labels already do. Cut, not
+forgotten; revisit if selection highlight turns out to matter in
+practice.
+- `usePresence` (`src/hooks/use-presence.ts`) projects a room's
+  `y-protocols` `Awareness` into React state — the presence equivalent of
+  `useYCollectionSync`, but built on `awareness.on('change', ...)`/
+  `getStates()` (a distinct, non-`Y.Map` API) rather than
+  `observeDeep`. Excludes this client's own entry.
+- `awareness` exposed on `ChartDBContext` as real `useState`, not a
+  `providerRef.current?.awareness` read taken fresh in the render body —
+  a render can happen without `loadDiagramFromData` having (re)run, or
+  without any of its own `setState` calls changing a value (e.g. loading
+  the same diagram id twice), so a ref-only read isn't guaranteed to
+  reach consumers on every render that needs it. Set alongside
+  `providerRef.current`, both on creation and on the destroy-before-
+  rebuild path (cleared to `null` there, so a readonly/local-only reload
+  doesn't leave a previous diagram's presence data visible).
+- Identity (`displayName`/`presenceColor`) lives in
+  `LocalConfigProvider` — a per-browser preference with no server-side
+  owner, same reasoning as everything else there and as
+  `config`/`diagram_filters` post-Phase-4.5 (no auth, no account to hang
+  it off). Defaults to a random "Guest 1234" name and a random color from
+  the existing `colorOptions` palette, persisted to `localStorage` from
+  then on.
+- Broadcast: `canvas.tsx`'s existing `handleMouseMove` (previously gated
+  entirely on `tempFloatingEdge`, for the unrelated temp-cursor-node
+  floating-edge feature) now also unconditionally rAF-throttles a
+  presence cursor write via `awareness.setLocalStateField('cursor', ...)`
+  — deliberately its own separate rAF ref, not reusing the floating-edge
+  one, so the two unrelated concerns' throttling can't couple. Identity
+  is a separate effect/write. Both use `setLocalStateField`, never
+  `setLocalState` (which replaces the whole local-state object) — two
+  independent writers replacing the whole object would race and clobber
+  each other's field, the same class of bug `setIfChanged` fixed for the
+  Y.Doc side in Phase 4.
+- No manual keepalive/interval added: `y-protocols`' `Awareness`
+  constructor already self-renews the local client's own state and prunes
+  peers that go stale for 30s (`outdatedTimeout` in `awareness.js`) — read
+  the actual source before assuming an app-level heartbeat was needed;
+  it wasn't.
+- Render: `RemoteCursors` (`src/pages/editor-page/canvas/remote-cursors/`)
+  — a plain absolutely-positioned overlay, not a React Flow node (cursors
+  don't need a `Handle`/edge-anchor the way the existing
+  `TempCursorNode` does). Positions via `flowToScreenPosition` (the
+  inverse of `screenToFlowPosition`, already used elsewhere in
+  `canvas.tsx`) — returns the same coordinate space as
+  `event.clientX`/`clientY`, so a `position: fixed` element can use it
+  directly.
+- Tests: a real-`Awareness` unit test (`use-presence.test.tsx`, two
+  `Awareness` instances relayed via the actual `y-protocols` encode/apply
+  functions, not a mock) for the hook's subscribe/cleanup wiring, plus a
+  genuinely discriminating integration test against the real server (two
+  `renderClient()` trees, one sets a field, the other observes it via
+  `getStates()` — sabotage-verified: removing the write made the
+  assertion fail as predicted, confirmed, then restored).
+
+**Not yet done:** per-user selection highlight / "editing this table"
+indicator (see the cut-scope note above); `Y.UndoManager` swap; the
+disconnect/reconnect UX open question. This phase's exit criterion is
+only partially met — presence (cursors) is done, undo semantics and
+disconnect UX are still open.
+
 ### Phase 6 — Scale-out (defer until actually needed)
 
 **Goal:** support more than one NestJS instance.
