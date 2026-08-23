@@ -18,6 +18,7 @@ let mockIsAuthenticated = false;
 vi.mock('@/lib/msal-config', () => ({
     msalInstance: {},
     loginRequest: { scopes: [] },
+    isMsalConfigured: true,
 }));
 
 vi.mock('@azure/msal-react', () => ({
@@ -63,6 +64,24 @@ describe('AuthGate', () => {
             </AuthGate>
         );
         expect(await screen.findByText('the app')).toBeTruthy();
+        expect(screen.queryByText(/sign in with microsoft/i)).toBeNull();
+    });
+
+    // Hit in a real production deploy: AUTH_MODE=azure-ad set without
+    // ENTRA_TENANT_ID/ENTRA_CLIENT_ID configured. msal-config.ts used to
+    // throw at import time for this — before React mounts anything, so
+    // nothing on the page ever communicated it; the user just saw a blank
+    // white page with a console error. This is the fix: a real, visible
+    // message, and neither MsalProvider nor MSAL's own init should run
+    // against config that's already known to be invalid.
+    it('azure-ad mode, misconfigured (missing tenant/client id): shows an error message, not a blank page or the sign-in flow', () => {
+        render(
+            <AuthGate authMode="azure-ad" msalConfigured={false}>
+                <div>the app</div>
+            </AuthGate>
+        );
+        expect(screen.getByText(/misconfigured/i)).toBeTruthy();
+        expect(screen.queryByText('the app')).toBeNull();
         expect(screen.queryByText(/sign in with microsoft/i)).toBeNull();
     });
 });
