@@ -228,17 +228,25 @@ summary can't drift out of sync with it.
   (conflating "no persistence" with "no local queue") — caught by the
   reconnect-convergence test failing when the freeze was wired in,
   corrected before merging.
-- **Undo semantics across users**: needs a concrete UX decision — does
-  "undo" only ever revert your own last change, never someone else's,
-  even if it was the most recent edit to the document? (Yjs `UndoManager`
-  supports this via per-origin tracking, but the exact UX — e.g. what
-  happens if the field you're undoing was since edited by someone else —
-  needs a written spec before implementation.)
-- **Undo stack stale references**: the in-memory undo/redo stack (§5.2)
-  holds entries that point at specific table/field/relationship IDs. If
-  another user deletes that table before you hit undo, what happens — the
-  entry silently no-ops, gets dropped from the stack, or something else?
-  (No persistence/size-limit question here anymore: the stack is in-memory
+- **Undo semantics across users — ✅ resolved.** Scoped per client,
+  always: undoing your own action never reverts someone else's, even if
+  theirs is the most recent edit to the document — chosen over any
+  "undo the most recent edit regardless of author" alternative. Backed
+  by `Y.UndoManager`'s `trackedOrigins` (each client's manager only
+  tracks transactions tagged with that client's own `localOrigin`
+  symbol) plus its own map-conflict handling: if client B edits a key
+  after client A's tracked edit to it, client A's undo does not clobber
+  B's value. This was verified against the real thing, not doc-trusted —
+  see Phase 5's `Y.UndoManager` write-up below for the integration test
+  and why it mattered.
+- **Undo stack stale references — ✅ resolved.** A toast — "That change
+  no longer applies — it's likely been removed since." — not a silent
+  no-op or a dropped stack entry. Detected via a before/after content
+  snapshot of the live `Y.Doc`: `Y.UndoManager.undo()`/`redo()` return a
+  truthy `StackItem` whenever something was popped, even if the pop
+  turned out to be a no-op against the current doc (target deleted by a
+  peer since); comparing snapshots catches exactly that case. (No
+  persistence/size-limit question here anymore: the stack is in-memory
   only, scoped to one browser tab's session, and disappears on refresh —
   see §5.2.)
 - **Room lifecycle**: when does a Postgres-backed room get created (on
@@ -1544,11 +1552,67 @@ dialog stuck open (no timeout on the REST fetch, no `finally` around
 (`storage-provider.test.tsx`); see that commit. Disconnect/reconnect UX
 sub-part of Phase 5 is fully closed.
 
+**Y.UndoManager swap — ✅ Done.** Replaces `HistoryProvider`'s hand-rolled
+stacks and the ~29-handler `RedoUndoAction` dispatch table with Yjs's
+own `Y.UndoManager`, resolving §9's two undo open questions above as
+part of building it, not after.
+- One `Y.UndoManager` per `ChartDBProvider` instance, constructed
+  alongside each `Y.Doc` (both construction sites — the early
+  no-`loadDiagramFromData`-yet path and the destroy-before-rebuild path
+  — need their own, found the hard way when 10 tests using the former
+  path failed with no manager at all), gated on `!readonlyProp`.
+  `trackedOrigins: new Set([localOrigin])` — the same stable per-
+  instance `Symbol` every mutator already tags its own
+  `doc.transact(fn, origin)` calls with (Phase 1's targeted fix, landed
+  earlier as a pure no-op ahead of this swap). `captureTimeout: 0` — every
+  `transact()` is its own undo step; the default 500ms merge window
+  would otherwise silently combine separate rapid user actions into one
+  undo.
+- `history-provider.tsx` is now a thin wrapper: `undo`/`redo` call
+  straight into the manager, `hasUndo`/`hasRedo` mirror
+  `canUndo()`/`canRedo()` via the manager's `stack-item-added`/
+  `-popped`/`stack-cleared` events. The stale-reference toast (§9) reads
+  a JSON snapshot of all six collection maps off `undoManager.doc`
+  before and after a pop — deliberately not React's `tables`/
+  `relationships` state, which React 18's setState batching leaves
+  stale inside the same handler that just called `undoManager.undo()`.
+- **Verified against the real thing, not just doc-trusted:** the specific
+  claim the "scoped per client" decision above rests on —
+  `ignoreRemoteMapChanges`'s documented default protecting a client's
+  undo from clobbering a peer's later edit to the same key — was only a
+  doc comment until this phase added an integration test for it: two
+  real `HocuspocusProvider` clients, A renames a field, B renames it
+  again after A's edit lands, A undoes; B's value survives on both
+  clients. Passed first try against the real server, which is exactly
+  when it's worth being suspicious of a claim rather than moving on —
+  it stayed in as a permanent regression guard either way.
+- Redo had zero test coverage before this phase (every existing undo
+  test only ever called `undo()`) — added and sabotage-verified.
+- Ported the one invariant worth keeping from the deleted
+  `history-provider.test.tsx` (see below) against the real provider:
+  `removeTables`' cascade-deleted relationship and dependency come back
+  together with the table in one undo step, not three.
+- **Behavior change, not just refactor:** `updateDiagramName` is no
+  longer undoable. It never touched the Y.Doc (diagram name/metadata is
+  REST-backed per Phase 4.5) — the old dispatch table tracked it anyway
+  via its own bookkeeping, but `Y.UndoManager` has nothing to hook a
+  non-doc write into without a separate mechanism this phase didn't
+  build. Worth knowing if anyone relied on undoing a rename.
+- `history-context/__tests__/history-provider.test.tsx` deleted outright
+  rather than patched — every test in it mocked the old dispatch table
+  and asserted on APIs (`addUndoAction`, per-action handlers,
+  `updateHistory`-tagged mock calls) this swap removes entirely.
+  `redo-undo-action.ts`, `redo-undo-stack-provider.tsx`,
+  `redo-undo-stack-context.tsx`, `use-redo-undo-stack.ts` are now dead
+  code (confirmed via repo-wide grep) and deleted with it.
+
+Manually confirmed two-browser, 2026-08-23: [pending — ask before
+closing this sub-part].
+
 **Not yet done:** the stronger "X is editing this table" indicator (see
-above — different from selection, not yet tracked); `Y.UndoManager`
-swap. This phase's exit criterion is now mostly met — presence
-(cursors + selection) and disconnect UX are done; only undo semantics
-across users remains open.
+above — different from selection, not yet tracked). This phase's exit
+criterion is now met on all three fronts (presence, undo scoping,
+disconnect UX) pending the manual two-browser undo check above.
 
 ### Phase 6 — Scale-out (defer until actually needed)
 
