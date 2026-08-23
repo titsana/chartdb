@@ -29,7 +29,7 @@ import { useNavigate } from 'react-router-dom';
 import type { BaseDialogProps } from '../common/base-dialog-props';
 import { useDebounce } from '@/hooks/use-debounce';
 import { DiagramRowActionsMenu } from './diagram-row-actions-menu/diagram-row-actions-menu';
-import { GroupRowActionsMenu } from './group-row-actions-menu/group-row-actions-menu';
+import { GroupHeaderRow } from './group-header-row/group-header-row';
 import { CreateGroupPopover } from './create-group-popover/create-group-popover';
 import { groupDiagramRows } from './group-diagram-rows';
 
@@ -194,23 +194,11 @@ export const OpenDiagramDialog: React.FC<OpenDiagramDialogProps> = ({
                                 {rows.map((row) => {
                                     if (row.type === 'group-header') {
                                         return (
-                                            <TableRow
+                                            <GroupHeaderRow
                                                 key={`group-${row.group.id}`}
-                                                className="bg-muted/50 hover:bg-muted/50"
-                                            >
-                                                <TableCell
-                                                    colSpan={5}
-                                                    className="font-medium"
-                                                >
-                                                    {row.group.name}
-                                                </TableCell>
-                                                <TableCell className="items-center p-0 pr-1 text-right">
-                                                    <GroupRowActionsMenu
-                                                        group={row.group}
-                                                        refetch={fetchDiagrams}
-                                                    />
-                                                </TableCell>
-                                            </TableRow>
+                                                group={row.group}
+                                                refetch={fetchDiagrams}
+                                            />
                                         );
                                     }
                                     if (row.type === 'ungrouped-header') {
