@@ -144,237 +144,243 @@ export const NoteNode: React.FC<NoteNodeProps> = ({
     };
 
     return (
-        <div
-            className={cn(
-                'relative flex h-full flex-col overflow-hidden rounded-[6px] border',
-                selected
-                    ? 'border-pink-600'
-                    : 'border-slate-500 dark:border-slate-600'
-            )}
-            style={{
-                background: getBodyColor(note.color),
-                ...presenceRingStyle(selectingPeers),
-            }}
-            onDoubleClick={handleDoubleClick}
-        >
+        // Extra non-clipping wrapper: the note box itself needs
+        // overflow-hidden (rounded corners, corner-fold decoration), which
+        // would clip PresenceHighlightBadge's -top-6 label if it lived
+        // inside that box instead of above it.
+        <div className="relative h-full">
             <PresenceHighlightBadge peers={selectingPeers} />
-            {/* Notepad header with binding */}
             <div
-                className="relative flex h-2 shrink-0 items-center justify-center"
+                className={cn(
+                    'flex h-full flex-col overflow-hidden rounded-[6px] border',
+                    selected
+                        ? 'border-pink-600'
+                        : 'border-slate-500 dark:border-slate-600'
+                )}
                 style={{
-                    background: getHeaderColor(note.color),
+                    background: getBodyColor(note.color),
+                    ...presenceRingStyle(selectingPeers),
                 }}
-            />
-
-            {focused && !readonly ? (
-                <NodeResizer
-                    minWidth={200}
-                    minHeight={150}
-                    isVisible={selected}
-                    lineClassName="!border-pink-500"
-                    handleClassName="!h-3 !w-3 !bg-pink-500 !rounded-full"
+                onDoubleClick={handleDoubleClick}
+            >
+                {/* Notepad header with binding */}
+                <div
+                    className="relative flex h-2 shrink-0 items-center justify-center"
+                    style={{
+                        background: getHeaderColor(note.color),
+                    }}
                 />
-            ) : null}
 
-            {/* Note body */}
-            <div className="group/note relative flex-1 overflow-hidden p-2">
-                {/* Corner fold (bottom-right) */}
-                <div className="absolute bottom-0 right-0 border-b-[30px] border-l-[30px] border-r-0 border-t-0 border-b-black/10 border-l-transparent opacity-50 dark:border-b-white/10" />
-
-                {/* Content area */}
-                {editMode ? (
-                    <textarea
-                        ref={textareaRef}
-                        className="nodrag size-full resize-none overflow-auto border-none bg-transparent p-0 text-sm leading-relaxed text-gray-700 outline-none dark:text-gray-300"
-                        value={content}
-                        onChange={(e) => setContent(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                saveContent();
-                            }
-                        }}
-                        autoFocus
-                        placeholder="Type your note here..."
+                {focused && !readonly ? (
+                    <NodeResizer
+                        minWidth={200}
+                        minHeight={150}
+                        isVisible={selected}
+                        lineClassName="!border-pink-500"
+                        handleClassName="!h-3 !w-3 !bg-pink-500 !rounded-full"
                     />
-                ) : (
-                    <div className="h-full overflow-auto break-words text-sm leading-relaxed text-gray-700 dark:text-gray-300">
-                        {note.content ? (
-                            <ReactMarkdown
-                                remarkPlugins={
-                                    getIsOldSafari() ? [] : [remarkGfm]
-                                }
-                                rehypePlugins={[rehypeRaw]}
-                                components={{
-                                    h1: (props) => (
-                                        <h1
-                                            className="mb-1.5 mt-2 text-base font-bold first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    h2: (props) => (
-                                        <h2
-                                            className="mb-1 mt-2 text-[15px] font-bold first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    h3: (props) => (
-                                        <h3
-                                            className="mb-1 mt-1.5 text-sm font-bold first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    h4: (props) => (
-                                        <h4
-                                            className="mb-0.5 mt-1.5 text-sm font-semibold first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    h5: (props) => (
-                                        <h5
-                                            className="mb-0.5 mt-1.5 text-sm font-semibold first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    h6: (props) => (
-                                        <h6
-                                            className="mb-0.5 mt-1.5 text-sm font-medium first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    pre: (props) => (
-                                        <pre
-                                            className="my-1.5 overflow-auto rounded bg-black/5 p-1.5 first:mt-0 dark:bg-white/10"
-                                            {...props}
-                                        />
-                                    ),
-                                    code: (props) => {
-                                        const { className } = props;
-                                        const isInline = !className;
-                                        return isInline ? (
-                                            <code
-                                                className="rounded bg-black/10 px-1 py-0.5 font-mono text-xs dark:bg-white/15"
-                                                {...props}
-                                            />
-                                        ) : (
-                                            <code
-                                                className="font-mono text-xs"
-                                                {...props}
-                                            />
-                                        );
-                                    },
-                                    a: (props) => (
-                                        <a
-                                            className="font-medium text-blue-600 underline decoration-blue-600/50 hover:decoration-blue-600 dark:text-blue-400 dark:decoration-blue-400/50 dark:hover:decoration-blue-400"
-                                            {...props}
-                                        />
-                                    ),
-                                    ul: (props) => (
-                                        <ul
-                                            className="my-1 list-disc space-y-0.5 pl-5 first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    ol: (props) => (
-                                        <ol
-                                            className="my-1 list-decimal space-y-0.5 pl-5 first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    li: (props) => (
-                                        <li className="pl-0.5" {...props} />
-                                    ),
-                                    p: (props) => (
-                                        <p
-                                            className="my-1 first:mt-0"
-                                            {...props}
-                                        />
-                                    ),
-                                    blockquote: (props) => (
-                                        <blockquote
-                                            className="my-1.5 border-l-2 border-gray-400 pl-2 italic text-gray-600 first:mt-0 dark:border-gray-500 dark:text-gray-400"
-                                            {...props}
-                                        />
-                                    ),
-                                    hr: (props) => (
-                                        <hr
-                                            className="my-2 border-gray-300 first:mt-0 dark:border-gray-600"
-                                            {...props}
-                                        />
-                                    ),
-                                    table: (props) => (
-                                        <div className="my-1.5 overflow-auto first:mt-0">
-                                            <table
-                                                className="min-w-full border-collapse text-xs"
-                                                {...props}
-                                            />
-                                        </div>
-                                    ),
-                                    thead: (props) => (
-                                        <thead
-                                            className="bg-black/5 dark:bg-white/5"
-                                            {...props}
-                                        />
-                                    ),
-                                    th: (props) => (
-                                        <th
-                                            className="border border-gray-300 px-2 py-1 text-left font-semibold dark:border-gray-600"
-                                            {...props}
-                                        />
-                                    ),
-                                    td: (props) => (
-                                        <td
-                                            className="border border-gray-300 px-2 py-1 dark:border-gray-600"
-                                            {...props}
-                                        />
-                                    ),
-                                    strong: (props) => (
-                                        <strong
-                                            className="font-semibold"
-                                            {...props}
-                                        />
-                                    ),
-                                    em: (props) => (
-                                        <em className="italic" {...props} />
-                                    ),
-                                }}
-                            >
-                                {note.content}
-                            </ReactMarkdown>
-                        ) : (
-                            <div className="italic text-gray-500 dark:text-gray-400">
-                                Double-click to write (Markdown format)
-                            </div>
-                        )}
-                    </div>
-                )}
+                ) : null}
 
-                {/* Quick actions on hover */}
-                {!editMode && !readonly && (
-                    <div className="absolute right-2 top-2 flex gap-1 rounded bg-white/90 p-1 opacity-0 shadow-md transition-opacity group-hover/note:opacity-100 dark:bg-slate-800/90">
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0"
-                            onClick={enterEditMode}
-                        >
-                            <Pencil className="size-3.5" />
-                        </Button>
-                        <ColorPicker
-                            color={note.color}
-                            onChange={handleColorChange}
+                {/* Note body */}
+                <div className="group/note relative flex-1 overflow-hidden p-2">
+                    {/* Corner fold (bottom-right) */}
+                    <div className="absolute bottom-0 right-0 border-b-[30px] border-l-[30px] border-r-0 border-t-0 border-b-black/10 border-l-transparent opacity-50 dark:border-b-white/10" />
+
+                    {/* Content area */}
+                    {editMode ? (
+                        <textarea
+                            ref={textareaRef}
+                            className="nodrag size-full resize-none overflow-auto border-none bg-transparent p-0 text-sm leading-relaxed text-gray-700 outline-none dark:text-gray-300"
+                            value={content}
+                            onChange={(e) => setContent(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    saveContent();
+                                }
+                            }}
+                            autoFocus
+                            placeholder="Type your note here..."
                         />
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0 text-red-500 hover:text-red-700"
-                            onClick={handleDelete}
-                        >
-                            <Trash2 className="size-3.5" />
-                        </Button>
-                    </div>
-                )}
+                    ) : (
+                        <div className="h-full overflow-auto break-words text-sm leading-relaxed text-gray-700 dark:text-gray-300">
+                            {note.content ? (
+                                <ReactMarkdown
+                                    remarkPlugins={
+                                        getIsOldSafari() ? [] : [remarkGfm]
+                                    }
+                                    rehypePlugins={[rehypeRaw]}
+                                    components={{
+                                        h1: (props) => (
+                                            <h1
+                                                className="mb-1.5 mt-2 text-base font-bold first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        h2: (props) => (
+                                            <h2
+                                                className="mb-1 mt-2 text-[15px] font-bold first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        h3: (props) => (
+                                            <h3
+                                                className="mb-1 mt-1.5 text-sm font-bold first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        h4: (props) => (
+                                            <h4
+                                                className="mb-0.5 mt-1.5 text-sm font-semibold first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        h5: (props) => (
+                                            <h5
+                                                className="mb-0.5 mt-1.5 text-sm font-semibold first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        h6: (props) => (
+                                            <h6
+                                                className="mb-0.5 mt-1.5 text-sm font-medium first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        pre: (props) => (
+                                            <pre
+                                                className="my-1.5 overflow-auto rounded bg-black/5 p-1.5 first:mt-0 dark:bg-white/10"
+                                                {...props}
+                                            />
+                                        ),
+                                        code: (props) => {
+                                            const { className } = props;
+                                            const isInline = !className;
+                                            return isInline ? (
+                                                <code
+                                                    className="rounded bg-black/10 px-1 py-0.5 font-mono text-xs dark:bg-white/15"
+                                                    {...props}
+                                                />
+                                            ) : (
+                                                <code
+                                                    className="font-mono text-xs"
+                                                    {...props}
+                                                />
+                                            );
+                                        },
+                                        a: (props) => (
+                                            <a
+                                                className="font-medium text-blue-600 underline decoration-blue-600/50 hover:decoration-blue-600 dark:text-blue-400 dark:decoration-blue-400/50 dark:hover:decoration-blue-400"
+                                                {...props}
+                                            />
+                                        ),
+                                        ul: (props) => (
+                                            <ul
+                                                className="my-1 list-disc space-y-0.5 pl-5 first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        ol: (props) => (
+                                            <ol
+                                                className="my-1 list-decimal space-y-0.5 pl-5 first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        li: (props) => (
+                                            <li className="pl-0.5" {...props} />
+                                        ),
+                                        p: (props) => (
+                                            <p
+                                                className="my-1 first:mt-0"
+                                                {...props}
+                                            />
+                                        ),
+                                        blockquote: (props) => (
+                                            <blockquote
+                                                className="my-1.5 border-l-2 border-gray-400 pl-2 italic text-gray-600 first:mt-0 dark:border-gray-500 dark:text-gray-400"
+                                                {...props}
+                                            />
+                                        ),
+                                        hr: (props) => (
+                                            <hr
+                                                className="my-2 border-gray-300 first:mt-0 dark:border-gray-600"
+                                                {...props}
+                                            />
+                                        ),
+                                        table: (props) => (
+                                            <div className="my-1.5 overflow-auto first:mt-0">
+                                                <table
+                                                    className="min-w-full border-collapse text-xs"
+                                                    {...props}
+                                                />
+                                            </div>
+                                        ),
+                                        thead: (props) => (
+                                            <thead
+                                                className="bg-black/5 dark:bg-white/5"
+                                                {...props}
+                                            />
+                                        ),
+                                        th: (props) => (
+                                            <th
+                                                className="border border-gray-300 px-2 py-1 text-left font-semibold dark:border-gray-600"
+                                                {...props}
+                                            />
+                                        ),
+                                        td: (props) => (
+                                            <td
+                                                className="border border-gray-300 px-2 py-1 dark:border-gray-600"
+                                                {...props}
+                                            />
+                                        ),
+                                        strong: (props) => (
+                                            <strong
+                                                className="font-semibold"
+                                                {...props}
+                                            />
+                                        ),
+                                        em: (props) => (
+                                            <em className="italic" {...props} />
+                                        ),
+                                    }}
+                                >
+                                    {note.content}
+                                </ReactMarkdown>
+                            ) : (
+                                <div className="italic text-gray-500 dark:text-gray-400">
+                                    Double-click to write (Markdown format)
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Quick actions on hover */}
+                    {!editMode && !readonly && (
+                        <div className="absolute right-2 top-2 flex gap-1 rounded bg-white/90 p-1 opacity-0 shadow-md transition-opacity group-hover/note:opacity-100 dark:bg-slate-800/90">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="size-7 p-0"
+                                onClick={enterEditMode}
+                            >
+                                <Pencil className="size-3.5" />
+                            </Button>
+                            <ColorPicker
+                                color={note.color}
+                                onChange={handleColorChange}
+                            />
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="size-7 p-0 text-red-500 hover:text-red-700"
+                                onClick={handleDelete}
+                            >
+                                <Trash2 className="size-3.5" />
+                            </Button>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
