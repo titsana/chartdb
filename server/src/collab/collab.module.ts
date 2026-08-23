@@ -4,8 +4,12 @@ import { createPool } from '../db/pool';
 import { createHocuspocus } from './hocuspocus.provider';
 import { COLLAB_CONFIG, HOCUSPOCUS, PG_POOL } from './tokens';
 import { WsUpgradeService } from './ws-upgrade.service';
+import { AuthModule } from '../auth/auth.module';
+import { ENTRA_AUTH } from '../auth/tokens';
+import type { EntraAuthState } from '../auth/entra-auth-state';
 
 @Module({
+    imports: [AuthModule],
     providers: [
         { provide: COLLAB_CONFIG, useFactory: () => loadConfig() },
         {
@@ -16,9 +20,9 @@ import { WsUpgradeService } from './ws-upgrade.service';
         },
         {
             provide: HOCUSPOCUS,
-            useFactory: (pool: ReturnType<typeof createPool>) =>
-                createHocuspocus(pool),
-            inject: [PG_POOL],
+            useFactory: (pool: ReturnType<typeof createPool>, auth: EntraAuthState) =>
+                createHocuspocus(pool, auth),
+            inject: [PG_POOL, ENTRA_AUTH],
         },
         WsUpgradeService,
     ],

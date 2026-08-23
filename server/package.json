@@ -18,6 +18,8 @@
         "@nestjs/core": "^11.2.1",
         "@nestjs/platform-express": "^11.2.1",
         "dotenv": "^16.4.5",
+        "jsonwebtoken": "^9.0.3",
+        "jwks-rsa": "^4.1.0",
         "lib0": "^0.2.117",
         "pg": "^8.16.0",
         "reflect-metadata": "^0.2.2",
@@ -28,6 +30,7 @@
     },
     "devDependencies": {
         "@hocuspocus/provider": "^4.6.0",
+        "@types/jsonwebtoken": "^9.0.10",
         "@types/node": "^24.13.0",
         "@types/pg": "^8.15.0",
         "@types/ws": "^8.18.1",

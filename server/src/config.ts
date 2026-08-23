@@ -1,6 +1,16 @@
 import 'dotenv/config';
 
 /**
+ * Phase 7: real auth, opt-in via AUTH_MODE. §5.3/§9's "no real auth yet" /
+ * "anonymous access is an accepted risk" notes were true through Phase 6 —
+ * this supersedes them for anyone who sets AUTH_MODE=azure-ad.
+ * AUTH_MODE=public (the default — unset means public, matching every
+ * deploy before this phase) keeps today's behavior exactly:
+ * WEBSOCKET_ORIGIN_ALLOWLIST remains the only access control.
+ */
+export type AuthMode = 'azure-ad' | 'public';
+
+/**
  * Phase 3 (docs/design/realtime-collaboration.md §10): no real auth yet
  * (§5.3 — "Identity: no real auth"), so `WEBSOCKET_ORIGIN_ALLOWLIST` is the
  * one access control this phase actually has. §9 flags anonymous access as
@@ -13,6 +23,11 @@ export interface CollabConfig {
     databaseUrl: string;
     /** Empty allowlist means "allow every origin" (e.g. local dev with no .env set). */
     originAllowlist: string[];
+    authMode: AuthMode;
+    /** Only set (and only required) when authMode === 'azure-ad'. */
+    entraTenantId?: string;
+    /** Expected `aud` claim on the access token, e.g. `api://<client-id>`. */
+    entraApiAudience?: string;
 }
 
 function readAllowlist(raw: string | undefined): string[] {
@@ -23,6 +38,14 @@ function readAllowlist(raw: string | undefined): string[] {
         .filter((origin) => origin.length > 0);
 }
 
+function readAuthMode(raw: string | undefined): AuthMode {
+    if (!raw || raw === 'public') return 'public';
+    if (raw === 'azure-ad') return 'azure-ad';
+    throw new Error(
+        `AUTH_MODE must be "azure-ad" or "public" (or unset, which means "public") — got "${raw}"`
+    );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     const databaseUrl = env.DATABASE_URL;
     if (!databaseUrl) {
@@ -30,10 +53,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
             'DATABASE_URL is required (see server/.env.example) — Phase 3 has no in-memory-only mode.'
         );
     }
+
+    const authMode = readAuthMode(env.AUTH_MODE);
+    // Explicit AUTH_MODE=azure-ad with missing credentials fails the
+    // process at boot rather than silently degrading to open access —
+    // the whole point of making the toggle explicit (see the AskUserQuestion
+    // exchange this design came from) is that a misconfigured "azure-ad"
+    // should be loud, not quietly behave like "public".
+    if (authMode === 'azure-ad' && (!env.ENTRA_TENANT_ID || !env.ENTRA_API_AUDIENCE)) {
+        throw new Error(
+            'AUTH_MODE=azure-ad requires ENTRA_TENANT_ID and ENTRA_API_AUDIENCE (see server/.env.example).'
+        );
+    }
+
     return {
         port: env.PORT ? Number(env.PORT) : 1234,
         databaseUrl,
         originAllowlist: readAllowlist(env.WEBSOCKET_ORIGIN_ALLOWLIST),
+        authMode,
+        entraTenantId: env.ENTRA_TENANT_ID,
+        entraApiAudience: env.ENTRA_API_AUDIENCE,
     };
 }
 
