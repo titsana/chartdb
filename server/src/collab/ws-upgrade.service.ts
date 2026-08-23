@@ -37,7 +37,16 @@ export class WsUpgradeService implements OnModuleInit {
     private readonly logger = new Logger(WsUpgradeService.name);
 
     constructor(
-        private readonly httpAdapterHost: HttpAdapterHost,
+        // Explicit @Inject rather than relying on implicit type-based
+        // autowiring (design:paramtypes reflection) — found via `npm run
+        // dev` (tsx/esbuild) failing this exact param with "undefined
+        // dependency" while the compiled `dist/` build (real tsc) worked
+        // fine: esbuild's `emitDecoratorMetadata` support is incomplete
+        // and doesn't reliably emit this metadata for every param. Every
+        // other param here already used an explicit token for other
+        // reasons and never had this problem — matching that removes the
+        // dependency on that metadata for this one too.
+        @Inject(HttpAdapterHost) private readonly httpAdapterHost: HttpAdapterHost,
         @Inject(HOCUSPOCUS) private readonly hocuspocus: Hocuspocus,
         @Inject(COLLAB_CONFIG) private readonly config: CollabConfig,
         @Inject(PG_POOL) private readonly pool: Pool
