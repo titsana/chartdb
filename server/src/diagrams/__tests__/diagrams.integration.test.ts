@@ -109,7 +109,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
         const id = testDiagramId();
         try {
             const createRes = await fetch(
-                `http://localhost:${server.port}/diagrams`,
+                `http://localhost:${server.port}/api/diagrams`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -125,19 +125,19 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             expect(created).toMatchObject({ id, name: 'my diagram' });
 
             const getRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${id}`
+                `http://localhost:${server.port}/api/diagrams/${id}`
             );
             expect(getRes.status).toBe(200);
             expect(await getRes.json()).toMatchObject({ id, name: 'my diagram' });
 
             const listRes = await fetch(
-                `http://localhost:${server.port}/diagrams`
+                `http://localhost:${server.port}/api/diagrams`
             );
             const list = await listRes.json();
             expect(list.find((d: { id: string }) => d.id === id)).toBeTruthy();
 
             const patchRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${id}`,
+                `http://localhost:${server.port}/api/diagrams/${id}`,
                 {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -161,7 +161,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
                 databaseType: 'postgresql',
             });
             const first = await fetch(
-                `http://localhost:${server.port}/diagrams`,
+                `http://localhost:${server.port}/api/diagrams`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -171,7 +171,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             expect(first.status).toBe(201);
 
             const second = await fetch(
-                `http://localhost:${server.port}/diagrams`,
+                `http://localhost:${server.port}/api/diagrams`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -185,7 +185,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             expect(second.status).toBe(409);
 
             const getRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${id}`
+                `http://localhost:${server.port}/api/diagrams/${id}`
             );
             expect(await getRes.json()).toMatchObject({ name: 'first' });
         } finally {
@@ -199,13 +199,13 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
         try {
             expect(
                 (
-                    await fetch(`http://localhost:${server.port}/diagrams/${id}`)
+                    await fetch(`http://localhost:${server.port}/api/diagrams/${id}`)
                 ).status
             ).toBe(404);
             expect(
                 (
                     await fetch(
-                        `http://localhost:${server.port}/diagrams/${id}`,
+                        `http://localhost:${server.port}/api/diagrams/${id}`,
                         {
                             method: 'PATCH',
                             headers: { 'Content-Type': 'application/json' },
@@ -217,7 +217,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             expect(
                 (
                     await fetch(
-                        `http://localhost:${server.port}/diagrams/${id}`,
+                        `http://localhost:${server.port}/api/diagrams/${id}`,
                         { method: 'DELETE' }
                     )
                 ).status
@@ -232,7 +232,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
         const id = testDiagramId();
         const pool = createPool(loadConfig().databaseUrl);
         try {
-            await fetch(`http://localhost:${server.port}/diagrams`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -281,7 +281,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             await new Promise((resolve) => setTimeout(resolve, 200));
 
             const deleteRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${id}`,
+                `http://localhost:${server.port}/api/diagrams/${id}`,
                 { method: 'DELETE' }
             );
             expect(deleteRes.status).toBe(200);
@@ -302,7 +302,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
         const id = testDiagramId();
         const pool = createPool(loadConfig().databaseUrl);
         try {
-            await fetch(`http://localhost:${server.port}/diagrams`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -335,7 +335,7 @@ describe.skipIf(!databaseReachable)('Phase 4.5 — /diagrams REST API', () => {
             // row (and its cascaded yjs_updates/yjs_snapshots rows) goes
             // away must not be able to write its way back into existence.
             const deleteRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${id}`,
+                `http://localhost:${server.port}/api/diagrams/${id}`,
                 { method: 'DELETE' }
             );
             expect(deleteRes.status).toBe(200);

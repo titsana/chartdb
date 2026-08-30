@@ -28,14 +28,18 @@ import { ConfigJsController } from './config-js.controller';
         // __dirname) matches this repo's own integration-test convention
         // for "the server package's own directory", correct under both
         // `tsx watch` (dev) and the compiled dist/ build.
+        //
+        // '/api/{*splat}' covers every REST module (diagrams,
+        // diagram-groups, and anything added later) in one entry — see
+        // main.ts's setGlobalPrefix comment for why they all live under
+        // /api now: the client router has pages whose paths collided with
+        // these same REST paths (e.g. /diagrams/:id), so a browser refresh
+        // on those pages used to hit this controller instead of
+        // index.html. health/config.js stay unprefixed and excluded here
+        // individually since they're exempt from that global prefix too.
         ServeStaticModule.forRoot({
             rootPath: join(process.cwd(), 'public'),
-            exclude: [
-                '/health/{*splat}',
-                '/diagrams/{*splat}',
-                '/diagram-groups/{*splat}',
-                '/config.js',
-            ],
+            exclude: ['/health/{*splat}', '/api/{*splat}', '/config.js'],
         }),
     ],
     controllers: [HealthController, ConfigJsController],

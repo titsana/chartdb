@@ -102,7 +102,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
         const id = testGroupId();
         try {
             const createRes = await fetch(
-                `http://localhost:${server.port}/diagram-groups`,
+                `http://localhost:${server.port}/api/diagram-groups`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -116,7 +116,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             });
 
             const listRes = await fetch(
-                `http://localhost:${server.port}/diagram-groups`
+                `http://localhost:${server.port}/api/diagram-groups`
             );
             const list = await listRes.json();
             expect(
@@ -124,7 +124,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             ).toMatchObject({ name: 'my group' });
 
             const patchRes = await fetch(
-                `http://localhost:${server.port}/diagram-groups/${id}`,
+                `http://localhost:${server.port}/api/diagram-groups/${id}`,
                 {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -137,13 +137,13 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             });
 
             const deleteRes = await fetch(
-                `http://localhost:${server.port}/diagram-groups/${id}`,
+                `http://localhost:${server.port}/api/diagram-groups/${id}`,
                 { method: 'DELETE' }
             );
             expect(deleteRes.status).toBe(200);
 
             const afterDelete = await fetch(
-                `http://localhost:${server.port}/diagram-groups`
+                `http://localhost:${server.port}/api/diagram-groups`
             );
             expect(
                 (await afterDelete.json()).find(
@@ -161,7 +161,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
         try {
             const body = JSON.stringify({ id, name: 'first' });
             const first = await fetch(
-                `http://localhost:${server.port}/diagram-groups`,
+                `http://localhost:${server.port}/api/diagram-groups`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -171,7 +171,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             expect(first.status).toBe(201);
 
             const second = await fetch(
-                `http://localhost:${server.port}/diagram-groups`,
+                `http://localhost:${server.port}/api/diagram-groups`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -191,7 +191,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             expect(
                 (
                     await fetch(
-                        `http://localhost:${server.port}/diagram-groups/${id}`,
+                        `http://localhost:${server.port}/api/diagram-groups/${id}`,
                         {
                             method: 'PATCH',
                             headers: { 'Content-Type': 'application/json' },
@@ -203,7 +203,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             expect(
                 (
                     await fetch(
-                        `http://localhost:${server.port}/diagram-groups/${id}`,
+                        `http://localhost:${server.port}/api/diagram-groups/${id}`,
                         { method: 'DELETE' }
                     )
                 ).status
@@ -218,12 +218,12 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
         const groupId = testGroupId();
         const diagramId = testDiagramId();
         try {
-            await fetch(`http://localhost:${server.port}/diagram-groups`, {
+            await fetch(`http://localhost:${server.port}/api/diagram-groups`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: groupId, name: 'a group' }),
             });
-            await fetch(`http://localhost:${server.port}/diagrams`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -234,7 +234,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             });
 
             const patchRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${diagramId}`,
+                `http://localhost:${server.port}/api/diagrams/${diagramId}`,
                 {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -245,7 +245,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             expect(await patchRes.json()).toMatchObject({ groupId });
 
             const getRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${diagramId}`
+                `http://localhost:${server.port}/api/diagrams/${diagramId}`
             );
             expect(await getRes.json()).toMatchObject({ groupId });
         } finally {
@@ -257,7 +257,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
         const server = await startServerProcess();
         const diagramId = testDiagramId();
         try {
-            await fetch(`http://localhost:${server.port}/diagrams`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -268,7 +268,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
             });
 
             const patchRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${diagramId}`,
+                `http://localhost:${server.port}/api/diagrams/${diagramId}`,
                 {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -279,7 +279,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
 
             // Confirm this was really refused, not partially applied.
             const getRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${diagramId}`
+                `http://localhost:${server.port}/api/diagrams/${diagramId}`
             );
             expect((await getRes.json()).groupId).toBeNull();
         } finally {
@@ -292,12 +292,12 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
         const groupId = testGroupId();
         const diagramId = testDiagramId();
         try {
-            await fetch(`http://localhost:${server.port}/diagram-groups`, {
+            await fetch(`http://localhost:${server.port}/api/diagram-groups`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: groupId, name: 'to delete' }),
             });
-            await fetch(`http://localhost:${server.port}/diagrams`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -306,20 +306,20 @@ describe.skipIf(!databaseReachable)('Phase 7 — /diagram-groups REST API', () =
                     databaseType: 'postgresql',
                 }),
             });
-            await fetch(`http://localhost:${server.port}/diagrams/${diagramId}`, {
+            await fetch(`http://localhost:${server.port}/api/diagrams/${diagramId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ groupId }),
             });
 
             const deleteRes = await fetch(
-                `http://localhost:${server.port}/diagram-groups/${groupId}`,
+                `http://localhost:${server.port}/api/diagram-groups/${groupId}`,
                 { method: 'DELETE' }
             );
             expect(deleteRes.status).toBe(200);
 
             const getRes = await fetch(
-                `http://localhost:${server.port}/diagrams/${diagramId}`
+                `http://localhost:${server.port}/api/diagrams/${diagramId}`
             );
             const diagram = await getRes.json();
             // The diagram itself survives — only its group membership is

@@ -144,7 +144,12 @@ async function apiFetch<T>(
         if (AUTH_MODE === 'azure-ad') {
             headers.Authorization = `Bearer ${await getEntraAccessToken()}`;
         }
-        const res = await fetch(`${COLLAB_API_URL}${path}`, {
+        // /api prefix: the server namespaces every REST route under /api
+        // (server/src/main.ts) precisely because the client router also
+        // has pages at these same paths (e.g. /diagrams/:id) — without
+        // the prefix, a page refresh there would hit this same URL and
+        // the server couldn't tell that apart from this fetch() call.
+        const res = await fetch(`${COLLAB_API_URL}/api${path}`, {
             headers,
             signal: controller.signal,
             ...init,

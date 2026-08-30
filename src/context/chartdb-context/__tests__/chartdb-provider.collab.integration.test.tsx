@@ -136,7 +136,7 @@ async function startServerProcessOnPort(
  * otherwise relying on.
  */
 async function registerTestDiagram(port: number, diagramId: string) {
-    const res = await fetch(`http://localhost:${port}/diagrams`, {
+    const res = await fetch(`http://localhost:${port}/api/diagrams`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -100,7 +100,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — AUTH_MODE=azure-ad', () => {
             expect(health.status).toBe(200);
 
             const diagrams = await fetch(
-                `http://localhost:${server.port}/diagrams`
+                `http://localhost:${server.port}/api/diagrams`
             );
             expect(diagrams.status).toBe(401);
         } finally {
@@ -115,7 +115,7 @@ describe.skipIf(!databaseReachable)('Phase 7 — AUTH_MODE=azure-ad', () => {
             ENTRA_CLIENT_ID: 'test-client-id',
         });
         try {
-            const res = await fetch(`http://localhost:${server.port}/diagrams`, {
+            const res = await fetch(`http://localhost:${server.port}/api/diagrams`, {
                 headers: { Authorization: 'Bearer not-a-jwt' },
             });
             expect(res.status).toBe(401);
