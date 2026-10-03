@@ -11,6 +11,7 @@ import {
     yDocToDiagram,
 } from '../collab/y-diagram';
 import type { DBField, DBTable } from '../collab/y-diagram.types';
+import type { McpUser } from '../mcp-auth/entra-broker';
 
 // Same shape as the client's generateId (12 lowercase alphanumerics).
 function generateId(): string {
@@ -88,6 +89,7 @@ function toError(message: string) {
  */
 async function withDiagramDoc<T>(
     hocuspocus: Hocuspocus,
+    user: McpUser | undefined,
     diagramId: string,
     fn: (
         conn: Awaited<ReturnType<Hocuspocus['openDirectConnection']>>
@@ -95,6 +97,7 @@ async function withDiagramDoc<T>(
 ): Promise<T> {
     const conn = await hocuspocus.openDirectConnection(diagramId, {
         source: 'mcp',
+        user: user ?? null,
     });
     try {
         return await fn(conn);
@@ -103,7 +106,11 @@ async function withDiagramDoc<T>(
     }
 }
 
-export function createMcpServer(pool: Pool, hocuspocus: Hocuspocus): McpServer {
+export function createMcpServer(
+    pool: Pool,
+    hocuspocus: Hocuspocus,
+    user?: McpUser
+): McpServer {
     const server = new McpServer({ name: 'chartdb', version: '0.1.0' });
 
     server.registerTool(
@@ -122,7 +129,7 @@ export function createMcpServer(pool: Pool, hocuspocus: Hocuspocus): McpServer {
         async ({ diagramId }) => {
             const meta = await getDiagram(pool, diagramId);
             if (!meta) return toError(`diagram ${diagramId} not found`);
-            return withDiagramDoc(hocuspocus, diagramId, async (conn) => {
+            return withDiagramDoc(hocuspocus, user, diagramId, async (conn) => {
                 const content = yDocToDiagram(conn.document!);
                 return text({ ...content, ...meta });
             });
@@ -142,6 +149,7 @@ export function createMcpServer(pool: Pool, hocuspocus: Hocuspocus): McpServer {
 
             const result = await withDiagramDoc(
                 hocuspocus,
+                user,
                 input.diagramId,
                 async (conn) => {
                     const tablesMap = conn.document!.getMap<unknown>('tables');

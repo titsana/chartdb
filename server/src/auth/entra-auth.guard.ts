@@ -6,7 +6,9 @@ import {
     UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { IS_PUBLIC_KEY } from './public.decorator';
+import { getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { ACCEPTS_MCP_TOKEN_KEY, IS_PUBLIC_KEY } from './public.decorator';
+import type { McpUser } from '../mcp-auth/entra-broker';
 import { ENTRA_AUTH } from './tokens';
 import type { EntraAuthState } from './entra-auth-state';
 
@@ -15,6 +17,8 @@ import type { EntraAuthState } from './entra-auth-state';
 interface RequestLike {
     headers: { authorization?: string };
     entraUser?: unknown;
+    /** Set on @AcceptsMcpToken() routes: who is calling, for tool context. */
+    mcpUser?: McpUser;
 }
 
 @Injectable()
@@ -42,20 +46,62 @@ export class EntraAuthGuard implements CanActivate {
         if (this.auth.authMode === 'public') return true;
 
         const req = context.switchToHttp().getRequest<RequestLike>();
+        const acceptsMcpToken = this.reflector.getAllAndOverride<boolean>(
+            ACCEPTS_MCP_TOKEN_KEY,
+            [context.getHandler(), context.getClass()]
+        );
         const header = req.headers.authorization;
         const token = header?.startsWith('Bearer ')
             ? header.slice('Bearer '.length)
             : undefined;
-        if (!token) {
-            throw new UnauthorizedException('missing bearer token');
+
+        const mcpBroker = acceptsMcpToken ? this.auth.mcpBroker : null;
+        const reject = (message: string): never => {
+            // Tells MCP clients where to start the browser OAuth flow.
+            if (mcpBroker) {
+                const metadataUrl = getOAuthProtectedResourceMetadataUrl(
+                    mcpBroker.broker.resourceUrl
+                );
+                context
+                    .switchToHttp()
+                    .getResponse<{
+                        setHeader(name: string, value: string): void;
+                    }>()
+                    .setHeader(
+                        'WWW-Authenticate',
+                        `Bearer error="invalid_token", resource_metadata="${metadataUrl}"`
+                    );
+            }
+            throw new UnauthorizedException(message);
+        };
+        if (!token) reject('missing bearer token');
+
+        if (mcpBroker) {
+            try {
+                const info = await mcpBroker.broker.verifyAccessToken(token!);
+                req.mcpUser = info.extra as unknown as McpUser;
+                return true;
+            } catch {
+                // not a broker token — fall through to Entra (rollout period)
+            }
         }
 
         try {
             // verify is guaranteed non-null when authMode === 'azure-ad'
             // (see EntraAuthState's doc comment).
-            req.entraUser = await this.auth.verify!(token);
+            const payload = await this.auth.verify!(token!);
+            req.entraUser = payload;
+            if (acceptsMcpToken && typeof payload.oid === 'string') {
+                req.mcpUser = {
+                    oid: payload.oid,
+                    upn:
+                        typeof payload.preferred_username === 'string'
+                            ? payload.preferred_username
+                            : null,
+                };
+            }
         } catch {
-            throw new UnauthorizedException('invalid token');
+            reject('invalid token');
         }
         return true;
     }

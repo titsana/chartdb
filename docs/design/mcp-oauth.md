@@ -1,6 +1,6 @@
 # Design: Browser OAuth login for the MCP endpoint
 
-Status: approved (D1–D9 as proposed, 2026-10-03) · Branch: `feat/mcp-server`
+Status: implemented, pending staging test with real Entra (D1–D9 as proposed, 2026-10-03) · Branch: `feat/mcp-server`
 
 ## 1. Goal
 
@@ -115,12 +115,13 @@ We don't use `ProxyOAuthServerProvider`, because it forwards DCR and `resource` 
 
 ## 6. Config
 
-New env vars, all required when `AUTH_MODE=azure-ad`. `loadConfig` throws at boot if any is missing:
+New env vars. The broker is **opt-in**: it's enabled only when `AUTH_MODE=azure-ad` and both vars are set, so an existing deploy without them keeps booting (MCP then accepts Entra tokens only). Setting exactly one of them fails boot:
 
 | Var | Purpose |
 |---|---|
 | `PUBLIC_URL` | External base URL, e.g. `https://chartdb.example.com`. It's the issuer and resource. It can't be derived from the request because the server sits behind Cloudflare |
 | `ENTRA_CLIENT_SECRET` | Confidential-client secret for the code exchange in `/oauth/callback` |
+| `ENTRA_AUTHORITY` | Optional, **tests only**: overrides the OIDC authority (default `https://login.microsoftonline.com/<tenant>/v2.0`). Must be https when `PUBLIC_URL` is |
 
 One-time Entra admin steps:
 

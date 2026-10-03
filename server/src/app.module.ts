@@ -41,7 +41,18 @@ import { ConfigJsController } from './config-js.controller';
         // individually since they're exempt from that global prefix too.
         ServeStaticModule.forRoot({
             rootPath: join(process.cwd(), 'public'),
-            exclude: ['/health/{*splat}', '/api/{*splat}', '/config.js'],
+            exclude: [
+                '/health/{*splat}',
+                '/api/{*splat}',
+                '/config.js',
+                // MCP OAuth broker routes (mcp-auth/oauth-router.ts)
+                '/.well-known/{*splat}',
+                '/authorize',
+                '/token',
+                '/register',
+                '/revoke',
+                '/oauth/{*splat}',
+            ],
         }),
     ],
     controllers: [HealthController, ConfigJsController],

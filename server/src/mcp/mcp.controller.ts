@@ -13,6 +13,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
 import { HOCUSPOCUS, PG_POOL } from '../collab/tokens';
 import { createMcpServer } from './mcp-tools';
+import { AcceptsMcpToken } from '../auth/public.decorator';
+import type { McpUser } from '../mcp-auth/entra-broker';
 
 /**
  * MCP (Streamable HTTP, stateless) at POST /api/mcp. A fresh server and
@@ -22,6 +24,7 @@ import { createMcpServer } from './mcp-tools';
  * since Hocuspocus direct connections skip `onAuthenticate`. Never mark
  * this @Public().
  */
+@AcceptsMcpToken()
 @Controller('mcp')
 export class McpController {
     constructor(
@@ -31,10 +34,10 @@ export class McpController {
 
     @Post()
     async handle(
-        @Req() req: IncomingMessage & { body?: unknown },
+        @Req() req: IncomingMessage & { body?: unknown; mcpUser?: McpUser },
         @Res() res: ServerResponse
     ): Promise<void> {
-        const server = createMcpServer(this.pool, this.hocuspocus);
+        const server = createMcpServer(this.pool, this.hocuspocus, req.mcpUser);
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
         });

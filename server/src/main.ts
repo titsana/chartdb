@@ -2,6 +2,9 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { loadConfig } from './config';
+import { ENTRA_AUTH } from './auth/tokens';
+import type { EntraAuthState } from './auth/entra-auth-state';
+import { createMcpOAuthRouter } from './mcp-auth/oauth-router';
 
 async function bootstrap(): Promise<void> {
     const config = loadConfig();
@@ -27,10 +30,15 @@ async function bootstrap(): Promise<void> {
     // isOriginAllowed's "empty allowlist" behavior for WS.
     app.enableCors({
         origin:
-            config.originAllowlist.length === 0
-                ? true
-                : config.originAllowlist,
+            config.originAllowlist.length === 0 ? true : config.originAllowlist,
     });
+    // MCP OAuth broker (docs/design/mcp-oauth.md): raw Express routes at the
+    // root, outside Nest's /api prefix and guard — OAuth discovery paths are
+    // fixed by spec. Excluded from the SPA fallback in app.module.ts.
+    const { mcpBroker } = app.get<EntraAuthState>(ENTRA_AUTH);
+    if (mcpBroker) {
+        app.use(createMcpOAuthRouter(mcpBroker.broker, mcpBroker.upstream));
+    }
     await app.listen(config.port);
     // eslint-disable-next-line no-console
     console.log(`chartdb-collab-server listening on :${config.port}`);

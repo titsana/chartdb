@@ -97,6 +97,58 @@ CREATE TABLE IF NOT EXISTS collab_diagram_groups (
 -- already violate the constraint, unlike that migration's history.
 ALTER TABLE collab_diagrams
     ADD COLUMN IF NOT EXISTS group_id TEXT REFERENCES collab_diagram_groups (id) ON DELETE SET NULL;
+
+-- MCP OAuth broker (docs/design/mcp-oauth.md). Only used when the broker is
+-- enabled, but always created: empty tables cost nothing and keep migrate
+-- unconditional.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+    client_id   TEXT PRIMARY KEY,
+    client_info JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per /authorize attempt: consent -> upstream (at Entra) -> code
+-- (our one-time code issued) -> used.
+CREATE TABLE IF NOT EXISTS mcp_oauth_requests (
+    id             TEXT PRIMARY KEY,
+    client_id      TEXT NOT NULL REFERENCES mcp_oauth_clients (client_id) ON DELETE CASCADE,
+    redirect_uri   TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    client_state   TEXT,
+    status         TEXT NOT NULL,
+    csrf           TEXT NOT NULL,
+    entra_state    TEXT UNIQUE,
+    entra_nonce    TEXT,
+    entra_verifier TEXT,
+    code_hash      TEXT UNIQUE,
+    oid            TEXT,
+    upn            TEXT,
+    expires_at     TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_consents (
+    oid         TEXT NOT NULL,
+    client_id   TEXT NOT NULL REFERENCES mcp_oauth_clients (client_id) ON DELETE CASCADE,
+    approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (oid, client_id)
+);
+
+-- Opaque tokens, stored only as SHA-256 hashes. A refresh token and every
+-- token minted from it share family_id; family_expires_at is the 30-day
+-- absolute cap from the original login.
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+    token_hash        TEXT PRIMARY KEY,
+    kind              TEXT NOT NULL,
+    family_id         TEXT NOT NULL,
+    client_id         TEXT NOT NULL REFERENCES mcp_oauth_clients (client_id) ON DELETE CASCADE,
+    oid               TEXT NOT NULL,
+    upn               TEXT,
+    expires_at        TIMESTAMPTZ NOT NULL,
+    family_expires_at TIMESTAMPTZ NOT NULL,
+    used_at           TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_family_idx ON mcp_oauth_tokens (family_id);
+CREATE INDEX IF NOT EXISTS mcp_oauth_tokens_oid_idx ON mcp_oauth_tokens (oid);
 `;
 
 /**

@@ -110,3 +110,36 @@ claude mcp add-json -s user chartdb '{"type":"http","url":"https://<host>/api/mc
 
 The `mp` plugin in the Moveplus claude-plugins marketplace ships the same
 helper and server entry, so installing it replaces this step.
+
+### Browser sign-in for MCP (OAuth broker)
+
+With the broker enabled, MCP clients sign in through the browser like any
+OAuth MCP server: no `az`, no `headersHelper`. Run `/mcp` in Claude Code,
+pick `chartdb`, choose Authenticate, approve the ChartDB consent page, and
+sign in with Microsoft. Design and security notes:
+`docs/design/mcp-oauth.md`.
+
+One-time setup:
+
+1. App registration → **Authentication** → **Add a platform** → **Web** →
+   redirect URI `https://<host>/oauth/callback`. Keep the existing SPA entry.
+2. **Certificates & secrets** → new client secret. Note its expiry date:
+   MCP sign-in breaks when it expires.
+3. Deploy with `PUBLIC_URL=https://<host>` and `ENTRA_CLIENT_SECRET=<secret>`
+   (both, or neither to leave the broker off).
+
+Then in Claude Code, the server needs only its URL:
+
+```bash
+claude mcp add --transport http chartdb https://<host>/api/mcp
+```
+
+Revoke someone's MCP access immediately (otherwise it ends within 30 days
+of their last sign-in):
+
+```sql
+DELETE FROM mcp_oauth_tokens WHERE oid = '<entra object id>';
+```
+
+While both paths exist, `/api/mcp` also accepts Entra tokens from the `az`
+helper above.

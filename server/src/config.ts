@@ -34,6 +34,16 @@ export interface CollabConfig {
      * URI is left at its default `api://<client-id>` shape — true for
      * every deploy this codebase has configured so far. */
     entraClientId?: string;
+    /** Set iff the MCP OAuth broker is enabled (docs/design/mcp-oauth.md). */
+    mcpOAuth?: McpOAuthConfig;
+}
+
+export interface McpOAuthConfig {
+    /** External base URL, e.g. https://chartdb.example.com. Issuer + resource. */
+    publicUrl: URL;
+    entraClientSecret: string;
+    /** OIDC authority the broker sends users to. Overridable for tests only. */
+    entraAuthority: string;
 }
 
 function readAllowlist(raw: string | undefined): string[] {
@@ -52,6 +62,46 @@ function readAuthMode(raw: string | undefined): AuthMode {
     );
 }
 
+/**
+ * The broker is opt-in: enabled only when AUTH_MODE=azure-ad and BOTH
+ * PUBLIC_URL and ENTRA_CLIENT_SECRET are set, so an existing deploy without
+ * them keeps booting (MCP then accepts Entra tokens only). Exactly one of
+ * them set is a misconfiguration and fails boot.
+ */
+function readMcpOAuth(
+    env: NodeJS.ProcessEnv,
+    authMode: AuthMode
+): McpOAuthConfig | undefined {
+    const { PUBLIC_URL, ENTRA_CLIENT_SECRET } = env;
+    if (authMode !== 'azure-ad' || (!PUBLIC_URL && !ENTRA_CLIENT_SECRET)) {
+        return undefined;
+    }
+    if (!PUBLIC_URL || !ENTRA_CLIENT_SECRET) {
+        throw new Error(
+            'MCP OAuth needs both PUBLIC_URL and ENTRA_CLIENT_SECRET (or neither, to disable it).'
+        );
+    }
+    const publicUrl = new URL(PUBLIC_URL);
+    // ENTRA_AUTHORITY decides which identity provider the broker trusts.
+    // Test only: integration tests point it at a fake OIDC server.
+    const entraAuthority =
+        env.ENTRA_AUTHORITY ??
+        `https://login.microsoftonline.com/${env.ENTRA_TENANT_ID}/v2.0`;
+    if (
+        publicUrl.protocol === 'https:' &&
+        !entraAuthority.startsWith('https://')
+    ) {
+        throw new Error(
+            'ENTRA_AUTHORITY must be https when PUBLIC_URL is https.'
+        );
+    }
+    return {
+        publicUrl,
+        entraClientSecret: ENTRA_CLIENT_SECRET,
+        entraAuthority,
+    };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     const databaseUrl = env.DATABASE_URL;
     if (!databaseUrl) {
@@ -66,13 +116,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollabConfig {
     // the whole point of making the toggle explicit (see the AskUserQuestion
     // exchange this design came from) is that a misconfigured "azure-ad"
     // should be loud, not quietly behave like "public".
-    if (authMode === 'azure-ad' && (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID)) {
+    if (
+        authMode === 'azure-ad' &&
+        (!env.ENTRA_TENANT_ID || !env.ENTRA_CLIENT_ID)
+    ) {
         throw new Error(
             'AUTH_MODE=azure-ad requires ENTRA_TENANT_ID and ENTRA_CLIENT_ID (see server/.env.example).'
         );
     }
 
     return {
+        mcpOAuth: readMcpOAuth(env, authMode),
         port: env.PORT ? Number(env.PORT) : 1234,
         databaseUrl,
         originAllowlist: readAllowlist(env.WEBSOCKET_ORIGIN_ALLOWLIST),
