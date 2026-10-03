@@ -4,10 +4,11 @@ import { Public } from './auth/public.decorator';
 // Client-facing var names only (no VITE_ prefix — window.env bypasses
 // Vite's build-time env entirely, same convention src/lib/env.ts already
 // uses for every window.env.* read).
+// Never add a secret here: /config.js is @Public(), so every value is
+// readable by anyone who can reach the server. OPENAI_API_KEY used to be
+// listed (upstream ChartDB calls OpenAI from the browser); removed, which
+// turns off AI SQL export.
 const CLIENT_ENV_VARS = [
-    'OPENAI_API_KEY',
-    'OPENAI_API_ENDPOINT',
-    'LLM_MODEL_NAME',
     'HIDE_CHARTDB_CLOUD',
     'DISABLE_ANALYTICS',
     'COLLAB_WS_URL',

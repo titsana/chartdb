@@ -80,6 +80,7 @@ describe.skipIf(!databaseReachable)('GET /config.js', () => {
             AUTH_MODE: 'public',
             HIDE_CHARTDB_CLOUD: 'true',
             COLLAB_WS_URL: 'wss://example.test',
+            OPENAI_API_KEY: 'sk-test-must-not-leak',
         });
         try {
             const res = await fetch(`http://localhost:${server.port}/config.js`);
@@ -99,7 +100,11 @@ describe.skipIf(!databaseReachable)('GET /config.js', () => {
             expect(body).toContain('"COLLAB_WS_URL":"wss://example.test"');
             // Never configured in this test — must come through as "",
             // not "undefined" or a missing key.
-            expect(body).toContain('"OPENAI_API_KEY":""');
+            expect(body).toContain('"DISABLE_ANALYTICS":""');
+            // /config.js is public: a secret set on the server must never
+            // appear in it.
+            expect(body).not.toContain('OPENAI_API_KEY');
+            expect(body).not.toContain('sk-test-must-not-leak');
         } finally {
             await server.stop();
         }

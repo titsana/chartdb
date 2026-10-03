@@ -6,7 +6,7 @@
 # separate, explicitly-named file so nothing about that pipeline changes
 # just by this file existing.
 #
-# Runtime config (OPENAI_API_KEY, AUTH_MODE, ENTRA_*, etc.) still works the
+# Runtime config (AUTH_MODE, ENTRA_*, etc. — never secrets, it's public) still works the
 # same way the old nginx image's config.js did — reconfigurable via
 # container env vars with no rebuild — just served by NestJS itself now
 # (see server/src/config-js.controller.ts) instead of nginx's envsubst.
