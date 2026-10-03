@@ -1,2 +1,3 @@
 #!/bin/sh
 npm run lint || { echo "lint failed, please run \"npm run lint:fix\" to fix the errors." ; exit 1; }
+node server/scripts/sync-y-diagram.mjs && git add server/src/collab/y-diagram.ts || exit 1

@@ -5,6 +5,7 @@ import { CollabModule } from './collab/collab.module';
 import { DiagramsModule } from './diagrams/diagrams.module';
 import { DiagramGroupsModule } from './diagram-groups/diagram-groups.module';
 import { AuthModule } from './auth/auth.module';
+import { McpModule } from './mcp/mcp.module';
 import { HealthController } from './health.controller';
 import { ConfigJsController } from './config-js.controller';
 
@@ -14,6 +15,7 @@ import { ConfigJsController } from './config-js.controller';
         CollabModule,
         DiagramsModule,
         DiagramGroupsModule,
+        McpModule,
         // Single-container deploy (docs/design/realtime-collaboration.md
         // §7): serves the client's built `dist/` (copied to `public/`
         // alongside this compiled server — see Dockerfile.combined) so
