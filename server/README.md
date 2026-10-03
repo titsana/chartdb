@@ -99,9 +99,14 @@ az login --tenant <ENTRA_TENANT_ID>
 ```
 
 Then add the server to Claude Code with `scripts/mcp-entra-headers.sh` as
-its `headersHelper` (absolute path; Claude Code re-runs it on every
-connect and after a 401, so token expiry is handled):
+its `headersHelper` (absolute path). It takes no arguments: it reads
+`AUTH_MODE`/`ENTRA_CLIENT_ID`/`ENTRA_TENANT_ID` from the server's public
+`/config.js`, and Claude Code re-runs it on every connect and after a 401,
+so token expiry is handled:
 
 ```bash
-claude mcp add-json chartdb '{"type":"http","url":"https://<host>/api/mcp","headersHelper":"/abs/path/to/server/scripts/mcp-entra-headers.sh <ENTRA_CLIENT_ID> <ENTRA_TENANT_ID>"}'
+claude mcp add-json -s user chartdb '{"type":"http","url":"https://<host>/api/mcp","headersHelper":"/abs/path/to/server/scripts/mcp-entra-headers.sh"}'
 ```
+
+The `mp` plugin in the Moveplus claude-plugins marketplace ships the same
+helper and server entry, so installing it replaces this step.
