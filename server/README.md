@@ -70,9 +70,11 @@ in `src/config.ts` for the reasoning and the trade-off it accepts.
 
 Stateless Streamable HTTP MCP server. Tools: `list_diagrams`,
 `create_diagram`, `get_diagram` (summary for diagrams over 30 tables
-unless `tableNames` is given), `upsert_table` (fields and indexes),
-`remove_table`, `add_relationship`, `remove_relationship`. Tools edit the
-live Y.Doc, so open browsers see changes immediately.
+unless `tableNames` is given), `upsert_table`, `add_field`,
+`update_field`, `remove_field`, `remove_table`, `add_relationship`,
+`remove_relationship`. Tables and columns are addressed by name; output is
+compact JSON with only non-default values, in the same shape the input
+takes. Tools edit the live Y.Doc, so open browsers see changes immediately.
 
 ### `AUTH_MODE=public`
 

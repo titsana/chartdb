@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import type { Hocuspocus } from '@hocuspocus/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Pool } from 'pg';
@@ -12,7 +11,6 @@ import {
     touchDiagram,
 } from '../db/diagrams';
 import {
-    readTableItem,
     readTables,
     removeItemFromCollection,
     removeItemsReferencing,
@@ -27,133 +25,49 @@ import type {
     DBTable,
 } from '../collab/y-diagram.types';
 import type { McpUser } from '../mcp-auth/entra-broker';
-
-// Same shape as the client's generateId (12 lowercase alphanumerics).
-function generateId(): string {
-    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    return Array.from(randomBytes(12), (b) => alphabet[b % 36]).join('');
-}
+import {
+    applyFieldChanges,
+    compactTable,
+    describeRelationship,
+    fieldChanges,
+    fieldFromSpec,
+    fieldSpec,
+    findTable,
+    generateId,
+    qualifiedName,
+    relationshipLine,
+} from './compact';
 
 // ponytail: the client's createTable default color, duplicated rather than
 // shared — one string, not worth a cross-package import.
 const DEFAULT_TABLE_COLOR = '#8eb7ff';
 
-const fieldInput = z.object({
-    id: z
-        .string()
-        .optional()
-        .describe('Existing field id to keep; omit for a new field'),
-    name: z.string().min(1),
-    // Also accepts get_diagram's {id, name} form, so a field read back
-    // from get_diagram can be passed through unchanged.
-    type: z
-        .union([
-            z.string().min(1),
-            z.object({ name: z.string().min(1) }).transform((t) => t.name),
-        ])
-        .describe('SQL type name, e.g. "uuid", "varchar"'),
-    primaryKey: z.boolean().default(false),
-    unique: z.boolean().default(false),
-    nullable: z.boolean().default(true),
-    characterMaximumLength: z.string().nullish(),
-    default: z.string().nullish(),
-    comments: z.string().nullish(),
-});
-
-const upsertTableInput = {
-    diagramId: z.string(),
-    tableId: z
-        .string()
-        .optional()
-        .describe('Existing table id to replace; omit to create a new table'),
-    name: z.string().min(1),
-    schema: z.string().nullish(),
-    fields: z
-        .array(fieldInput)
-        .min(1)
-        .describe(
-            'The full, ordered field list. Fields of an existing table not listed here are removed.'
-        ),
-    x: z.number().optional(),
-    y: z.number().optional(),
-    comments: z.string().nullish(),
-    indexes: z
-        .array(
-            z.object({
-                name: z.string().min(1),
-                fieldNames: z.array(z.string().min(1)).min(1),
-                unique: z.boolean().default(false),
-            })
-        )
-        .optional()
-        .describe(
-            'Full list of (non primary key) indexes. Omit to keep the current ones; [] removes them all.'
-        ),
+// Mirrors the client's defaultSchemas (src/lib/data/default-schemas.ts), so
+// a table created here gets the same schema as one created in the UI.
+const DEFAULT_SCHEMAS: Record<string, string> = {
+    postgresql: 'public',
+    sql_server: 'dbo',
+    clickhouse: 'default',
+    cockroachdb: 'public',
 };
 
 /** Above this many tables, get_diagram without tableNames returns a summary. */
 const FULL_DETAIL_MAX_TABLES = 30;
 
-// ChartDB keeps the FK on the source field only for many:one and on the
-// target field otherwise (foreignKeyFieldId in the client's
-// db-relationship.ts). Only these two types are offered; one_to_one is
-// stored with the ends swapped so the FK still lands on fromField.
+// Only types whose FK side matches "fromField references toField"; see
+// describeRelationship. one_to_one is stored with the ends swapped.
 const RELATIONSHIP_TYPES = ['many_to_one', 'one_to_one'] as const;
 
-function qualifiedName(table: DBTable): string {
-    return table.schema ? `${table.schema}.${table.name}` : table.name;
-}
+const indexSpec = z.object({
+    name: z.string().min(1),
+    fieldNames: z.array(z.string().min(1)).min(1),
+    unique: z.boolean().optional(),
+});
 
-/** Matches "name" or "schema.name"; errors if a bare name is ambiguous. */
-function findTable(
-    tables: DBTable[],
-    ref: string
-): { table: DBTable } | { error: string } {
-    const matches = tables.filter(
-        (t) => t.name === ref || qualifiedName(t) === ref
-    );
-    if (matches.length === 1) return { table: matches[0] };
-    if (matches.length === 0) return { error: `table "${ref}" not found` };
-    return {
-        error: `table name "${ref}" is ambiguous, use one of: ${matches.map(qualifiedName).join(', ')}`,
-    };
-}
-
-/**
- * Relationship in a form an LLM can read without resolving ids. `from` is
- * always the FK side (see RELATIONSHIP_TYPES), `type` reads from it.
- */
-function describeRelationship(
-    rel: DBRelationship,
-    tablesById: Map<string, DBTable>
-) {
-    const end = (tableId: unknown, fieldId: unknown) => {
-        const table = tablesById.get(tableId as string);
-        const field = table?.fields.find((f) => f.id === fieldId);
-        return table && field
-            ? `${qualifiedName(table)}.${field.name}`
-            : '(missing)';
-    };
-    const source = end(rel.sourceTableId, rel.sourceFieldId);
-    const target = end(rel.targetTableId, rel.targetFieldId);
-    const fkOnSource =
-        rel.sourceCardinality === 'many' && rel.targetCardinality === 'one';
-    return {
-        id: rel.id,
-        name: rel.name,
-        from: fkOnSource ? source : target,
-        to: fkOnSource ? target : source,
-        type: fkOnSource
-            ? 'many_to_one'
-            : `${rel.targetCardinality}_to_${rel.sourceCardinality}`,
-    };
-}
-
+/** Compact JSON: no pretty-printing, it only costs the caller tokens. */
 function text(value: unknown) {
     return {
-        content: [
-            { type: 'text' as const, text: JSON.stringify(value, null, 2) },
-        ],
+        content: [{ type: 'text' as const, text: JSON.stringify(value) }],
     };
 }
 
@@ -163,6 +77,9 @@ function toError(message: string) {
         isError: true,
     };
 }
+
+type Conn = Awaited<ReturnType<Hocuspocus['openDirectConnection']>>;
+type Outcome<T> = T | { error: string };
 
 /**
  * Opens the diagram's live room, runs `fn` against it and disconnects.
@@ -233,12 +150,80 @@ export function createMcpServer(
     hocuspocus: Hocuspocus,
     user?: McpUser
 ): McpServer {
-    const server = new McpServer({ name: 'chartdb', version: '0.1.0' });
+    const server = new McpServer({ name: 'chartdb', version: '0.2.0' });
+
+    /** Runs `fn` on the diagram's live doc; errors become tool errors. */
+    async function onDiagram<T extends object>(
+        diagramId: string,
+        fn: (
+            conn: Conn,
+            tables: DBTable[],
+            diagram: { name: string; defaultSchema?: string }
+        ) => Promise<Outcome<T>>,
+        { write }: { write: boolean }
+    ) {
+        const meta = await getDiagram(pool, diagramId);
+        if (!meta) return toError(`diagram ${diagramId} not found`);
+        const result = await withDiagramDoc(
+            pool,
+            hocuspocus,
+            user,
+            diagramId,
+            (conn) =>
+                fn(conn, readTables(conn.document!.getMap<unknown>('tables')), {
+                    name: meta.name,
+                    defaultSchema: DEFAULT_SCHEMAS[meta.databaseType],
+                })
+        );
+        if ('error' in result) return toError(String(result.error));
+        if (write) await touchDiagram(pool, diagramId);
+        return text(result);
+    }
+
+    /**
+     * Writes a table back. Fields removed since `before` take their indexes
+     * and relationships with them, or those would point at nothing.
+     */
+    async function saveTable(conn: Conn, table: DBTable, before?: DBTable) {
+        const kept = new Set(table.fields.map((f) => f.id));
+        const removed = (before?.fields ?? [])
+            .map((f) => f.id)
+            .filter((id) => !kept.has(id));
+        table.indexes = table.indexes.filter((i) =>
+            i.fieldIds.every((id) => kept.has(id))
+        );
+        await conn.transact((doc) => {
+            upsertTable(doc.getMap<unknown>('tables'), table);
+            if (removed.length) {
+                removeItemsReferencing(
+                    doc.getMap<unknown>('relationships'),
+                    ['sourceFieldId', 'targetFieldId'],
+                    removed
+                );
+            }
+        });
+    }
+
+    function tableResult(table: DBTable, defaultSchema?: string) {
+        return {
+            id: table.id,
+            name: qualifiedName(table, defaultSchema),
+            fieldCount: table.fields.length,
+            indexCount: table.indexes.length,
+        };
+    }
 
     server.registerTool(
         'list_diagrams',
         { description: 'List all diagrams (id, name, database type).' },
-        async () => text(await listDiagrams(pool))
+        async () =>
+            text(
+                (await listDiagrams(pool)).map((d) => ({
+                    id: d.id,
+                    name: d.name,
+                    databaseType: d.databaseType,
+                }))
+            )
     );
 
     server.registerTool(
@@ -280,51 +265,51 @@ export function createMcpServer(
     server.registerTool(
         'get_diagram',
         {
-            description: `Read a diagram. Diagrams with more than ${FULL_DETAIL_MAX_TABLES} tables return a summary (table names and field counts) unless you pass tableNames; then only those tables (fields, indexes) and their relationships come back in full.`,
+            description: `Read a diagram. Tables and columns are referred to by name everywhere. Over ${FULL_DETAIL_MAX_TABLES} tables (or summaryOnly) returns table names, column counts and relationships as "table.column->table.column"; pass tableNames for full columns and indexes of just those tables.`,
             inputSchema: {
                 diagramId: z.string(),
                 tableNames: z
                     .array(z.string())
                     .optional()
-                    .describe('Only these tables, by "name" or "schema.name"'),
-                summaryOnly: z.boolean().optional(),
+                    .describe(
+                        'Return only these tables (by "name" or "schema.name") in full, plus their relationships. Use this on big diagrams.'
+                    ),
+                summaryOnly: z
+                    .boolean()
+                    .optional()
+                    .describe(
+                        `Table names, column counts and relationships only. Automatic above ${FULL_DETAIL_MAX_TABLES} tables unless tableNames is given.`
+                    ),
             },
         },
-        async ({ diagramId, tableNames, summaryOnly }) => {
-            const meta = await getDiagram(pool, diagramId);
-            if (!meta) return toError(`diagram ${diagramId} not found`);
-            return withDiagramDoc(
-                pool,
-                hocuspocus,
-                user,
+        async ({ diagramId, tableNames, summaryOnly }) =>
+            onDiagram(
                 diagramId,
-                async (conn) => {
+                async (conn, tables, diagram) => {
                     const content = yDocToDiagram(conn.document!);
-                    const tables = content.tables ?? [];
                     const relationships = (content.relationships ??
                         []) as DBRelationship[];
                     const tablesById = new Map(tables.map((t) => [t.id, t]));
-                    const header = {
-                        id: meta.id,
-                        name: meta.name,
-                        databaseType: meta.databaseType,
-                        tableCount: tables.length,
-                        relationshipCount: relationships.length,
-                    };
 
                     if (
                         summaryOnly ||
                         (!tableNames && tables.length > FULL_DETAIL_MAX_TABLES)
                     ) {
-                        return text({
-                            ...header,
-                            note: 'Summary only. Call get_diagram with tableNames for fields, indexes and relationships.',
-                            tables: tables.map((t) => ({
-                                id: t.id,
-                                name: qualifiedName(t),
-                                fieldCount: t.fields.length,
-                            })),
-                        });
+                        return {
+                            name: diagram.name,
+                            summary: true,
+                            tables: tables.map((t) => [
+                                qualifiedName(t, diagram.defaultSchema),
+                                t.fields.length,
+                            ]),
+                            relationships: relationships.map((r) =>
+                                relationshipLine(
+                                    r,
+                                    tablesById,
+                                    diagram.defaultSchema
+                                )
+                            ),
+                        };
                     }
 
                     let selected = tables;
@@ -339,10 +324,12 @@ export function createMcpServer(
                         selected = tables.filter((t) => ids.has(t.id));
                     }
                     const selectedIds = new Set(selected.map((t) => t.id));
-                    return text({
-                        ...header,
+                    return {
+                        name: diagram.name,
                         ...(notFound.length ? { notFound } : {}),
-                        tables: selected,
+                        tables: selected.map((t) =>
+                            compactTable(t, diagram.defaultSchema)
+                        ),
                         relationships: relationships
                             .filter(
                                 (r) =>
@@ -351,110 +338,97 @@ export function createMcpServer(
                                     ) ||
                                     selectedIds.has(r.targetTableId as string)
                             )
-                            .map((r) => describeRelationship(r, tablesById)),
-                    });
-                }
-            );
-        }
+                            .map((r) =>
+                                describeRelationship(
+                                    r,
+                                    tablesById,
+                                    diagram.defaultSchema
+                                )
+                            ),
+                    };
+                },
+                { write: false }
+            )
     );
 
     server.registerTool(
         'upsert_table',
         {
             description:
-                'Create a table, or replace an existing one (by tableId) with the given name, ordered field list and optionally indexes. Removing a field also removes relationships that use it.',
-            inputSchema: upsertTableInput,
+                'Create a table, or fully replace one found by name (pass tableId only to rename). The field list is the complete, ordered set of columns: omitted columns are removed with their relationships, and omitted optional values are cleared. To change a few columns, prefer add_field / update_field / remove_field.',
+            inputSchema: {
+                diagramId: z.string(),
+                name: z.string().min(1),
+                tableId: z
+                    .string()
+                    .optional()
+                    .describe('Only to rename an existing table'),
+                schema: z.string().optional(),
+                comments: z.string().optional(),
+                fields: z.array(fieldSpec).min(1),
+                indexes: z
+                    .array(indexSpec)
+                    .optional()
+                    .describe(
+                        'Full list of non primary key indexes. Omit to keep current ones; [] removes them.'
+                    ),
+            },
         },
-        async (input) => {
-            const meta = await getDiagram(pool, input.diagramId);
-            if (!meta) return toError(`diagram ${input.diagramId} not found`);
-
-            const result = await withDiagramDoc(
-                pool,
-                hocuspocus,
-                user,
+        async (input) =>
+            onDiagram(
                 input.diagramId,
-                async (conn) => {
-                    const tablesMap = conn.document!.getMap<unknown>('tables');
-                    const existing = input.tableId
-                        ? readTableItem(tablesMap, input.tableId)
-                        : undefined;
-                    if (input.tableId && !existing) {
-                        return { error: `table ${input.tableId} not found` };
+                async (conn, tables, diagram) => {
+                    let existing: DBTable | undefined;
+                    if (input.tableId) {
+                        existing = tables.find((t) => t.id === input.tableId);
+                        if (!existing)
+                            return {
+                                error: `table ${input.tableId} not found`,
+                            };
+                    } else {
+                        const ref = input.schema
+                            ? `${input.schema}.${input.name}`
+                            : input.name;
+                        const found = findTable(tables, ref);
+                        if ('table' in found) existing = found.table;
+                        else if (!found.error.endsWith('not found'))
+                            return { error: found.error };
+                    }
+
+                    const names = input.fields.map((f) => f.name);
+                    const dup = names.find((n, i) => names.indexOf(n) !== i);
+                    if (dup) return { error: `duplicate column "${dup}"` };
+
+                    const prevByName = new Map(
+                        (existing?.fields ?? []).map((f) => [f.name, f])
+                    );
+                    const fields: DBField[] = input.fields.map((spec) =>
+                        fieldFromSpec(spec, prevByName.get(spec.name))
+                    );
+
+                    let indexes = existing?.indexes ?? [];
+                    if (input.indexes) {
+                        const built = buildIndexes(
+                            input.indexes,
+                            fields,
+                            indexes
+                        );
+                        if ('error' in built) return built;
+                        indexes = built.indexes;
                     }
 
                     const now = Date.now();
-                    const existingFields = new Map(
-                        (existing?.fields ?? []).map((f) => [f.id, f])
-                    );
-                    const fields: DBField[] = input.fields.map((f) => {
-                        const prev = f.id
-                            ? existingFields.get(f.id)
-                            : undefined;
-                        return {
-                            ...prev,
-                            ...f,
-                            id: prev?.id ?? generateId(),
-                            type: {
-                                id: f.type.toLowerCase().replace(/\s+/g, '_'),
-                                name: f.type,
-                            },
-                            createdAt: prev?.createdAt ?? now,
-                        };
-                    });
-                    // Drop indexes pointing at fields that no longer exist.
-                    const fieldIds = new Set(fields.map((f) => f.id));
-                    const keptIndexes = (existing?.indexes ?? []).filter((i) =>
-                        i.fieldIds.every((id) => fieldIds.has(id))
-                    );
-                    let indexes: DBIndex[] = keptIndexes;
-                    if (input.indexes) {
-                        const fieldIdByName = new Map(
-                            fields.map((f) => [f.name, f.id])
-                        );
-                        const prevByName = new Map(
-                            keptIndexes.map((i) => [i.name, i])
-                        );
-                        const custom: DBIndex[] = [];
-                        for (const idx of input.indexes) {
-                            const missing = idx.fieldNames.filter(
-                                (n) => !fieldIdByName.has(n)
-                            );
-                            if (missing.length) {
-                                return {
-                                    error: `index ${idx.name}: unknown field(s) ${missing.join(', ')}`,
-                                };
-                            }
-                            const prev = prevByName.get(idx.name);
-                            custom.push({
-                                ...prev,
-                                id: prev?.id ?? generateId(),
-                                name: idx.name,
-                                unique: idx.unique,
-                                fieldIds: idx.fieldNames.map(
-                                    (n) => fieldIdByName.get(n)!
-                                ),
-                                createdAt: prev?.createdAt ?? now,
-                            });
-                        }
-                        // The primary key index is managed with the fields, not here.
-                        indexes = [
-                            ...keptIndexes.filter((i) => i.isPrimaryKey),
-                            ...custom,
-                        ];
-                    }
-                    const removedFieldIds = (existing?.fields ?? [])
-                        .map((f) => f.id)
-                        .filter((id) => !fieldIds.has(id));
-
-                    const tables = readTables(tablesMap);
                     const table: DBTable = {
                         ...existing,
                         id: existing?.id ?? generateId(),
                         name: input.name,
-                        schema: input.schema ?? existing?.schema ?? null,
-                        x: input.x ?? existing?.x ?? 0,
-                        y: input.y ?? existing?.y ?? 0,
+                        schema:
+                            input.schema ??
+                            existing?.schema ??
+                            diagram.defaultSchema ??
+                            null,
+                        x: existing?.x ?? 0,
+                        y: existing?.y ?? 0,
                         fields,
                         indexes,
                         color: existing?.color ?? DEFAULT_TABLE_COLOR,
@@ -466,79 +440,168 @@ export function createMcpServer(
                                 1,
                         comments: input.comments ?? existing?.comments ?? null,
                     };
-                    await conn.transact((doc) => {
-                        upsertTable(doc.getMap<unknown>('tables'), table);
-                        // A removed field takes its relationships with it,
-                        // or they'd point at nothing.
-                        if (removedFieldIds.length) {
-                            removeItemsReferencing(
-                                doc.getMap<unknown>('relationships'),
-                                ['sourceFieldId', 'targetFieldId'],
-                                removedFieldIds
-                            );
-                        }
-                    });
-                    return { table };
+                    await saveTable(conn, table, existing);
+                    return {
+                        ...tableResult(table, diagram.defaultSchema),
+                        created: !existing,
+                    };
+                },
+                { write: true }
+            )
+    );
+
+    /** Shared by the single-column tools: load a table by name, edit, save. */
+    function editTable(
+        diagramId: string,
+        tableRef: string,
+        edit: (
+            table: DBTable,
+            defaultSchema?: string
+        ) => Outcome<{ table: DBTable; result: object }>
+    ) {
+        return onDiagram(
+            diagramId,
+            async (conn, tables, diagram) => {
+                const found = findTable(tables, tableRef);
+                if ('error' in found) return found;
+                const edited = edit(
+                    structuredClone(found.table),
+                    diagram.defaultSchema
+                );
+                if ('error' in edited) return edited;
+                await saveTable(conn, edited.table, found.table);
+                return edited.result;
+            },
+            { write: true }
+        );
+    }
+
+    server.registerTool(
+        'add_field',
+        {
+            description:
+                'Add one column to a table (by "name" or "schema.name"), at the end or right after an existing column.',
+            inputSchema: {
+                diagramId: z.string(),
+                table: z.string(),
+                field: fieldSpec,
+                after: z
+                    .string()
+                    .optional()
+                    .describe('insert after this column'),
+            },
+        },
+        async ({ diagramId, table: tableRef, field, after }) =>
+            editTable(diagramId, tableRef, (table, defaultSchema) => {
+                if (table.fields.some((f) => f.name === field.name))
+                    return { error: `column "${field.name}" already exists` };
+                let at = table.fields.length;
+                if (after !== undefined) {
+                    const i = table.fields.findIndex((f) => f.name === after);
+                    if (i === -1)
+                        return { error: `column "${after}" not found` };
+                    at = i + 1;
                 }
-            );
-            if ('error' in result) return toError(result.error!);
-            await touchDiagram(pool, input.diagramId);
-            return text(result.table);
-        }
+                table.fields.splice(at, 0, fieldFromSpec(field));
+                return { table, result: tableResult(table, defaultSchema) };
+            })
+    );
+
+    server.registerTool(
+        'update_field',
+        {
+            description:
+                'Change one column. Only the given keys change; set an optional value to null to clear it (e.g. "default": null). Use "name" to rename.',
+            inputSchema: {
+                diagramId: z.string(),
+                table: z.string(),
+                field: z.string().describe('current column name'),
+                changes: fieldChanges,
+            },
+        },
+        async ({ diagramId, table: tableRef, field, changes }) =>
+            editTable(diagramId, tableRef, (table, defaultSchema) => {
+                const i = table.fields.findIndex((f) => f.name === field);
+                if (i === -1) return { error: `column "${field}" not found` };
+                if (
+                    changes.name &&
+                    changes.name !== field &&
+                    table.fields.some((f) => f.name === changes.name)
+                )
+                    return { error: `column "${changes.name}" already exists` };
+                table.fields[i] = applyFieldChanges(table.fields[i], changes);
+                return { table, result: tableResult(table, defaultSchema) };
+            })
+    );
+
+    server.registerTool(
+        'remove_field',
+        {
+            description:
+                'Remove one column, together with indexes and relationships that use it.',
+            inputSchema: {
+                diagramId: z.string(),
+                table: z.string(),
+                field: z.string(),
+            },
+        },
+        async ({ diagramId, table: tableRef, field }) =>
+            editTable(diagramId, tableRef, (table, defaultSchema) => {
+                const before = table.fields.length;
+                table.fields = table.fields.filter((f) => f.name !== field);
+                if (table.fields.length === before)
+                    return { error: `column "${field}" not found` };
+                if (table.fields.length === 0)
+                    return {
+                        error: 'a table needs at least one column; use remove_table',
+                    };
+                return { table, result: tableResult(table, defaultSchema) };
+            })
     );
 
     server.registerTool(
         'remove_table',
         {
             description:
-                'Delete a table, together with every relationship and dependency that references it.',
-            inputSchema: { diagramId: z.string(), tableId: z.string() },
+                'Delete a table (by "name" or "schema.name"), together with every relationship and dependency that references it.',
+            inputSchema: { diagramId: z.string(), table: z.string() },
         },
-        async ({ diagramId, tableId }) => {
-            const meta = await getDiagram(pool, diagramId);
-            if (!meta) return toError(`diagram ${diagramId} not found`);
-            const result = await withDiagramDoc(
-                pool,
-                hocuspocus,
-                user,
+        async ({ diagramId, table: tableRef }) =>
+            onDiagram(
                 diagramId,
-                async (conn) => {
-                    const doc = conn.document!;
-                    const table = readTableItem(
-                        doc.getMap<unknown>('tables'),
-                        tableId
-                    );
-                    if (!table) return { error: `table ${tableId} not found` };
-                    const relationshipsBefore =
-                        doc.getMap<unknown>('relationships').size;
+                async (conn, tables, diagram) => {
+                    const found = findTable(tables, tableRef);
+                    if ('error' in found) return found;
+                    const { id } = found.table;
+                    const relationships =
+                        conn.document!.getMap<unknown>('relationships');
+                    const before = relationships.size;
                     await conn.transact((d) => {
                         removeItemFromCollection(
                             d.getMap<unknown>('tables'),
-                            tableId
+                            id
                         );
                         removeItemsReferencing(
                             d.getMap<unknown>('relationships'),
                             ['sourceTableId', 'targetTableId'],
-                            [tableId]
+                            [id]
                         );
                         removeItemsReferencing(
                             d.getMap<unknown>('dependencies'),
                             ['tableId', 'dependentTableId'],
-                            [tableId]
+                            [id]
                         );
                     });
                     return {
-                        removed: qualifiedName(table),
-                        relationshipsRemoved:
-                            relationshipsBefore -
-                            doc.getMap<unknown>('relationships').size,
+                        removed: qualifiedName(
+                            found.table,
+                            diagram.defaultSchema
+                        ),
+                        relationshipsRemoved: before - relationships.size,
                     };
-                }
-            );
-            if ('error' in result) return toError(result.error!);
-            await touchDiagram(pool, diagramId);
-            return text(result);
-        }
+                },
+                { write: true }
+            )
     );
 
     server.registerTool(
@@ -556,101 +619,98 @@ export function createMcpServer(
                 name: z.string().min(1).optional(),
             },
         },
-        async (input) => {
-            const meta = await getDiagram(pool, input.diagramId);
-            if (!meta) return toError(`diagram ${input.diagramId} not found`);
-            const result = await withDiagramDoc(
-                pool,
-                hocuspocus,
-                user,
+        async (input) =>
+            onDiagram(
                 input.diagramId,
-                async (conn) => {
-                    const doc = conn.document!;
-                    const tables = readTables(doc.getMap<unknown>('tables'));
+                async (conn, tables, diagram) => {
                     const from = findTable(tables, input.fromTable);
-                    if ('error' in from) return { error: from.error };
+                    if ('error' in from) return from;
                     const to = findTable(tables, input.toTable);
-                    if ('error' in to) return { error: to.error };
+                    if ('error' in to) return to;
                     const fromField = from.table.fields.find(
                         (f) => f.name === input.fromField
                     );
                     if (!fromField)
                         return {
-                            error: `field ${input.fromTable}.${input.fromField} not found`,
+                            error: `column ${input.fromTable}.${input.fromField} not found`,
                         };
                     const toField = to.table.fields.find(
                         (f) => f.name === input.toField
                     );
                     if (!toField)
                         return {
-                            error: `field ${input.toTable}.${input.toField} not found`,
+                            error: `column ${input.toTable}.${input.toField} not found`,
                         };
 
                     const tablesById = new Map(tables.map((t) => [t.id, t]));
-                    const relationshipsMap =
-                        doc.getMap<unknown>('relationships');
-                    // Same pair of fields in either orientation counts as a duplicate.
+                    // Same pair of columns in either orientation is a duplicate.
                     const pair = new Set([fromField.id, toField.id]);
                     let duplicate: DBRelationship | undefined;
-                    relationshipsMap.forEach((raw, id) => {
-                        const m = raw as { get(key: string): unknown };
-                        const ends = [
-                            m.get('sourceFieldId'),
-                            m.get('targetFieldId'),
-                        ];
-                        if (
-                            pair.size === 2 &&
-                            ends.every((e) => pair.has(e as string))
-                        ) {
-                            duplicate = {
-                                id,
-                                name: m.get('name') as string,
-                                sourceTableId: m.get('sourceTableId'),
-                                sourceFieldId: m.get('sourceFieldId'),
-                                targetTableId: m.get('targetTableId'),
-                                targetFieldId: m.get('targetFieldId'),
-                                sourceCardinality: m.get('sourceCardinality'),
-                                targetCardinality: m.get('targetCardinality'),
-                            };
+                    conn.document!.getMap<unknown>('relationships').forEach(
+                        (raw, id) => {
+                            const m = raw as { get(key: string): unknown };
+                            const ends = [
+                                m.get('sourceFieldId'),
+                                m.get('targetFieldId'),
+                            ];
+                            if (
+                                pair.size === 2 &&
+                                ends.every((e) => pair.has(e as string))
+                            ) {
+                                duplicate = {
+                                    id,
+                                    sourceTableId: m.get('sourceTableId'),
+                                    sourceFieldId: m.get('sourceFieldId'),
+                                    targetTableId: m.get('targetTableId'),
+                                    targetFieldId: m.get('targetFieldId'),
+                                    sourceCardinality:
+                                        m.get('sourceCardinality'),
+                                    targetCardinality:
+                                        m.get('targetCardinality'),
+                                };
+                            }
                         }
-                    });
+                    );
                     if (duplicate) {
                         return {
-                            relationship: describeRelationship(
+                            ...describeRelationship(
                                 duplicate,
-                                tablesById
+                                tablesById,
+                                diagram.defaultSchema
                             ),
                             existed: true,
                         };
                     }
 
+                    const fromEnd = {
+                        schema: from.table.schema ?? null,
+                        tableId: from.table.id,
+                        fieldId: fromField.id,
+                    };
+                    const toEnd = {
+                        schema: to.table.schema ?? null,
+                        tableId: to.table.id,
+                        fieldId: toField.id,
+                    };
+                    // many:one keeps the FK on source, one:one on target.
+                    const [source, target] =
+                        input.type === 'many_to_one'
+                            ? [fromEnd, toEnd]
+                            : [toEnd, fromEnd];
                     const relationship: DBRelationship = {
                         id: generateId(),
                         name:
                             input.name ??
                             `${from.table.name}_${fromField.name}_fk`,
-                        ...(input.type === 'many_to_one'
-                            ? {
-                                  sourceSchema: from.table.schema ?? null,
-                                  sourceTableId: from.table.id,
-                                  sourceFieldId: fromField.id,
-                                  targetSchema: to.table.schema ?? null,
-                                  targetTableId: to.table.id,
-                                  targetFieldId: toField.id,
-                                  sourceCardinality: 'many' as const,
-                                  targetCardinality: 'one' as const,
-                              }
-                            : {
-                                  // one:one keeps the FK on target: swap ends
-                                  sourceSchema: to.table.schema ?? null,
-                                  sourceTableId: to.table.id,
-                                  sourceFieldId: toField.id,
-                                  targetSchema: from.table.schema ?? null,
-                                  targetTableId: from.table.id,
-                                  targetFieldId: fromField.id,
-                                  sourceCardinality: 'one' as const,
-                                  targetCardinality: 'one' as const,
-                              }),
+                        sourceSchema: source.schema,
+                        sourceTableId: source.tableId,
+                        sourceFieldId: source.fieldId,
+                        targetSchema: target.schema,
+                        targetTableId: target.tableId,
+                        targetFieldId: target.fieldId,
+                        sourceCardinality:
+                            input.type === 'many_to_one' ? 'many' : 'one',
+                        targetCardinality: 'one',
                         createdAt: Date.now(),
                     };
                     await conn.transact((d) =>
@@ -660,39 +720,34 @@ export function createMcpServer(
                         )
                     );
                     return {
-                        relationship: describeRelationship(
+                        ...describeRelationship(
                             relationship,
-                            tablesById
+                            tablesById,
+                            diagram.defaultSchema
                         ),
                         existed: false,
                     };
-                }
-            );
-            if ('error' in result) return toError(result.error!);
-            await touchDiagram(pool, input.diagramId);
-            return text(result);
-        }
+                },
+                { write: true }
+            )
     );
 
     server.registerTool(
         'remove_relationship',
         {
             description:
-                'Delete one relationship by id (ids come from get_diagram).',
+                'Delete one relationship by id (ids come from get_diagram with tableNames).',
             inputSchema: { diagramId: z.string(), relationshipId: z.string() },
         },
-        async ({ diagramId, relationshipId }) => {
-            const meta = await getDiagram(pool, diagramId);
-            if (!meta) return toError(`diagram ${diagramId} not found`);
-            const result = await withDiagramDoc(
-                pool,
-                hocuspocus,
-                user,
+        async ({ diagramId, relationshipId }) =>
+            onDiagram(
                 diagramId,
                 async (conn) => {
-                    const relationshipsMap =
-                        conn.document!.getMap<unknown>('relationships');
-                    if (!relationshipsMap.has(relationshipId)) {
+                    if (
+                        !conn
+                            .document!.getMap<unknown>('relationships')
+                            .has(relationshipId)
+                    ) {
                         return {
                             error: `relationship ${relationshipId} not found`,
                         };
@@ -704,13 +759,38 @@ export function createMcpServer(
                         )
                     );
                     return { removed: relationshipId };
-                }
-            );
-            if ('error' in result) return toError(result.error!);
-            await touchDiagram(pool, diagramId);
-            return text(result);
-        }
+                },
+                { write: true }
+            )
     );
 
     return server;
+}
+
+function buildIndexes(
+    specs: z.infer<typeof indexSpec>[],
+    fields: DBField[],
+    current: DBIndex[]
+): { indexes: DBIndex[] } | { error: string } {
+    const idByName = new Map(fields.map((f) => [f.name, f.id]));
+    const prevByName = new Map(current.map((i) => [i.name, i]));
+    const custom: DBIndex[] = [];
+    for (const spec of specs) {
+        const missing = spec.fieldNames.filter((n) => !idByName.has(n));
+        if (missing.length)
+            return {
+                error: `index ${spec.name}: unknown column(s) ${missing.join(', ')}`,
+            };
+        const prev = prevByName.get(spec.name);
+        custom.push({
+            ...prev,
+            id: prev?.id ?? generateId(),
+            name: spec.name,
+            unique: spec.unique ?? false,
+            fieldIds: spec.fieldNames.map((n) => idByName.get(n)!),
+            createdAt: prev?.createdAt ?? Date.now(),
+        });
+    }
+    // The primary key index is managed with the fields, not here.
+    return { indexes: [...current.filter((i) => i.isPrimaryKey), ...custom] };
 }
