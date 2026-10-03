@@ -14,10 +14,18 @@ import {
 import {
     readTableItem,
     readTables,
+    removeItemFromCollection,
+    removeItemsReferencing,
+    upsertItem,
     upsertTable,
     yDocToDiagram,
 } from '../collab/y-diagram';
-import type { DBField, DBTable } from '../collab/y-diagram.types';
+import type {
+    DBField,
+    DBIndex,
+    DBRelationship,
+    DBTable,
+} from '../collab/y-diagram.types';
 import type { McpUser } from '../mcp-auth/entra-broker';
 
 // Same shape as the client's generateId (12 lowercase alphanumerics).
@@ -36,7 +44,14 @@ const fieldInput = z.object({
         .optional()
         .describe('Existing field id to keep; omit for a new field'),
     name: z.string().min(1),
-    type: z.string().min(1).describe('SQL type name, e.g. "uuid", "varchar"'),
+    // Also accepts get_diagram's {id, name} form, so a field read back
+    // from get_diagram can be passed through unchanged.
+    type: z
+        .union([
+            z.string().min(1),
+            z.object({ name: z.string().min(1) }).transform((t) => t.name),
+        ])
+        .describe('SQL type name, e.g. "uuid", "varchar"'),
     primaryKey: z.boolean().default(false),
     unique: z.boolean().default(false),
     nullable: z.boolean().default(true),
@@ -62,7 +77,77 @@ const upsertTableInput = {
     x: z.number().optional(),
     y: z.number().optional(),
     comments: z.string().nullish(),
+    indexes: z
+        .array(
+            z.object({
+                name: z.string().min(1),
+                fieldNames: z.array(z.string().min(1)).min(1),
+                unique: z.boolean().default(false),
+            })
+        )
+        .optional()
+        .describe(
+            'Full list of (non primary key) indexes. Omit to keep the current ones; [] removes them all.'
+        ),
 };
+
+/** Above this many tables, get_diagram without tableNames returns a summary. */
+const FULL_DETAIL_MAX_TABLES = 30;
+
+// ChartDB keeps the FK on the source field only for many:one and on the
+// target field otherwise (foreignKeyFieldId in the client's
+// db-relationship.ts). Only these two types are offered; one_to_one is
+// stored with the ends swapped so the FK still lands on fromField.
+const RELATIONSHIP_TYPES = ['many_to_one', 'one_to_one'] as const;
+
+function qualifiedName(table: DBTable): string {
+    return table.schema ? `${table.schema}.${table.name}` : table.name;
+}
+
+/** Matches "name" or "schema.name"; errors if a bare name is ambiguous. */
+function findTable(
+    tables: DBTable[],
+    ref: string
+): { table: DBTable } | { error: string } {
+    const matches = tables.filter(
+        (t) => t.name === ref || qualifiedName(t) === ref
+    );
+    if (matches.length === 1) return { table: matches[0] };
+    if (matches.length === 0) return { error: `table "${ref}" not found` };
+    return {
+        error: `table name "${ref}" is ambiguous, use one of: ${matches.map(qualifiedName).join(', ')}`,
+    };
+}
+
+/**
+ * Relationship in a form an LLM can read without resolving ids. `from` is
+ * always the FK side (see RELATIONSHIP_TYPES), `type` reads from it.
+ */
+function describeRelationship(
+    rel: DBRelationship,
+    tablesById: Map<string, DBTable>
+) {
+    const end = (tableId: unknown, fieldId: unknown) => {
+        const table = tablesById.get(tableId as string);
+        const field = table?.fields.find((f) => f.id === fieldId);
+        return table && field
+            ? `${qualifiedName(table)}.${field.name}`
+            : '(missing)';
+    };
+    const source = end(rel.sourceTableId, rel.sourceFieldId);
+    const target = end(rel.targetTableId, rel.targetFieldId);
+    const fkOnSource =
+        rel.sourceCardinality === 'many' && rel.targetCardinality === 'one';
+    return {
+        id: rel.id,
+        name: rel.name,
+        from: fkOnSource ? source : target,
+        to: fkOnSource ? target : source,
+        type: fkOnSource
+            ? 'many_to_one'
+            : `${rel.targetCardinality}_to_${rel.sourceCardinality}`,
+    };
+}
 
 function text(value: unknown) {
     return {
@@ -195,11 +280,17 @@ export function createMcpServer(
     server.registerTool(
         'get_diagram',
         {
-            description:
-                "Get a diagram's full content: tables (with ordered fields and indexes), relationships, areas, notes.",
-            inputSchema: { diagramId: z.string() },
+            description: `Read a diagram. Diagrams with more than ${FULL_DETAIL_MAX_TABLES} tables return a summary (table names and field counts) unless you pass tableNames; then only those tables (fields, indexes) and their relationships come back in full.`,
+            inputSchema: {
+                diagramId: z.string(),
+                tableNames: z
+                    .array(z.string())
+                    .optional()
+                    .describe('Only these tables, by "name" or "schema.name"'),
+                summaryOnly: z.boolean().optional(),
+            },
         },
-        async ({ diagramId }) => {
+        async ({ diagramId, tableNames, summaryOnly }) => {
             const meta = await getDiagram(pool, diagramId);
             if (!meta) return toError(`diagram ${diagramId} not found`);
             return withDiagramDoc(
@@ -209,7 +300,59 @@ export function createMcpServer(
                 diagramId,
                 async (conn) => {
                     const content = yDocToDiagram(conn.document!);
-                    return text({ ...content, ...meta });
+                    const tables = content.tables ?? [];
+                    const relationships = (content.relationships ??
+                        []) as DBRelationship[];
+                    const tablesById = new Map(tables.map((t) => [t.id, t]));
+                    const header = {
+                        id: meta.id,
+                        name: meta.name,
+                        databaseType: meta.databaseType,
+                        tableCount: tables.length,
+                        relationshipCount: relationships.length,
+                    };
+
+                    if (
+                        summaryOnly ||
+                        (!tableNames && tables.length > FULL_DETAIL_MAX_TABLES)
+                    ) {
+                        return text({
+                            ...header,
+                            note: 'Summary only. Call get_diagram with tableNames for fields, indexes and relationships.',
+                            tables: tables.map((t) => ({
+                                id: t.id,
+                                name: qualifiedName(t),
+                                fieldCount: t.fields.length,
+                            })),
+                        });
+                    }
+
+                    let selected = tables;
+                    const notFound: string[] = [];
+                    if (tableNames) {
+                        const ids = new Set<string>();
+                        for (const ref of tableNames) {
+                            const found = findTable(tables, ref);
+                            if ('table' in found) ids.add(found.table.id);
+                            else notFound.push(found.error);
+                        }
+                        selected = tables.filter((t) => ids.has(t.id));
+                    }
+                    const selectedIds = new Set(selected.map((t) => t.id));
+                    return text({
+                        ...header,
+                        ...(notFound.length ? { notFound } : {}),
+                        tables: selected,
+                        relationships: relationships
+                            .filter(
+                                (r) =>
+                                    selectedIds.has(
+                                        r.sourceTableId as string
+                                    ) ||
+                                    selectedIds.has(r.targetTableId as string)
+                            )
+                            .map((r) => describeRelationship(r, tablesById)),
+                    });
                 }
             );
         }
@@ -219,7 +362,7 @@ export function createMcpServer(
         'upsert_table',
         {
             description:
-                'Create a table, or replace an existing one (by tableId) with the given name and ordered field list.',
+                'Create a table, or replace an existing one (by tableId) with the given name, ordered field list and optionally indexes. Removing a field also removes relationships that use it.',
             inputSchema: upsertTableInput,
         },
         async (input) => {
@@ -261,9 +404,48 @@ export function createMcpServer(
                     });
                     // Drop indexes pointing at fields that no longer exist.
                     const fieldIds = new Set(fields.map((f) => f.id));
-                    const indexes = (existing?.indexes ?? []).filter((i) =>
+                    const keptIndexes = (existing?.indexes ?? []).filter((i) =>
                         i.fieldIds.every((id) => fieldIds.has(id))
                     );
+                    let indexes: DBIndex[] = keptIndexes;
+                    if (input.indexes) {
+                        const fieldIdByName = new Map(
+                            fields.map((f) => [f.name, f.id])
+                        );
+                        const prevByName = new Map(
+                            keptIndexes.map((i) => [i.name, i])
+                        );
+                        const custom: DBIndex[] = [];
+                        for (const idx of input.indexes) {
+                            const missing = idx.fieldNames.filter(
+                                (n) => !fieldIdByName.has(n)
+                            );
+                            if (missing.length) {
+                                return {
+                                    error: `index ${idx.name}: unknown field(s) ${missing.join(', ')}`,
+                                };
+                            }
+                            const prev = prevByName.get(idx.name);
+                            custom.push({
+                                ...prev,
+                                id: prev?.id ?? generateId(),
+                                name: idx.name,
+                                unique: idx.unique,
+                                fieldIds: idx.fieldNames.map(
+                                    (n) => fieldIdByName.get(n)!
+                                ),
+                                createdAt: prev?.createdAt ?? now,
+                            });
+                        }
+                        // The primary key index is managed with the fields, not here.
+                        indexes = [
+                            ...keptIndexes.filter((i) => i.isPrimaryKey),
+                            ...custom,
+                        ];
+                    }
+                    const removedFieldIds = (existing?.fields ?? [])
+                        .map((f) => f.id)
+                        .filter((id) => !fieldIds.has(id));
 
                     const tables = readTables(tablesMap);
                     const table: DBTable = {
@@ -284,15 +466,249 @@ export function createMcpServer(
                                 1,
                         comments: input.comments ?? existing?.comments ?? null,
                     };
-                    await conn.transact((doc) =>
-                        upsertTable(doc.getMap<unknown>('tables'), table)
-                    );
+                    await conn.transact((doc) => {
+                        upsertTable(doc.getMap<unknown>('tables'), table);
+                        // A removed field takes its relationships with it,
+                        // or they'd point at nothing.
+                        if (removedFieldIds.length) {
+                            removeItemsReferencing(
+                                doc.getMap<unknown>('relationships'),
+                                ['sourceFieldId', 'targetFieldId'],
+                                removedFieldIds
+                            );
+                        }
+                    });
                     return { table };
                 }
             );
             if ('error' in result) return toError(result.error!);
             await touchDiagram(pool, input.diagramId);
             return text(result.table);
+        }
+    );
+
+    server.registerTool(
+        'remove_table',
+        {
+            description:
+                'Delete a table, together with every relationship and dependency that references it.',
+            inputSchema: { diagramId: z.string(), tableId: z.string() },
+        },
+        async ({ diagramId, tableId }) => {
+            const meta = await getDiagram(pool, diagramId);
+            if (!meta) return toError(`diagram ${diagramId} not found`);
+            const result = await withDiagramDoc(
+                pool,
+                hocuspocus,
+                user,
+                diagramId,
+                async (conn) => {
+                    const doc = conn.document!;
+                    const table = readTableItem(
+                        doc.getMap<unknown>('tables'),
+                        tableId
+                    );
+                    if (!table) return { error: `table ${tableId} not found` };
+                    const relationshipsBefore =
+                        doc.getMap<unknown>('relationships').size;
+                    await conn.transact((d) => {
+                        removeItemFromCollection(
+                            d.getMap<unknown>('tables'),
+                            tableId
+                        );
+                        removeItemsReferencing(
+                            d.getMap<unknown>('relationships'),
+                            ['sourceTableId', 'targetTableId'],
+                            [tableId]
+                        );
+                        removeItemsReferencing(
+                            d.getMap<unknown>('dependencies'),
+                            ['tableId', 'dependentTableId'],
+                            [tableId]
+                        );
+                    });
+                    return {
+                        removed: qualifiedName(table),
+                        relationshipsRemoved:
+                            relationshipsBefore -
+                            doc.getMap<unknown>('relationships').size,
+                    };
+                }
+            );
+            if ('error' in result) return toError(result.error!);
+            await touchDiagram(pool, diagramId);
+            return text(result);
+        }
+    );
+
+    server.registerTool(
+        'add_relationship',
+        {
+            description:
+                'Add a foreign-key relationship: fromTable.fromField references toTable.toField. Tables by "name" or "schema.name". Type many_to_one (default: many rows of fromTable point at one row of toTable) or one_to_one.',
+            inputSchema: {
+                diagramId: z.string(),
+                fromTable: z.string(),
+                fromField: z.string(),
+                toTable: z.string(),
+                toField: z.string(),
+                type: z.enum(RELATIONSHIP_TYPES).default('many_to_one'),
+                name: z.string().min(1).optional(),
+            },
+        },
+        async (input) => {
+            const meta = await getDiagram(pool, input.diagramId);
+            if (!meta) return toError(`diagram ${input.diagramId} not found`);
+            const result = await withDiagramDoc(
+                pool,
+                hocuspocus,
+                user,
+                input.diagramId,
+                async (conn) => {
+                    const doc = conn.document!;
+                    const tables = readTables(doc.getMap<unknown>('tables'));
+                    const from = findTable(tables, input.fromTable);
+                    if ('error' in from) return { error: from.error };
+                    const to = findTable(tables, input.toTable);
+                    if ('error' in to) return { error: to.error };
+                    const fromField = from.table.fields.find(
+                        (f) => f.name === input.fromField
+                    );
+                    if (!fromField)
+                        return {
+                            error: `field ${input.fromTable}.${input.fromField} not found`,
+                        };
+                    const toField = to.table.fields.find(
+                        (f) => f.name === input.toField
+                    );
+                    if (!toField)
+                        return {
+                            error: `field ${input.toTable}.${input.toField} not found`,
+                        };
+
+                    const tablesById = new Map(tables.map((t) => [t.id, t]));
+                    const relationshipsMap =
+                        doc.getMap<unknown>('relationships');
+                    // Same pair of fields in either orientation counts as a duplicate.
+                    const pair = new Set([fromField.id, toField.id]);
+                    let duplicate: DBRelationship | undefined;
+                    relationshipsMap.forEach((raw, id) => {
+                        const m = raw as { get(key: string): unknown };
+                        const ends = [
+                            m.get('sourceFieldId'),
+                            m.get('targetFieldId'),
+                        ];
+                        if (
+                            pair.size === 2 &&
+                            ends.every((e) => pair.has(e as string))
+                        ) {
+                            duplicate = {
+                                id,
+                                name: m.get('name') as string,
+                                sourceTableId: m.get('sourceTableId'),
+                                sourceFieldId: m.get('sourceFieldId'),
+                                targetTableId: m.get('targetTableId'),
+                                targetFieldId: m.get('targetFieldId'),
+                                sourceCardinality: m.get('sourceCardinality'),
+                                targetCardinality: m.get('targetCardinality'),
+                            };
+                        }
+                    });
+                    if (duplicate) {
+                        return {
+                            relationship: describeRelationship(
+                                duplicate,
+                                tablesById
+                            ),
+                            existed: true,
+                        };
+                    }
+
+                    const relationship: DBRelationship = {
+                        id: generateId(),
+                        name:
+                            input.name ??
+                            `${from.table.name}_${fromField.name}_fk`,
+                        ...(input.type === 'many_to_one'
+                            ? {
+                                  sourceSchema: from.table.schema ?? null,
+                                  sourceTableId: from.table.id,
+                                  sourceFieldId: fromField.id,
+                                  targetSchema: to.table.schema ?? null,
+                                  targetTableId: to.table.id,
+                                  targetFieldId: toField.id,
+                                  sourceCardinality: 'many' as const,
+                                  targetCardinality: 'one' as const,
+                              }
+                            : {
+                                  // one:one keeps the FK on target: swap ends
+                                  sourceSchema: to.table.schema ?? null,
+                                  sourceTableId: to.table.id,
+                                  sourceFieldId: toField.id,
+                                  targetSchema: from.table.schema ?? null,
+                                  targetTableId: from.table.id,
+                                  targetFieldId: fromField.id,
+                                  sourceCardinality: 'one' as const,
+                                  targetCardinality: 'one' as const,
+                              }),
+                        createdAt: Date.now(),
+                    };
+                    await conn.transact((d) =>
+                        upsertItem(
+                            d.getMap<unknown>('relationships'),
+                            relationship
+                        )
+                    );
+                    return {
+                        relationship: describeRelationship(
+                            relationship,
+                            tablesById
+                        ),
+                        existed: false,
+                    };
+                }
+            );
+            if ('error' in result) return toError(result.error!);
+            await touchDiagram(pool, input.diagramId);
+            return text(result);
+        }
+    );
+
+    server.registerTool(
+        'remove_relationship',
+        {
+            description:
+                'Delete one relationship by id (ids come from get_diagram).',
+            inputSchema: { diagramId: z.string(), relationshipId: z.string() },
+        },
+        async ({ diagramId, relationshipId }) => {
+            const meta = await getDiagram(pool, diagramId);
+            if (!meta) return toError(`diagram ${diagramId} not found`);
+            const result = await withDiagramDoc(
+                pool,
+                hocuspocus,
+                user,
+                diagramId,
+                async (conn) => {
+                    const relationshipsMap =
+                        conn.document!.getMap<unknown>('relationships');
+                    if (!relationshipsMap.has(relationshipId)) {
+                        return {
+                            error: `relationship ${relationshipId} not found`,
+                        };
+                    }
+                    await conn.transact((d) =>
+                        removeItemFromCollection(
+                            d.getMap<unknown>('relationships'),
+                            relationshipId
+                        )
+                    );
+                    return { removed: relationshipId };
+                }
+            );
+            if ('error' in result) return toError(result.error!);
+            await touchDiagram(pool, diagramId);
+            return text(result);
         }
     );
 

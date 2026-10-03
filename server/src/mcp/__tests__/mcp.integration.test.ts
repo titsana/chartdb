@@ -159,9 +159,12 @@ describe.skipIf(!databaseReachable)('MCP endpoint', () => {
             const client = await mcpClient(server.port);
             const { tools } = await client.listTools();
             expect(tools.map((t) => t.name).sort()).toEqual([
+                'add_relationship',
                 'create_diagram',
                 'get_diagram',
                 'list_diagrams',
+                'remove_relationship',
+                'remove_table',
                 'upsert_table',
             ]);
 
@@ -301,4 +304,303 @@ describe.skipIf(!databaseReachable)('MCP endpoint', () => {
             await server.stop();
         }
     }, 30_000);
+
+    it('relationships, indexes, remove_table and the large-diagram summary', async () => {
+        const server = await startServer();
+        try {
+            const client = await mcpClient(server.port);
+            const call = async (name: string, args: Record<string, unknown>) =>
+                parse(await client.callTool({ name, arguments: args }));
+            const callRaw = (name: string, args: Record<string, unknown>) =>
+                client.callTool({ name, arguments: args });
+
+            const { id: diagramId } = await call('create_diagram', {
+                name: 'test-mcp-created',
+            });
+            const customers = await call('upsert_table', {
+                diagramId,
+                name: 'customers',
+                fields: [
+                    {
+                        name: 'id',
+                        type: 'uuid',
+                        primaryKey: true,
+                        nullable: false,
+                    },
+                ],
+            });
+            const orders = await call('upsert_table', {
+                diagramId,
+                name: 'orders',
+                fields: [
+                    {
+                        name: 'id',
+                        type: 'uuid',
+                        primaryKey: true,
+                        nullable: false,
+                    },
+                    { name: 'customer_id', type: 'uuid' },
+                ],
+                indexes: [
+                    {
+                        name: 'orders_customer_idx',
+                        fieldNames: ['customer_id'],
+                    },
+                ],
+            });
+            expect(
+                orders.indexes.map((i: { name: string }) => i.name)
+            ).toContain('orders_customer_idx');
+            const badIndex = await callRaw('upsert_table', {
+                diagramId,
+                tableId: orders.id,
+                name: 'orders',
+                fields: orders.fields,
+                indexes: [{ name: 'x', fieldNames: ['nope'] }],
+            });
+            expect(badIndex.isError).toBe(true);
+
+            const added = await call('add_relationship', {
+                diagramId,
+                fromTable: 'orders',
+                fromField: 'customer_id',
+                toTable: 'customers',
+                toField: 'id',
+            });
+            expect(added.existed).toBe(false);
+            expect(added.relationship).toMatchObject({
+                from: 'orders.customer_id',
+                to: 'customers.id',
+                type: 'many_to_one',
+            });
+            // one_to_one: FK still on fromField
+            const profiles = await call('upsert_table', {
+                diagramId,
+                name: 'profiles',
+                fields: [
+                    {
+                        name: 'id',
+                        type: 'uuid',
+                        primaryKey: true,
+                        nullable: false,
+                    },
+                    { name: 'customer_id', type: 'uuid', unique: true },
+                ],
+            });
+            const oneToOne = await call('add_relationship', {
+                diagramId,
+                fromTable: 'profiles',
+                fromField: 'customer_id',
+                toTable: 'customers',
+                toField: 'id',
+                type: 'one_to_one',
+            });
+            expect(oneToOne.relationship).toMatchObject({
+                from: 'profiles.customer_id',
+                to: 'customers.id',
+                type: 'one_to_one',
+            });
+            await call('remove_relationship', {
+                diagramId,
+                relationshipId: oneToOne.relationship.id,
+            });
+            await call('remove_table', { diagramId, tableId: profiles.id });
+
+            const again = await call('add_relationship', {
+                diagramId,
+                fromTable: 'orders',
+                fromField: 'customer_id',
+                toTable: 'customers',
+                toField: 'id',
+            });
+            expect(again).toMatchObject({
+                existed: true,
+                relationship: { id: added.relationship.id },
+            });
+            expect(
+                (
+                    await callRaw('add_relationship', {
+                        diagramId,
+                        fromTable: 'nope',
+                        fromField: 'id',
+                        toTable: 'customers',
+                        toField: 'id',
+                    })
+                ).isError
+            ).toBe(true);
+
+            const ordersOnly = await call('get_diagram', {
+                diagramId,
+                tableNames: ['orders', 'ghost'],
+            });
+            expect(
+                ordersOnly.tables.map((t: { name: string }) => t.name)
+            ).toEqual(['orders']);
+            expect(ordersOnly.relationships).toHaveLength(1);
+            expect(ordersOnly.notFound).toHaveLength(1);
+
+            // dropping customer_id takes its relationship with it
+            await call('upsert_table', {
+                diagramId,
+                tableId: orders.id,
+                name: 'orders',
+                fields: [
+                    {
+                        id: orders.fields[0].id,
+                        name: 'id',
+                        type: 'uuid',
+                        primaryKey: true,
+                        nullable: false,
+                    },
+                ],
+            });
+            expect(
+                (await call('get_diagram', { diagramId })).relationshipCount
+            ).toBe(0);
+
+            // remove_relationship, then remove_table cascades
+            await call('upsert_table', {
+                diagramId,
+                tableId: orders.id,
+                name: 'orders',
+                fields: orders.fields,
+            });
+            const rel = await call('add_relationship', {
+                diagramId,
+                fromTable: 'orders',
+                fromField: 'customer_id',
+                toTable: 'customers',
+                toField: 'id',
+            });
+            await call('remove_relationship', {
+                diagramId,
+                relationshipId: rel.relationship.id,
+            });
+            expect(
+                (await call('get_diagram', { diagramId })).relationshipCount
+            ).toBe(0);
+            await call('add_relationship', {
+                diagramId,
+                fromTable: 'orders',
+                fromField: 'customer_id',
+                toTable: 'customers',
+                toField: 'id',
+            });
+            const removed = await call('remove_table', {
+                diagramId,
+                tableId: customers.id,
+            });
+            expect(removed).toEqual({
+                removed: 'customers',
+                relationshipsRemoved: 1,
+            });
+            const after = await call('get_diagram', { diagramId });
+            expect(after.tables.map((t: { name: string }) => t.name)).toEqual([
+                'orders',
+            ]);
+            expect(after.relationshipCount).toBe(0);
+
+            // > 30 tables: summary unless tableNames is given
+            for (let i = 0; i < 30; i++) {
+                await call('upsert_table', {
+                    diagramId,
+                    name: `t${i}`,
+                    fields: [{ name: 'id', type: 'int' }],
+                });
+            }
+            const summary = await call('get_diagram', { diagramId });
+            expect(summary.tableCount).toBe(31);
+            expect(summary.note).toBeDefined();
+            expect(summary.tables[0].fields).toBeUndefined();
+            const detail = await call('get_diagram', {
+                diagramId,
+                tableNames: ['t7'],
+            });
+            expect(detail.tables[0].fields[0].name).toBe('id');
+            await client.close();
+        } finally {
+            await server.stop();
+        }
+    }, 60_000);
+
+    it('read-after-write across separate connections; reads add no log rows', async () => {
+        // Each tool call opens and closes its own direct connection, so with
+        // no browser in the room the document can unload between calls.
+        // Smoke test for that path (it did not reproduce the one unexplained
+        // empty read seen in a heavily loaded run).
+        const server = await startServer();
+        try {
+            const client = await mcpClient(server.port);
+            const { id: diagramId } = parse(
+                await client.callTool({
+                    name: 'create_diagram',
+                    arguments: { name: 'test-mcp-created' },
+                })
+            );
+            for (let i = 1; i <= 25; i++) {
+                parse(
+                    await client.callTool({
+                        name: 'upsert_table',
+                        arguments: {
+                            diagramId,
+                            name: `s${i}`,
+                            fields: [{ name: 'id', type: 'int' }],
+                        },
+                    })
+                );
+                const d = parse(
+                    await client.callTool({
+                        name: 'get_diagram',
+                        arguments: { diagramId, summaryOnly: true },
+                    })
+                );
+                expect(d.tableCount, `after write ${i}`).toBe(i);
+            }
+
+            // get_diagram must not append to the durable log. Rename a table
+            // first so the doc has deletions: a state-vector diff would carry
+            // that delete set even when nothing changed.
+            const { tables } = parse(
+                await client.callTool({
+                    name: 'get_diagram',
+                    arguments: { diagramId, tableNames: ['s1'] },
+                })
+            );
+            parse(
+                await client.callTool({
+                    name: 'upsert_table',
+                    arguments: {
+                        diagramId,
+                        tableId: tables[0].id,
+                        name: 's1_renamed',
+                        fields: tables[0].fields,
+                    },
+                })
+            );
+            const pool = createPool(loadConfig().databaseUrl);
+            try {
+                const count = async () =>
+                    Number(
+                        (
+                            await pool.query(
+                                'SELECT count(*) FROM yjs_updates WHERE diagram_id = $1',
+                                [diagramId]
+                            )
+                        ).rows[0].count
+                    );
+                const before = await count();
+                await client.callTool({
+                    name: 'get_diagram',
+                    arguments: { diagramId },
+                });
+                await client.callTool({ name: 'list_diagrams', arguments: {} });
+                expect(await count()).toBe(before);
+            } finally {
+                await pool.end();
+            }
+            await client.close();
+        } finally {
+            await server.stop();
+        }
+    }, 60_000);
 });

@@ -68,9 +68,11 @@ in `src/config.ts` for the reasoning and the trade-off it accepts.
 
 ## MCP endpoint (`/api/mcp`)
 
-Stateless Streamable HTTP MCP server with `list_diagrams`, `create_diagram`, `get_diagram`
-and `upsert_table`. Tools edit the live Y.Doc, so open browsers see
-changes immediately.
+Stateless Streamable HTTP MCP server. Tools: `list_diagrams`,
+`create_diagram`, `get_diagram` (summary for diagrams over 30 tables
+unless `tableNames` is given), `upsert_table` (fields and indexes),
+`remove_table`, `add_relationship`, `remove_relationship`. Tools edit the
+live Y.Doc, so open browsers see changes immediately.
 
 ### `AUTH_MODE=public`
 
