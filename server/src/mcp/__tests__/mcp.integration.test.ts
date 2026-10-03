@@ -120,6 +120,9 @@ function waitFor(check: () => boolean, label: string): Promise<void> {
 describe.skipIf(!databaseReachable)('MCP endpoint', () => {
     afterAll(async () => {
         const pool = createPool(loadConfig().databaseUrl);
+        await pool.query(
+            "DELETE FROM collab_diagrams WHERE name = 'test-mcp-created'"
+        );
         await pool.query('DELETE FROM collab_diagrams WHERE id LIKE $1', [
             'test-mcp-%',
         ]);
@@ -156,6 +159,7 @@ describe.skipIf(!databaseReachable)('MCP endpoint', () => {
             const client = await mcpClient(server.port);
             const { tools } = await client.listTools();
             expect(tools.map((t) => t.name).sort()).toEqual([
+                'create_diagram',
                 'get_diagram',
                 'list_diagrams',
                 'upsert_table',
@@ -231,6 +235,67 @@ describe.skipIf(!databaseReachable)('MCP endpoint', () => {
             expect(
                 diagram.tables[0].fields.map((f: { name: string }) => f.name)
             ).toEqual(['email', 'id']);
+            await client.close();
+        } finally {
+            await server.stop();
+        }
+    }, 30_000);
+
+    it('create_diagram makes an empty diagram that upsert_table can fill', async () => {
+        const server = await startServer();
+        try {
+            const client = await mcpClient(server.port);
+            const created = parse(
+                await client.callTool({
+                    name: 'create_diagram',
+                    arguments: {
+                        name: 'test-mcp-created',
+                        databaseType: 'mysql',
+                    },
+                })
+            );
+            expect(created.name).toBe('test-mcp-created');
+            expect(created.databaseType).toBe('mysql');
+
+            const bad = await client.callTool({
+                name: 'create_diagram',
+                arguments: {
+                    name: 'test-mcp-created',
+                    databaseType: 'nosuchdb',
+                },
+            });
+            expect(bad.isError).toBe(true);
+
+            parse(
+                await client.callTool({
+                    name: 'upsert_table',
+                    arguments: {
+                        diagramId: created.id,
+                        name: 'orders',
+                        fields: [
+                            {
+                                name: 'id',
+                                type: 'int',
+                                primaryKey: true,
+                                nullable: false,
+                            },
+                        ],
+                    },
+                })
+            );
+            const diagram = parse(
+                await client.callTool({
+                    name: 'get_diagram',
+                    arguments: { diagramId: created.id },
+                })
+            );
+            expect(diagram.tables.map((t: { name: string }) => t.name)).toEqual(
+                ['orders']
+            );
+            const list = parse(
+                await client.callTool({ name: 'list_diagrams', arguments: {} })
+            );
+            expect(list.map((d: { id: string }) => d.id)).toContain(created.id);
             await client.close();
         } finally {
             await server.stop();

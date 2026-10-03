@@ -68,7 +68,7 @@ in `src/config.ts` for the reasoning and the trade-off it accepts.
 
 ## MCP endpoint (`/api/mcp`)
 
-Stateless Streamable HTTP MCP server with `list_diagrams`, `get_diagram`
+Stateless Streamable HTTP MCP server with `list_diagrams`, `create_diagram`, `get_diagram`
 and `upsert_table`. Tools edit the live Y.Doc, so open browsers see
 changes immediately.
 

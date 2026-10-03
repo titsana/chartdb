@@ -3,7 +3,12 @@ import type { Hocuspocus } from '@hocuspocus/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { getDiagram, listDiagrams, touchDiagram } from '../db/diagrams';
+import {
+    createDiagram,
+    getDiagram,
+    listDiagrams,
+    touchDiagram,
+} from '../db/diagrams';
 import {
     readTableItem,
     readTables,
@@ -117,6 +122,42 @@ export function createMcpServer(
         'list_diagrams',
         { description: 'List all diagrams (id, name, database type).' },
         async () => text(await listDiagrams(pool))
+    );
+
+    server.registerTool(
+        'create_diagram',
+        {
+            description:
+                'Create a new, empty diagram. Returns its id; add tables with upsert_table.',
+            inputSchema: {
+                name: z.string().min(1).max(200),
+                // Mirrors the client's DatabaseType enum (src/lib/domain/database-type.ts).
+                databaseType: z
+                    .enum([
+                        'generic',
+                        'postgresql',
+                        'mysql',
+                        'sql_server',
+                        'mariadb',
+                        'sqlite',
+                        'clickhouse',
+                        'cockroachdb',
+                        'oracle',
+                    ])
+                    .default('postgresql'),
+            },
+        },
+        async ({ name, databaseType }) => {
+            // The room starts empty; a browser opening it seeds the rest,
+            // same as a diagram created from the UI's REST call.
+            const created = await createDiagram(pool, {
+                id: generateId(),
+                name,
+                databaseType,
+            });
+            if (!created) return toError('id collision, try again');
+            return text(created);
+        }
     );
 
     server.registerTool(
