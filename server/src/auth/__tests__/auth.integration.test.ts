@@ -103,6 +103,22 @@ describe.skipIf(!databaseReachable)('Phase 7 — AUTH_MODE=azure-ad', () => {
                 `http://localhost:${server.port}/api/diagrams`
             );
             expect(diagrams.status).toBe(401);
+
+            // MCP is behind the same guard. Nothing else gates it:
+            // Hocuspocus direct connections skip onAuthenticate.
+            const mcp = await fetch(`http://localhost:${server.port}/api/mcp`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json, text/event-stream',
+                },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'tools/list',
+                }),
+            });
+            expect(mcp.status).toBe(401);
         } finally {
             await server.stop();
         }

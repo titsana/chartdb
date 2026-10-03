@@ -65,3 +65,43 @@ in `src/config.ts` for the reasoning and the trade-off it accepts.
 - **Compaction's `getMaxUpdateId` must run before `Y.encodeStateAsUpdate`,
   never after** — see that function's doc comment in
   `src/db/persistence.ts` for why the order is the whole safety property.
+
+## MCP endpoint (`/api/mcp`)
+
+Stateless Streamable HTTP MCP server with `list_diagrams`, `get_diagram`
+and `upsert_table`. Tools edit the live Y.Doc, so open browsers see
+changes immediately.
+
+### `AUTH_MODE=public`
+
+```bash
+claude mcp add --transport http chartdb http://localhost:3001/api/mcp
+```
+
+### `AUTH_MODE=azure-ad`
+
+`/api/mcp` sits behind the same `EntraAuthGuard` as the REST API, so it
+needs an Entra access token for `api://<ENTRA_CLIENT_ID>/access_as_user`.
+MCP's built-in OAuth flow doesn't work against Entra (Entra rejects the
+`resource` parameter MCP clients send), so the token comes from the Azure
+CLI instead.
+
+One-time, by an admin of the app registration: **Expose an API →
+Add a client application** → client ID
+`04b07795-8ddb-461a-bbee-02f9e1bf7b46` (Azure CLI), tick the
+`access_as_user` scope. Without this, `az` fails with a consent error
+(`AADSTS65001`).
+
+Each user, once:
+
+```bash
+az login --tenant <ENTRA_TENANT_ID>
+```
+
+Then add the server to Claude Code with `scripts/mcp-entra-headers.sh` as
+its `headersHelper` (absolute path; Claude Code re-runs it on every
+connect and after a 401, so token expiry is handled):
+
+```bash
+claude mcp add-json chartdb '{"type":"http","url":"https://<host>/api/mcp","headersHelper":"/abs/path/to/server/scripts/mcp-entra-headers.sh <ENTRA_CLIENT_ID> <ENTRA_TENANT_ID>"}'
+```
