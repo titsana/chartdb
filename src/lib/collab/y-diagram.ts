@@ -49,11 +49,12 @@ import type { Note } from '@/lib/domain/note';
  * one past the current max (NOT `collectionMap.size` — a prior delete
  * leaves a gap, e.g. removing the 2nd of 3 leaves orders 0, 2, and `size`
  * after that delete is 2, which would collide with the surviving order-2
- * item), so a create always lands strictly last. But nothing currently
- * closes the gap itself or lets a caller reorder existing items — fine
- * for `updateField`-shaped patches (order never changes) but must be
- * addressed — a full re-stamp of every sibling's `__order`, or a switch to
- * fractional indexing — before wiring `removeField`/reordering UI.
+ * item), so a create always lands strictly last. `reconcileCollection`
+ * (every whole-array write, incl. drag-reorder of fields via `upsertTable`)
+ * re-stamps every sibling's `__order` to its array index, which both
+ * applies reorders and closes gaps. Two peers reordering the same table
+ * concurrently can interleave per-entry; switch to fractional indexing if
+ * that ever matters.
  */
 
 const ORDER_KEY = '__order';
@@ -227,12 +228,15 @@ export function getOrCreateNestedMap(
 export function upsertItem<T extends { id: string }>(
     collectionMap: Y.Map<unknown>,
     item: T,
-    encode: (item: T) => PlainRecord = encodeFlat
+    encode: (item: T) => PlainRecord = encodeFlat,
+    order?: number
 ): void {
     const existing = collectionMap.get(item.id) as Y.Map<unknown> | undefined;
     const itemMap = existing ?? new Y.Map<unknown>();
-    const order = existing?.get(ORDER_KEY) as number | undefined;
-    const nextOrder = order ?? nextOrderFor(collectionMap);
+    const nextOrder =
+        order ??
+        (existing?.get(ORDER_KEY) as number | undefined) ??
+        nextOrderFor(collectionMap);
     const encoded = encode(item);
     Object.entries(encoded).forEach(([k, v]) => setIfChanged(itemMap, k, v));
     setIfChanged(itemMap, ORDER_KEY, nextOrder);
@@ -276,9 +280,9 @@ export function removeItemFromCollection(
 
 /**
  * Reconciles a flat collection Y.Map to exactly match `desiredItems`:
- * upserts every desired item (create-or-patch via `upsertItem` — an
- * existing entry keeps its `__order` and only its changed props are
- * touched; a new one is appended) and removes anything present in the
+ * upserts every desired item (create-or-patch via `upsertItem`, with
+ * `__order` re-stamped to the item's index in `desiredItems`; only
+ * changed props are touched) and removes anything present in the
  * map but absent from `desiredItems`. This is what a doc-backed
  * "replace the whole array with this one" write becomes — the array
  * itself has no meaning against a Y.Map, but "make the map's contents
@@ -298,7 +302,12 @@ export function reconcileCollection<T extends { id: string }>(
         if (!desiredIds.has(id)) idsToRemove.push(id);
     });
     idsToRemove.forEach((id) => collectionMap.delete(id));
-    desiredItems.forEach((item) => upsertItem(collectionMap, item, encode));
+    // array position IS the desired order — re-stamp `__order` from it so a
+    // reorder (e.g. drag a field up/down) actually sticks. setIfChanged
+    // keeps this a no-op for items whose position didn't move.
+    desiredItems.forEach((item, i) =>
+        upsertItem(collectionMap, item, encode, i)
+    );
 }
 
 /**

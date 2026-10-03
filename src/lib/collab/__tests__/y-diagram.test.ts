@@ -557,6 +557,19 @@ describe('reconcileCollection — whole-array-replace against a live doc', () =>
 });
 
 describe('upsertTable / reconcileTables — the appendix-b:2 nested-collection diff', () => {
+    it('reordering fields via upsertTable persists the new order', () => {
+        const doc = new Y.Doc();
+        const tablesMap = doc.getMap<unknown>('tables');
+        const [f1, f2, f3] = ['f1', 'f2', 'f3'].map((id) => field({ id }));
+        upsertTable(tablesMap, table({ id: 't1', fields: [f1, f2, f3] }));
+
+        upsertTable(tablesMap, table({ id: 't1', fields: [f3, f1, f2] }));
+
+        expect(readTableItem(tablesMap, 't1')!.fields.map((f) => f.id)).toEqual(
+            ['f3', 'f1', 'f2']
+        );
+    });
+
     it('creates a brand-new table with its fields/indexes populated', () => {
         const doc = new Y.Doc();
         const tablesMap = doc.getMap<unknown>('tables');
