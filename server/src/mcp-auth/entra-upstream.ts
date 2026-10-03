@@ -87,8 +87,23 @@ export class EntraUpstream {
                 scope: 'openid profile',
             }),
         });
-        if (!res.ok)
-            throw new Error(`Entra token exchange failed: ${res.status}`);
+        if (!res.ok) {
+            // Entra's error_codes/error_description name the cause (e.g.
+            // AADSTS7000215 wrong secret value, AADSTS9002326 callback
+            // registered as SPA instead of Web). They carry no secrets.
+            const err = (await res.json().catch(() => ({}))) as {
+                error?: string;
+                error_codes?: number[];
+                error_description?: string;
+            };
+            const codes = (err.error_codes ?? [])
+                .map((c) => `AADSTS${c}`)
+                .join(',');
+            const description = err.error_description?.split('\n')[0] ?? '';
+            throw new Error(
+                `Entra token exchange failed: ${res.status} ${err.error ?? ''} ${codes} ${description}`.trim()
+            );
+        }
         const body = (await res.json()) as { id_token?: string };
         if (!body.id_token) throw new Error('Entra returned no id_token');
 
