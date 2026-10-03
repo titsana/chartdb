@@ -134,6 +134,16 @@ Then in Claude Code, the server needs only its URL:
 claude mcp add --transport http chartdb https://<host>/api/mcp
 ```
 
+If sign-in ends with `server_error`, the server log has a line starting
+`MCP OAuth callback failed:` with Entra's error code. Seen so far:
+
+- `401` / `AADSTS7000215`: wrong secret. Use the secret's **Value**, not its
+  **Secret ID**, from the same app registration, with no stray whitespace.
+- `AADSTS9002326`: `/oauth/callback` is registered under the
+  **Single-page application** platform. It must be under **Web** only.
+- `AADSTS50011`: `PUBLIC_URL` doesn't match the registered redirect URI
+  exactly.
+
 Revoke someone's MCP access immediately (otherwise it ends within 30 days
 of their last sign-in):
 

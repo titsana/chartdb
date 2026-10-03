@@ -1,6 +1,6 @@
 # Design: Browser OAuth login for the MCP endpoint
 
-Status: implemented, pending staging test with real Entra (D1–D9 as proposed, 2026-10-03) · Branch: `feat/mcp-server`
+Status: implemented and verified end to end with real Entra + Claude Code (D1–D9 as proposed, 2026-10-03) · Branch: `feat/mcp-server`
 
 ## 1. Goal
 
