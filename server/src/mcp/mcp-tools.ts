@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import type { Hocuspocus } from '@hocuspocus/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Pool } from 'pg';
+import * as Y from 'yjs';
 import { z } from 'zod';
+import { appendUpdate } from '../db/persistence';
 import {
     createDiagram,
     getDiagram,
@@ -80,19 +82,21 @@ function toError(message: string) {
 /**
  * Opens the diagram's live room, runs `fn` against it and disconnects.
  * Edits go through Hocuspocus, so connected browsers see them at once.
- * They must also reach Postgres: the persistence extension's
- * `beforeHandleMessage` only logs WebSocket messages, so a direct
- * connection's edit is persisted by `disconnect()` (which, by default,
- * runs the store hooks synchronously — `onStoreDocument` snapshots the
- * full doc state). Hence the `finally`.
  *
- * ponytail: weaker durability than a WebSocket edit — Hocuspocus logs and
- * swallows store errors, so a tool can report success for an edit that
- * never reached Postgres (lost on restart). Upgrade path: append the
- * transaction's update to yjs_updates (appendUpdate) inside the tool,
- * before returning, the way beforeHandleMessage does for WS edits.
+ * Durability: a direct connection's edits never pass the persistence
+ * extension's `beforeHandleMessage` (WebSocket only), so this appends
+ * whatever `fn` changed to yjs_updates itself before returning, the same
+ * durable log a WebSocket edit lands in. Then it disconnects without
+ * unloading; the regular debounced snapshot compacts the log later.
+ *
+ * Race: Hocuspocus' createDocument can hand back a document that its
+ * unload logic destroys a moment later (unload re-checks the connection
+ * count only before destroying). A connection attached to that document
+ * reads an empty diagram and its writes go nowhere. So after attaching,
+ * check it is still the live document and retry if not.
  */
 async function withDiagramDoc<T>(
+    pool: Pool,
     hocuspocus: Hocuspocus,
     user: McpUser | undefined,
     diagramId: string,
@@ -100,14 +104,42 @@ async function withDiagramDoc<T>(
         conn: Awaited<ReturnType<Hocuspocus['openDirectConnection']>>
     ) => Promise<T>
 ): Promise<T> {
-    const conn = await hocuspocus.openDirectConnection(diagramId, {
+    let conn = await hocuspocus.openDirectConnection(diagramId, {
         source: 'mcp',
         user: user ?? null,
     });
+    for (
+        let attempt = 0;
+        hocuspocus.documents.get(diagramId) !== conn.document;
+        attempt++
+    ) {
+        // Stale: release without disconnect(), which would run store hooks
+        // on the destroyed document.
+        conn.document?.removeDirectConnection();
+        if (attempt >= 3)
+            throw new Error('diagram is being unloaded, try again');
+        conn = await hocuspocus.openDirectConnection(diagramId, {
+            source: 'mcp',
+            user: user ?? null,
+        });
+    }
+    const doc = conn.document!;
+    // Collect the actual updates instead of diffing state vectors: a diff
+    // always carries the doc's whole delete set (so reads would write), and
+    // pure deletes don't advance the state vector (so they'd be missed). A
+    // concurrent WS peer's update may be captured too; Yjs dedupes it.
+    const updates: Uint8Array[] = [];
+    const onUpdate = (update: Uint8Array) => updates.push(update);
+    doc.on('update', onUpdate);
     try {
-        return await fn(conn);
+        const result = await fn(conn);
+        if (updates.length) {
+            await appendUpdate(pool, diagramId, Y.mergeUpdates(updates));
+        }
+        return result;
     } finally {
-        await conn.disconnect();
+        doc.off('update', onUpdate);
+        await conn.disconnect({ unloadImmediately: false });
     }
 }
 
@@ -170,10 +202,16 @@ export function createMcpServer(
         async ({ diagramId }) => {
             const meta = await getDiagram(pool, diagramId);
             if (!meta) return toError(`diagram ${diagramId} not found`);
-            return withDiagramDoc(hocuspocus, user, diagramId, async (conn) => {
-                const content = yDocToDiagram(conn.document!);
-                return text({ ...content, ...meta });
-            });
+            return withDiagramDoc(
+                pool,
+                hocuspocus,
+                user,
+                diagramId,
+                async (conn) => {
+                    const content = yDocToDiagram(conn.document!);
+                    return text({ ...content, ...meta });
+                }
+            );
         }
     );
 
@@ -189,6 +227,7 @@ export function createMcpServer(
             if (!meta) return toError(`diagram ${input.diagramId} not found`);
 
             const result = await withDiagramDoc(
+                pool,
                 hocuspocus,
                 user,
                 input.diagramId,
