@@ -21,6 +21,9 @@
 # # be set together for azure-ad mode — missing ENTRA_CLIENT_ID shows a
 # # "Sign-in is misconfigured" page (src/auth-gate.tsx) rather than the
 # # app.
+# # PUBLIC_URL=               # MCP browser sign-in (docs/design/mcp-oauth.md):
+# # ENTRA_CLIENT_SECRET=      # azure-ad only; set both or neither. Also add
+# # https://<host>/oauth/callback as a Web redirect URI on the app registration.
 # # WEBSOCKET_ORIGIN_ALLOWLIST=
 # # See Dockerfile.combined's header comment before setting this one —
 # # it must include this app's own public origin, or the client+API
@@ -45,6 +48,8 @@ services:
       AUTH_MODE: ${AUTH_MODE:-public}
       ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
       ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
       WEBSOCKET_ORIGIN_ALLOWLIST: ${WEBSOCKET_ORIGIN_ALLOWLIST:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_API_ENDPOINT: ${OPENAI_API_ENDPOINT:-}
