@@ -62,8 +62,14 @@ export async function loadMergedState(
 }
 
 /**
- * The highest yjs_updates.id logged for this diagram so far, or 0 if
- * none. Must be read BEFORE the caller encodes the doc's full state for
+ * The highest yjs_updates.id logged for this diagram so far — or, once a
+ * previous snapshot has pruned them all, that snapshot's own
+ * through_update_id (0 if neither exists). Falling back to the snapshot is
+ * what lets a write with no new log rows re-snapshot at all: a Hocuspocus
+ * direct connection (the MCP tools) edits the doc without going through
+ * beforeHandleMessage, so it never appends here, and plain max(id) would
+ * then be 0 — below the stored through_update_id, so storeSnapshotAndPrune's
+ * monotonic guard silently kept the OLD snapshot. Must be read BEFORE the caller encodes the doc's full state for
  * compaction (see storeSnapshotAndPrune) — encoding first and reading this
  * after would let a concurrently-appended update slip into the encoded
  * snapshot's content while this id lags behind it, which is harmless. The
@@ -81,7 +87,10 @@ export async function getMaxUpdateId(
     diagramId: string
 ): Promise<string> {
     const result = await pool.query<{ max: string | null }>(
-        'SELECT max(id) FROM yjs_updates WHERE diagram_id = $1',
+        `SELECT GREATEST(
+             (SELECT max(id) FROM yjs_updates WHERE diagram_id = $1),
+             (SELECT through_update_id FROM yjs_snapshots WHERE diagram_id = $1)
+         )::text AS max`,
         [diagramId]
     );
     return result.rows[0]?.max ?? '0';
