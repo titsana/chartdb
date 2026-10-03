@@ -78,46 +78,14 @@ changes immediately.
 claude mcp add --transport http chartdb http://localhost:3001/api/mcp
 ```
 
-### `AUTH_MODE=azure-ad`
+### `AUTH_MODE=azure-ad`: browser sign-in (OAuth broker)
 
-`/api/mcp` sits behind the same `EntraAuthGuard` as the REST API, so it
-needs an Entra access token for `api://<ENTRA_CLIENT_ID>/access_as_user`.
-MCP's built-in OAuth flow doesn't work against Entra (Entra rejects the
-`resource` parameter MCP clients send), so the token comes from the Azure
-CLI instead.
-
-One-time, by an admin of the app registration: **Expose an API →
-Add a client application** → client ID
-`04b07795-8ddb-461a-bbee-02f9e1bf7b46` (Azure CLI), tick the
-`access_as_user` scope. Without this, `az` fails with a consent error
-(`AADSTS65001`).
-
-Each user, once:
-
-```bash
-az login --tenant <ENTRA_TENANT_ID>
-```
-
-Then add the server to Claude Code with `scripts/mcp-entra-headers.sh` as
-its `headersHelper` (absolute path). It takes no arguments: it reads
-`AUTH_MODE`/`ENTRA_CLIENT_ID`/`ENTRA_TENANT_ID` from the server's public
-`/config.js`, and Claude Code re-runs it on every connect and after a 401,
-so token expiry is handled:
-
-```bash
-claude mcp add-json -s user chartdb '{"type":"http","url":"https://<host>/api/mcp","headersHelper":"/abs/path/to/server/scripts/mcp-entra-headers.sh"}'
-```
-
-The `mp` plugin in the Moveplus claude-plugins marketplace ships the same
-helper and server entry, so installing it replaces this step.
-
-### Browser sign-in for MCP (OAuth broker)
-
-With the broker enabled, MCP clients sign in through the browser like any
-OAuth MCP server: no `az`, no `headersHelper`. Run `/mcp` in Claude Code,
-pick `chartdb`, choose Authenticate, approve the ChartDB consent page, and
-sign in with Microsoft. Design and security notes:
-`docs/design/mcp-oauth.md`.
+MCP clients sign in through the browser like any OAuth MCP server. Run
+`/mcp` in Claude Code, pick `chartdb`, choose Authenticate, approve the
+ChartDB consent page, and sign in with Microsoft. `/api/mcp` accepts only
+tokens this broker issued; Entra tokens are not accepted there. Without
+the broker configured, MCP is unavailable in `azure-ad` mode. Design and
+security notes: `docs/design/mcp-oauth.md`.
 
 One-time setup:
 
@@ -150,6 +118,3 @@ of their last sign-in):
 ```sql
 DELETE FROM mcp_oauth_tokens WHERE oid = '<entra object id>';
 ```
-
-While both paths exist, `/api/mcp` also accepts Entra tokens from the `az`
-helper above.

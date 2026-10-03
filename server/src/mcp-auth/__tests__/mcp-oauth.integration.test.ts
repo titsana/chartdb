@@ -630,6 +630,14 @@ describe.skipIf(!databaseReachable)('MCP OAuth broker', () => {
         expect(res.status).toBe(400);
     });
 
+    it('MCP rejects any bearer the broker did not issue', async () => {
+        const res = await mcpToolsList('eyJhbGciOiJSUzI1NiJ9.e30.not-ours');
+        expect(res.status).toBe(401);
+        expect(res.headers.get('www-authenticate')).toContain(
+            'resource_metadata='
+        );
+    });
+
     it('isolation: a broker token does not open the REST API', async () => {
         const { tokens } = await fullLogin();
         const res = await fetch(`${server.base}/api/diagrams`, {

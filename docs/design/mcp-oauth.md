@@ -106,7 +106,7 @@ We don't use `ProxyOAuthServerProvider`, because it forwards DCR and `resource` 
      - Don't turn on Express-wide `trust proxy`. Nothing else here needs it, and it would let `X-Forwarded-For` be spoofed if the origin is ever reached without going through Cloudflare.
      - Test it: two requests with different `CF-Connecting-IP` values land in separate buckets.
 4. **Guarding `/api/mcp` stays fail-closed.** Never mark it `@Public()`: Hocuspocus direct connections skip `onAuthenticate`, so the guard is the only gate. If middleware were mis-mounted, the route would silently allow writes to every diagram.
-   - Extend `EntraAuthGuard` instead. On `/api/mcp` only, it accepts a broker access token (`provider.verifyAccessToken`) **or**, during rollout, an Entra token.
+   - Extend `EntraAuthGuard` instead. On `/api/mcp` only, it accepts a broker access token (`provider.verifyAccessToken`). (Rollout briefly also accepted Entra tokens there; removed once the broker was verified, see §9.)
    - On rejection it sets `WWW-Authenticate: Bearer resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/api/mcp"` before throwing 401. That header starts the browser flow.
    - Every other route keeps accepting Entra tokens only.
    - Tripwire: the existing "MCP is behind the same guard" assertion in `auth.integration.test.ts` must keep passing unchanged.
@@ -127,7 +127,7 @@ One-time Entra admin steps:
 
 1. App registration → **Authentication** → add platform **Web** → redirect URI `https://<host>/oauth/callback`. The existing SPA platform entry stays.
 2. **Certificates & secrets** → new client secret → put it in `ENTRA_CLIENT_SECRET` in the deploy. Note its expiry date, since secrets expire after 24 months at most.
-3. The "Azure CLI as authorized client application" step from the `az` approach is no longer needed once that path is retired.
+3. The "Azure CLI as authorized client application" step from the `az` approach is no longer needed; that path is retired. An admin can remove the Azure CLI entry from **Expose an API → Authorized client applications**.
 
 ## 7. Client and plugin changes
 
@@ -153,11 +153,11 @@ All tests run against real Postgres, using the spawned-`dist/main.js` pattern. E
 
 ## 9. Rollout
 
-1. Ship the broker alongside the `az` path. The guard accepts both.
-2. An admin does the Entra steps in §6 and sets `PUBLIC_URL` and `ENTRA_CLIENT_SECRET`.
-3. Run the manual test (§8.9) on staging.
-4. Merge the `mp` change that drops `headersHelper`, and announce the update.
-5. Later: remove raw-Entra-token acceptance on `/api/mcp` and the helper script.
+1. ✅ Ship the broker alongside the `az` path. The guard accepts both.
+2. ✅ An admin does the Entra steps in §6 and sets `PUBLIC_URL` and `ENTRA_CLIENT_SECRET`.
+3. ✅ Run the manual test (§8.9) with real Entra and Claude Code (2026-10-03).
+4. ✅ `mp` plugin drops `headersHelper` (branch `mp-chartdb-mcp`, pending MR).
+5. ✅ `/api/mcp` accepts broker tokens only; `server/scripts/mcp-entra-headers.sh` removed.
 
 ## 10. Estimate and risks
 

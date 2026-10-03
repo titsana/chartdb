@@ -76,30 +76,25 @@ export class EntraAuthGuard implements CanActivate {
         };
         if (!token) reject('missing bearer token');
 
-        if (mcpBroker) {
+        if (acceptsMcpToken) {
+            // MCP accepts only tokens our broker issued for it (MCP spec: no
+            // token passthrough). Without the broker configured, MCP is
+            // unavailable in azure-ad mode rather than falling back to Entra.
+            if (!mcpBroker)
+                reject('MCP sign-in is not configured on this server');
             try {
-                const info = await mcpBroker.broker.verifyAccessToken(token!);
+                const info = await mcpBroker!.broker.verifyAccessToken(token!);
                 req.mcpUser = info.extra as unknown as McpUser;
                 return true;
             } catch {
-                // not a broker token — fall through to Entra (rollout period)
+                reject('invalid token');
             }
         }
 
         try {
             // verify is guaranteed non-null when authMode === 'azure-ad'
             // (see EntraAuthState's doc comment).
-            const payload = await this.auth.verify!(token!);
-            req.entraUser = payload;
-            if (acceptsMcpToken && typeof payload.oid === 'string') {
-                req.mcpUser = {
-                    oid: payload.oid,
-                    upn:
-                        typeof payload.preferred_username === 'string'
-                            ? payload.preferred_username
-                            : null,
-                };
-            }
+            req.entraUser = await this.auth.verify!(token!);
         } catch {
             reject('invalid token');
         }
